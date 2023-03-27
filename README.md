@@ -1,2 +1,46 @@
 # opower
-Python library to get historical and forecasted usage/cost from utilities that use opower.com such as PG&amp;E
+A Python library for getting historical and forecasted usage/cost from utilities that use opower.com such as PG&amp;E.
+
+To add support for a new utility that uses opower JSON API (you can tell if the energy dashboard of your utility is hosted on opower.com, e.g. pge.opower.com) add a file similar to [pge.py](https://github.com/tronikos/opower/blob/main/src/opower/utilities/pge.py).
+
+## Example
+
+See [demo.py](https://github.com/tronikos/opower/blob/main/src/demo.py)
+
+## Development environment
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+# for Windows CMD:
+# .venv\Scripts\activate.bat
+# for Windows PowerShell:
+# .venv\Scripts\Activate.ps1
+
+# Install dependencies
+python -m pip install --upgrade pip
+python -m pip install .
+
+# Run formatter
+python -m pip install isort black
+isort .
+black .
+
+# Run lint
+python -m pip install flake8 ruff
+flake8 .
+ruff .
+
+# Run tests
+python -m pip install pytest
+pytest
+
+# Run demo
+python src/demo.py --help
+# To output debug logs to a file:
+python src/demo.py --verbose 2> out.txt
+
+# Build package
+python -m pip install build
+python -m build
+```
