@@ -1,7 +1,7 @@
 """Implementation of opower.com JSON API."""
 
 import dataclasses
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from enum import Enum
 import json
 import logging
@@ -10,11 +10,13 @@ from typing import Any
 from urllib.parse import urlencode
 
 import aiohttp
+import arrow
 from multidict import CIMultiDict
 
 from .utilities import UtilityBase
 
 _LOGGER = logging.getLogger(__file__)
+DEBUG_LOG_RESPONSE = False
 
 
 class MeterType(Enum):
@@ -128,10 +130,6 @@ def _get_form_action_url_and_hidden_inputs(html: str):
     return action_url, inputs
 
 
-def _strip_time(date_time: datetime):
-    return date_time.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
-
-
 class Opower:
     """Class that can get historical and forecasted usage/cost from an utility."""
 
@@ -206,7 +204,8 @@ class Opower:
         _LOGGER.debug("Fetching: %s", url)
         async with self.session.get(url) as resp:
             result = await resp.json()
-            _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
+            if DEBUG_LOG_RESPONSE:
+                _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
         forecasts = []
         for forecast in result["accountForecasts"]:
             forecasts.append(
@@ -244,7 +243,8 @@ class Opower:
                 "/customers/current"
             ) as resp:
                 self.customer = await resp.json()
-                _LOGGER.debug("Fetched: %s", json.dumps(self.customer, indent=2))
+                if DEBUG_LOG_RESPONSE:
+                    _LOGGER.debug("Fetched: %s", json.dumps(self.customer, indent=2))
         assert self.customer
         return self.customer
 
@@ -335,16 +335,12 @@ class Opower:
                 return await self._async_fetch(
                     url, aggregate_type, start_date, end_date
                 )
-            raise ValueError("Missing start_date")
-
+            raise ValueError("start_date is required unless aggregate_type=BILL")
         if end_date is None:
-            end_date = datetime.max
-        end_date = min(datetime.now(), end_date)
+            raise ValueError("end_date is required unless aggregate_type=BILL")
 
-        start_date = _strip_time(start_date)
-        end_date = _strip_time(end_date) + timedelta(days=1)
-        assert start_date
-        assert end_date
+        start = arrow.get(start_date.date(), self.utility.timezone())
+        end = arrow.get(end_date.date(), self.utility.timezone()).shift(days=1)
 
         max_request_days = None
         if aggregate_type == AggregateType.DAY:
@@ -353,32 +349,30 @@ class Opower:
             max_request_days = 26
 
         # Fetch data in batches in reverse chronological order
-        # until we reach start_date or there is no fetched data
+        # until we reach start or there is no fetched data
         # (non bill data are available up to 3 years ago).
         result: list[Any] = []
-        req_end = end_date
+        req_end = end
         while True:
-            req_start = start_date
-            if max_request_days:
-                req_start = max(start_date, req_end - timedelta(days=max_request_days))
+            req_start = start
+            if max_request_days is not None:
+                req_start = max(start, req_end.shift(days=-max_request_days))
             if req_start >= req_end:
                 return result
             reads = await self._async_fetch(url, aggregate_type, req_start, req_end)
             if not reads:
                 return result
             result = reads + result
-            req_end = req_start - timedelta(days=1)
+            req_end = req_start.shift(days=-1)
 
     async def _async_fetch(
         self,
         url: str,
         aggregate_type: AggregateType,
-        start_date: datetime | None = None,
-        end_date: datetime | None = None,
+        start_date: datetime | arrow.Arrow | None = None,
+        end_date: datetime | arrow.Arrow | None = None,
     ) -> list[Any]:
-        convert_to_date = not (
-            aggregate_type == AggregateType.DAY and "/cws/cost/" in url
-        )
+        convert_to_date = "/cws/utilities/" in url
         params = {"aggregateType": aggregate_type.value}
         if start_date:
             params["startDate"] = (
@@ -391,5 +385,6 @@ class Opower:
         _LOGGER.debug("Fetching: %s?%s", url, urlencode(params))
         async with self.session.get(url, params=params) as resp:
             result = await resp.json()
-            _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
+            if DEBUG_LOG_RESPONSE:
+                _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
             return result["reads"]

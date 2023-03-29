@@ -25,6 +25,14 @@ class UtilityBase:
         raise NotImplementedError
 
     @staticmethod
+    def timezone() -> str:
+        """Return the timezone.
+
+        Should match the siteTimeZoneId of the API responses.
+        """
+        raise NotImplementedError
+
+    @staticmethod
     async def login(
         session: aiohttp.ClientSession, username: str, password: str
     ) -> str:

@@ -37,7 +37,7 @@ pytest
 
 # Run demo
 python src/demo.py --help
-# To output debug logs to a file:
+# To output debug logs to a file, change DEBUG_LOG_RESPONSE to True in opower.py and run:
 python src/demo.py --verbose 2> out.txt
 
 # Build package

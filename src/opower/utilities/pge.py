@@ -20,6 +20,11 @@ class PGE(UtilityBase):
         return "pge"
 
     @staticmethod
+    def timezone() -> str:
+        """Return the timezone."""
+        return "America/Los_Angeles"
+
+    @staticmethod
     async def login(
         session: aiohttp.ClientSession, username: str, password: str
     ) -> str:
