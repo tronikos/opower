@@ -12,7 +12,7 @@ class PGE(UtilityBase):
     @staticmethod
     def name() -> str:
         """Distinct recognizable name of the utility."""
-        return "Pacific Gas & Electric"
+        return "Pacific Gas and Electric Company (PG&E)"
 
     @staticmethod
     def subdomain() -> str:
