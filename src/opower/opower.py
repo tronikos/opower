@@ -223,8 +223,8 @@ class Opower:
                     cost_to_date=float(forecast["costToDate"]),
                     forecasted_usage=float(forecast.get("forecastedUsage", 0)),
                     forecasted_cost=float(forecast.get("forecastedCost", 0)),
-                    typical_usage=float(forecast["typicalUsage"]),
-                    typical_cost=float(forecast["typicalCost"]),
+                    typical_usage=float(forecast.get("typicalUsage", 0)),
+                    typical_cost=float(forecast.get("typicalCost", 0)),
                 )
             )
         return forecasts
