@@ -148,7 +148,8 @@ class Opower:
     async def async_login(self) -> None:
         """Login to the utility website and authorize opower.com for access."""
         url = await self.utility.login(self.session, self.username, self.password)
-        await self._async_authorize(url)
+        if url is not None:
+            await self._async_authorize(url)
 
     async def _async_authorize(self, url: str) -> None:
         # Fetch the URL on the utility website to get RelayState and SAMLResponse.
