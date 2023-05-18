@@ -77,8 +77,8 @@ class PSE(UtilityBase):
     @staticmethod
     async def login(
         session: aiohttp.ClientSession, username: str, password: str
-    ) -> str:
-        """Login to the utility website and return a URL where we can authorize opower.com."""
+    ) -> None:
+        """Login to PSE and update the client session with OPower authorization headers."""
         login_parser = PSELoginParser()
 
         async with session.get("https://www.pse.com/en/login") as resp:
