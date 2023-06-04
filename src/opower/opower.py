@@ -10,9 +10,11 @@ from typing import Any
 from urllib.parse import urlencode
 
 import aiohttp
+from aiohttp.client_exceptions import ClientResponseError
 import arrow
 from multidict import CIMultiDict
 
+from .exceptions import CannotConnect, InvalidAuth
 from .utilities import UtilityBase
 
 _LOGGER = logging.getLogger(__file__)
@@ -146,10 +148,20 @@ class Opower:
         self.customer = None
 
     async def async_login(self) -> None:
-        """Login to the utility website and authorize opower.com for access."""
-        url = await self.utility.login(self.session, self.username, self.password)
-        if url is not None:
-            await self._async_authorize(url)
+        """Login to the utility website and authorize opower.com for access.
+
+        :raises InvalidAuth: if login information is incorrect
+        :raises CannotConnect: if we receive any HTTP error
+        """
+        try:
+            url = await self.utility.login(self.session, self.username, self.password)
+            if url is not None:
+                await self._async_authorize(url)
+        except ClientResponseError as err:
+            if err.status in (401, 403):
+                raise InvalidAuth(err)
+            else:
+                raise CannotConnect(err)
 
     async def _async_authorize(self, url: str) -> None:
         # Fetch the URL on the utility website to get RelayState and SAMLResponse.
@@ -384,8 +396,15 @@ class Opower:
                 end_date.date() if convert_to_date else end_date
             ).isoformat()
         _LOGGER.debug("Fetching: %s?%s", url, urlencode(params))
-        async with self.session.get(url, params=params) as resp:
-            result = await resp.json()
-            if DEBUG_LOG_RESPONSE:
-                _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
-            return result["reads"]
+        try:
+            async with self.session.get(url, params=params) as resp:
+                result = await resp.json()
+                if DEBUG_LOG_RESPONSE:
+                    _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
+                return result["reads"]
+        except ClientResponseError as err:
+            # Ignore server errors for BILL requests
+            # that can happen if end_date is before account activation
+            if err.status == 500 and aggregate_type == AggregateType.BILL:
+                return []
+            raise err

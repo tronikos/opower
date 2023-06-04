@@ -1,5 +1,6 @@
 """Library for getting historical and forecasted usage/cost from an utility using opower.com JSON API."""
 
+from .exceptions import CannotConnect, InvalidAuth
 from .opower import (
     Account,
     AggregateType,
@@ -16,8 +17,10 @@ from .opower import (
 __all__ = [
     "Account",
     "AggregateType",
+    "CannotConnect",
     "CostRead",
     "Forecast",
+    "InvalidAuth",
     "MeterType",
     "Opower",
     "UnitOfMeasure",
