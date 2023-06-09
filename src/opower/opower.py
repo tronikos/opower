@@ -261,7 +261,9 @@ class Opower:
                         account=Account(
                             customer=customer,
                             uuid=forecast["accountUuids"][0],
-                            utility_account_id=str(forecast["preferredUtilityAccountId"]),
+                            utility_account_id=str(
+                                forecast["preferredUtilityAccountId"]
+                            ),
                             meter_type=MeterType(forecast["meterType"]),
                         ),
                         start_date=date.fromisoformat(forecast["startDate"]),
@@ -290,10 +292,12 @@ class Opower:
                 "/customers?offset=0&batchSize=100&addressFilter="
             ) as resp:
                 resp_json = await resp.json()
-                assert ("customers" in resp_json)
+                assert "customers" in resp_json
                 self.customers_data = resp_json["customers"]
                 if DEBUG_LOG_RESPONSE:
-                    _LOGGER.debug("Fetched: %s", json.dumps(self.customer_data, indent=2))
+                    _LOGGER.debug(
+                        "Fetched: %s", json.dumps(self.customer_data, indent=2)
+                    )
         assert self.customers_data
         return self.customers_data
 
@@ -409,7 +413,9 @@ class Opower:
                 req_start = max(start, req_end.shift(days=-max_request_days))
             if req_start >= req_end:
                 return result
-            reads = await self._async_fetch(customer, url, aggregate_type, req_start, req_end)
+            reads = await self._async_fetch(
+                customer, url, aggregate_type, req_start, req_end
+            )
             if not reads:
                 return result
             result = reads + result
@@ -426,7 +432,7 @@ class Opower:
         convert_to_date = "/cws/utilities/" in url
         params = {"aggregateType": aggregate_type.value}
         headers = {
-            "Opower-Selected-Entities": f"[\"urn:opower:customer:uuid:{customer.uuid}\"]"
+            "Opower-Selected-Entities": f'["urn:opower:customer:uuid:{customer.uuid}"]'
         }
         if start_date:
             params["startDate"] = (
