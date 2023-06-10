@@ -56,9 +56,19 @@ class AggregateType(Enum):
 
 
 @dataclasses.dataclass
+class Customer:
+    """Data about a customer."""
+
+    id: str
+    uuid: str
+    accountNumber: str
+
+
+@dataclasses.dataclass
 class Account:
     """Data about an account."""
 
+    customer: Customer
     uuid: str
     utility_account_id: str
     meter_type: MeterType
@@ -145,7 +155,7 @@ class Opower:
         self.utility: type[UtilityBase] = _select_utility(utility)
         self.username = username
         self.password = password
-        self.customer = None
+        self.customers_data = []
 
     async def async_login(self) -> None:
         """Login to the utility website and authorize opower.com for access.
@@ -181,21 +191,46 @@ class Opower:
         async with self.session.post(action_url, data=hidden_inputs) as resp:
             pass
 
+    async def async_get_customers(self) -> list[Customer]:
+        """Get a list of customers for the signed in user.
+
+        Some users with different providers for gas/electric may
+        have their accounts splits under different customers.
+        """
+        customers_data = await self._async_get_customers_data()
+        customers = []
+        for customer_data in customers_data:
+            customer = Customer(
+                id=customer_data["id"],
+                uuid=customer_data["uuid"],
+                accountNumber=customer_data["accountNumber"],
+            )
+            customers.append(customer)
+        return customers
+
     async def async_get_accounts(self) -> list[Account]:
         """Get a list of accounts for the signed in user.
 
         Typically one account for electricity and one for gas.
         """
-        customer = await self._async_get_customer()
+        customers_data = await self._async_get_customers_data()
         accounts = []
-        for account in customer["utilityAccounts"]:
-            accounts.append(
-                Account(
-                    uuid=account["uuid"],
-                    utility_account_id=account["preferredUtilityAccountId"],
-                    meter_type=MeterType(account["meterType"]),
-                )
+        for customer_data in customers_data:
+            customer = Customer(
+                id=customer_data["id"],
+                uuid=customer_data["uuid"],
+                accountNumber=customer_data["accountNumber"],
             )
+
+            for account in customer_data["utilityAccounts"]:
+                accounts.append(
+                    Account(
+                        customer=customer,
+                        uuid=account["uuid"],
+                        utility_account_id=account["preferredUtilityAccountId"],
+                        meter_type=MeterType(account["meterType"]),
+                    )
+                )
         return accounts
 
     async def async_get_forecast(self) -> list[Forecast]:
@@ -203,63 +238,68 @@ class Opower:
 
         One forecast for each account, typically one for electricity, one for gas.
         """
-        customer = await self._async_get_customer()
-        customer_uuid = customer["uuid"]
-        url = (
-            "https://"
-            f"{self.utility.subdomain()}"
-            ".opower.com/ei/edge/apis/bill-forecast-cws-v1/cws/"
-            f"{self.utility.subdomain()}"
-            "/customers/"
-            f"{customer_uuid}"
-            "/combined-forecast"
-        )
-        _LOGGER.debug("Fetching: %s", url)
-        async with self.session.get(url) as resp:
-            result = await resp.json()
-            if DEBUG_LOG_RESPONSE:
-                _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
+        customers = await self.async_get_customers()
         forecasts = []
-        for forecast in result["accountForecasts"]:
-            forecasts.append(
-                Forecast(
-                    account=Account(
-                        uuid=forecast["accountUuids"][0],
-                        utility_account_id=str(forecast["preferredUtilityAccountId"]),
-                        meter_type=MeterType(forecast["meterType"]),
-                    ),
-                    start_date=date.fromisoformat(forecast["startDate"]),
-                    end_date=date.fromisoformat(forecast["endDate"]),
-                    current_date=date.fromisoformat(forecast["currentDate"]),
-                    unit_of_measure=UnitOfMeasure(forecast["unitOfMeasure"]),
-                    usage_to_date=float(forecast.get("usageToDate", 0)),
-                    cost_to_date=float(forecast.get("costToDate", 0)),
-                    forecasted_usage=float(forecast.get("forecastedUsage", 0)),
-                    forecasted_cost=float(forecast.get("forecastedCost", 0)),
-                    typical_usage=float(forecast.get("typicalUsage", 0)),
-                    typical_cost=float(forecast.get("typicalCost", 0)),
-                )
+        for customer in customers:
+            url = (
+                "https://"
+                f"{self.utility.subdomain()}"
+                ".opower.com/ei/edge/apis/bill-forecast-cws-v1/cws/"
+                f"{self.utility.subdomain()}"
+                "/customers/"
+                f"{customer.uuid}"
+                "/combined-forecast"
             )
+            _LOGGER.debug("Fetching: %s", url)
+            async with self.session.get(url) as resp:
+                result = await resp.json()
+                if DEBUG_LOG_RESPONSE:
+                    _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
+            for forecast in result["accountForecasts"]:
+                forecasts.append(
+                    Forecast(
+                        account=Account(
+                            customer=customer,
+                            uuid=forecast["accountUuids"][0],
+                            utility_account_id=str(
+                                forecast["preferredUtilityAccountId"]
+                            ),
+                            meter_type=MeterType(forecast["meterType"]),
+                        ),
+                        start_date=date.fromisoformat(forecast["startDate"]),
+                        end_date=date.fromisoformat(forecast["endDate"]),
+                        current_date=date.fromisoformat(forecast["currentDate"]),
+                        unit_of_measure=UnitOfMeasure(forecast["unitOfMeasure"]),
+                        usage_to_date=float(forecast.get("usageToDate", 0)),
+                        cost_to_date=float(forecast.get("costToDate", 0)),
+                        forecasted_usage=float(forecast.get("forecastedUsage", 0)),
+                        forecasted_cost=float(forecast.get("forecastedCost", 0)),
+                        typical_usage=float(forecast.get("typicalUsage", 0)),
+                        typical_cost=float(forecast.get("typicalCost", 0)),
+                    )
+                )
         return forecasts
 
-    async def _async_get_customer(self):
-        """Get information about the current customer."""
-        # Cache the customer data
-        if not self.customer:
+    async def _async_get_customers_data(self):
+        """Get information about the customers associated to the account."""
+        # Cache the customers data
+        if not self.customers_data:
             async with self.session.get(
                 "https://"
                 f"{self.utility.subdomain()}"
                 ".opower.com/ei/edge/apis/multi-account-v1/cws/"
                 f"{self.utility.subdomain()}"
-                # Alternative to get multiple accounts:
-                # /customers?offset=0&batchSize=100&addressFilter=
-                "/customers/current"
+                "/customers?offset=0&batchSize=100&addressFilter="
             ) as resp:
-                self.customer = await resp.json()
+                resp_json = await resp.json()
+                assert "customers" in resp_json
+                self.customers_data = resp_json["customers"]
                 if DEBUG_LOG_RESPONSE:
-                    _LOGGER.debug("Fetched: %s", json.dumps(self.customer, indent=2))
-        assert self.customer
-        return self.customer
+                    _LOGGER.debug(
+                        "Fetched: %s", json.dumps(self.customer_data, indent=2)
+                    )
+        assert self.customers_data
+        return self.customers_data
 
     async def async_get_cost_reads(
         self,
@@ -280,7 +320,7 @@ class Opower:
             f"{account.uuid}"
         )
         reads = await self._async_get_dated_data(
-            url, aggregate_type, start_date, end_date
+            account.customer, url, aggregate_type, start_date, end_date
         )
         result = []
         for read in reads:
@@ -322,7 +362,7 @@ class Opower:
             "/reads"
         )
         reads = await self._async_get_dated_data(
-            url, aggregate_type, start_date, end_date
+            account.customer, url, aggregate_type, start_date, end_date
         )
         result = []
         for read in reads:
@@ -337,6 +377,7 @@ class Opower:
 
     async def _async_get_dated_data(
         self,
+        customer: Customer,
         url: str,
         aggregate_type: AggregateType,
         start_date: datetime | None = None,
@@ -346,7 +387,7 @@ class Opower:
         if start_date is None:
             if aggregate_type == AggregateType.BILL:
                 return await self._async_fetch(
-                    url, aggregate_type, start_date, end_date
+                    customer, url, aggregate_type, start_date, end_date
                 )
             raise ValueError("start_date is required unless aggregate_type=BILL")
         if end_date is None:
@@ -372,7 +413,9 @@ class Opower:
                 req_start = max(start, req_end.shift(days=-max_request_days))
             if req_start >= req_end:
                 return result
-            reads = await self._async_fetch(url, aggregate_type, req_start, req_end)
+            reads = await self._async_fetch(
+                customer, url, aggregate_type, req_start, req_end
+            )
             if not reads:
                 return result
             result = reads + result
@@ -380,6 +423,7 @@ class Opower:
 
     async def _async_fetch(
         self,
+        customer: Customer,
         url: str,
         aggregate_type: AggregateType,
         start_date: datetime | arrow.Arrow | None = None,
@@ -387,6 +431,9 @@ class Opower:
     ) -> list[Any]:
         convert_to_date = "/cws/utilities/" in url
         params = {"aggregateType": aggregate_type.value}
+        headers = {
+            "Opower-Selected-Entities": f'["urn:opower:customer:uuid:{customer.uuid}"]'
+        }
         if start_date:
             params["startDate"] = (
                 start_date.date() if convert_to_date else start_date
@@ -397,7 +444,7 @@ class Opower:
             ).isoformat()
         _LOGGER.debug("Fetching: %s?%s", url, urlencode(params))
         try:
-            async with self.session.get(url, params=params) as resp:
+            async with self.session.get(url, params=params, headers=headers) as resp:
                 result = await resp.json()
                 if DEBUG_LOG_RESPONSE:
                     _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
