@@ -59,9 +59,7 @@ class AggregateType(Enum):
 class Customer:
     """Data about a customer."""
 
-    id: str
     uuid: str
-    accountNumber: str
 
 
 @dataclasses.dataclass
@@ -155,7 +153,7 @@ class Opower:
         self.utility: type[UtilityBase] = _select_utility(utility)
         self.username = username
         self.password = password
-        self.customers_data = []
+        self.customers = []
 
     async def async_login(self) -> None:
         """Login to the utility website and authorize opower.com for access.
@@ -191,56 +189,13 @@ class Opower:
         async with self.session.post(action_url, data=hidden_inputs) as resp:
             pass
 
-    async def async_get_customers(self) -> list[Customer]:
-        """Get a list of customers for the signed in user.
-
-        Some users with different providers for gas/electric may
-        have their accounts splits under different customers.
-        """
-        customers_data = await self._async_get_customers_data()
-        customers = []
-        for customer_data in customers_data:
-            customer = Customer(
-                id=customer_data["id"],
-                uuid=customer_data["uuid"],
-                accountNumber=customer_data["accountNumber"],
-            )
-            customers.append(customer)
-        return customers
-
-    async def async_get_accounts(self) -> list[Account]:
-        """Get a list of accounts for the signed in user.
-
-        Typically one account for electricity and one for gas.
-        """
-        customers_data = await self._async_get_customers_data()
-        accounts = []
-        for customer_data in customers_data:
-            customer = Customer(
-                id=customer_data["id"],
-                uuid=customer_data["uuid"],
-                accountNumber=customer_data["accountNumber"],
-            )
-
-            for account in customer_data["utilityAccounts"]:
-                accounts.append(
-                    Account(
-                        customer=customer,
-                        uuid=account["uuid"],
-                        utility_account_id=account["preferredUtilityAccountId"],
-                        meter_type=MeterType(account["meterType"]),
-                    )
-                )
-        return accounts
-
     async def async_get_forecast(self) -> list[Forecast]:
         """Get current and forecasted usage and cost for the current monthly bill.
 
         One forecast for each account, typically one for electricity, one for gas.
         """
-        customers = await self.async_get_customers()
         forecasts = []
-        for customer in customers:
+        for customer in await self._async_get_customers():
             url = (
                 "https://"
                 f"{self.utility.subdomain()}"
@@ -280,26 +235,26 @@ class Opower:
                 )
         return forecasts
 
-    async def _async_get_customers_data(self):
-        """Get information about the customers associated to the account."""
-        # Cache the customers data
-        if not self.customers_data:
-            async with self.session.get(
+    async def _async_get_customers(self) -> list[Customer]:
+        """Get customers associated to the user."""
+        # Cache the customers
+        if not self.customers:
+            url = (
                 "https://"
                 f"{self.utility.subdomain()}"
                 ".opower.com/ei/edge/apis/multi-account-v1/cws/"
                 f"{self.utility.subdomain()}"
                 "/customers?offset=0&batchSize=100&addressFilter="
-            ) as resp:
-                resp_json = await resp.json()
-                assert "customers" in resp_json
-                self.customers_data = resp_json["customers"]
+            )
+            _LOGGER.debug("Fetching: %s", url)
+            async with self.session.get(url) as resp:
+                result = await resp.json()
                 if DEBUG_LOG_RESPONSE:
-                    _LOGGER.debug(
-                        "Fetched: %s", json.dumps(self.customer_data, indent=2)
-                    )
-        assert self.customers_data
-        return self.customers_data
+                    _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
+            for customer in result["customers"]:
+                self.customers.append(Customer(uuid=customer["uuid"]))
+        assert self.customers
+        return self.customers
 
     async def async_get_cost_reads(
         self,
