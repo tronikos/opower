@@ -2,7 +2,11 @@
 
 A Python library for getting historical and forecasted usage/cost from utilities that use opower.com such as PG&amp;E.
 
-To add support for a new utility that uses opower JSON API (you can tell if the energy dashboard of your utility is hosted on opower.com, e.g. pge.opower.com) add a file similar to [pge.py](https://github.com/tronikos/opower/blob/main/src/opower/utilities/pge.py) or [pse.py](https://github.com/tronikos/opower/blob/main/src/opower/utilities/pse.py).
+To add support for a new utility that uses opower JSON API (you can tell if the energy dashboard of your utility is hosted on opower.com, e.g. pge.opower.com) add a file similar to
+[pge.py](https://github.com/tronikos/opower/blob/main/src/opower/utilities/pge.py)
+or [pse.py](https://github.com/tronikos/opower/blob/main/src/opower/utilities/pse.py)
+or [bge.py](https://github.com/tronikos/opower/blob/main/src/opower/utilities/bge.py)
+.
 
 ## Example
 
