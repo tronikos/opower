@@ -147,7 +147,7 @@ class Opower:
         :raises CannotConnect: if we receive any HTTP error
         """
         try:
-            await self.utility.login(self.session, self.username, self.password)
+            await self.utility.async_login(self.session, self.username, self.password)
         except ClientResponseError as err:
             if err.status in (401, 403):
                 raise InvalidAuth(err)

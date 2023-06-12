@@ -28,7 +28,7 @@ class BGE(UtilityBase):
         return "America/New_York"
 
     @staticmethod
-    async def login(
+    async def async_login(
         session: aiohttp.ClientSession, username: str, password: str
     ) -> None:
         """Login to the utility website and authorize opower."""
