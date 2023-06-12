@@ -30,8 +30,8 @@ class BGE(UtilityBase):
     @staticmethod
     async def login(
         session: aiohttp.ClientSession, username: str, password: str
-    ) -> str:
-        """Login to the utility website and return a URL where we can authorize opower.com."""
+    ) -> None:
+        """Login to the utility website and authorize opower."""
         async with session.get(
             "https://secure.bge.com/Pages/Login.aspx?/login"
         ) as resp:
@@ -97,5 +97,3 @@ class BGE(UtilityBase):
         access_token = result["access_token"]
 
         session.headers.add("authorization", f"Bearer {access_token}")
-
-        return None

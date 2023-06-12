@@ -78,7 +78,7 @@ class PSE(UtilityBase):
     async def login(
         session: aiohttp.ClientSession, username: str, password: str
     ) -> None:
-        """Login to PSE and update the client session with OPower authorization headers."""
+        """Login to the utility website and authorize opower."""
         login_parser = PSELoginParser()
 
         async with session.get("https://www.pse.com/en/login") as resp:
@@ -135,5 +135,3 @@ class PSE(UtilityBase):
         session.headers.add(
             "authorization", f"Bearer {usage_parser.opower_access_token}"
         )
-
-        return None

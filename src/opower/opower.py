@@ -5,7 +5,6 @@ from datetime import date, datetime
 from enum import Enum
 import json
 import logging
-import re
 from typing import Any
 from urllib.parse import urlencode
 
@@ -126,20 +125,6 @@ def _select_utility(name_or_subdomain: str) -> type[UtilityBase]:
     raise ValueError(f"Utility {name_or_subdomain} not found")
 
 
-def _get_form_action_url_and_hidden_inputs(html: str):
-    """Return the URL and hidden inputs from the single form in a page."""
-    match = re.search(r'action="([^"]*)"', html)
-    if not match:
-        return None, None
-    action_url = match.group(1)
-    inputs = {}
-    for match in re.finditer(
-        r'input\s*type="hidden"\s*name="([^"]*)"\s*value="([^"]*)"', html
-    ):
-        inputs[match.group(1)] = match.group(2)
-    return action_url, inputs
-
-
 class Opower:
     """Class that can get historical and forecasted usage/cost from an utility."""
 
@@ -162,32 +147,12 @@ class Opower:
         :raises CannotConnect: if we receive any HTTP error
         """
         try:
-            url = await self.utility.login(self.session, self.username, self.password)
-            if url is not None:
-                await self._async_authorize(url)
+            await self.utility.login(self.session, self.username, self.password)
         except ClientResponseError as err:
             if err.status in (401, 403):
                 raise InvalidAuth(err)
             else:
                 raise CannotConnect(err)
-
-    async def _async_authorize(self, url: str) -> None:
-        # Fetch the URL on the utility website to get RelayState and SAMLResponse.
-        async with self.session.get(url) as resp:
-            result = await resp.text()
-        action_url, hidden_inputs = _get_form_action_url_and_hidden_inputs(result)
-        assert action_url == "https://sso2.opower.com/sp/ACS.saml2"
-        assert set(hidden_inputs.keys()) == {"RelayState", "SAMLResponse"}
-
-        # Pass them to https://sso2.opower.com/sp/ACS.saml2 to get opentoken.
-        async with self.session.post(action_url, data=hidden_inputs) as resp:
-            result = await resp.text()
-        action_url, hidden_inputs = _get_form_action_url_and_hidden_inputs(result)
-        assert set(hidden_inputs.keys()) == {"opentoken"}
-
-        # Pass it back to the utility website.
-        async with self.session.post(action_url, data=hidden_inputs) as resp:
-            pass
 
     async def async_get_forecast(self) -> list[Forecast]:
         """Get current and forecasted usage and cost for the current monthly bill.

@@ -35,11 +35,8 @@ class UtilityBase:
     @staticmethod
     async def login(
         session: aiohttp.ClientSession, username: str, password: str
-    ) -> str | None:
-        """Login to the utility website.
-
-        Returns either a URL for SAML authentication with opower.com,
-        or directly handles authentication and returns None.
+    ) -> None:
+        """Login to the utility website and authorize opower.
 
         Any failure to login should raise ClientResponseError with status 401 or 403.
         """
