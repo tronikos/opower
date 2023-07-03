@@ -249,7 +249,7 @@ class Opower:
                     start_time=datetime.fromisoformat(read["startTime"]),
                     end_time=datetime.fromisoformat(read["endTime"]),
                     consumption=read["value"],
-                    provided_cost=read["providedCost"],
+                    provided_cost=read["providedCost"] or 0,
                 )
             )
         # Remove last entries with 0 values
