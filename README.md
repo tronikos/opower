@@ -13,6 +13,7 @@ Supported utilities:
 
 - Pacific Gas & Electric (PG&E)
 - Puget Sound Energy (PSE)
+- Evergy
 - Exelon subsidiaries
   - Atlantic City Electric
   - Baltimore Gas and Electric (BGE)
