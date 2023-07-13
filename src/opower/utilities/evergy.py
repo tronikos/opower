@@ -3,8 +3,8 @@
 from html.parser import HTMLParser
 
 import aiohttp
-from ..exceptions import CannotConnect, InvalidAuth
 
+from ..exceptions import CannotConnect, InvalidAuth
 from .base import UtilityBase
 
 
@@ -57,11 +57,7 @@ class Evergy(UtilityBase):
             login_parser.feed(await resp.text())
 
             if login_parser.verification_token is None:
-                raise CannotConnect(
-                    resp.request_info,
-                    resp.history,
-                    message="Failed to parse login verification token",
-                )
+                raise CannotConnect("Failed to parse login verification token")
 
         login_payload = {
             "username": username,
@@ -73,14 +69,15 @@ class Evergy(UtilityBase):
             "https://www.evergy.com/log-in",
             data=login_payload,
             allow_redirects=False,
+            raise_for_status=False,
         ) as resp:
-            # The response status will be 302 regardless of success, the redirect will tell us if we're logged in
-            if resp.headers["location"] != "/ma/my-account/account-summary":
-                raise InvalidAuth(
-                    resp.request_info,
-                    resp.history,
-                    message="Login failed",
-                )
+            # The response status will be 500 if verification token did not work
+            if resp.status == 500:
+                raise InvalidAuth("Login verification token failed")
+
+            # Counterintuitively, if we get a 200 back, that means the login failed
+            if resp.status == 200:
+                raise InvalidAuth("Username and password failed")
 
         opower_access_token = None
 
@@ -90,10 +87,6 @@ class Evergy(UtilityBase):
             opower_access_token = resp.headers["jwt"]
 
             if opower_access_token is None:
-                raise InvalidAuth(
-                    resp.request_info,
-                    resp.history,
-                    message="Failed to parse OPower bearer token",
-                )
+                raise InvalidAuth("Failed to parse OPower bearer token")
 
         session.headers.add("authorization", f"{opower_access_token}")
