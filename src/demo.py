@@ -8,7 +8,7 @@ import logging
 
 import aiohttp
 
-from opower import AggregateType, Opower, get_supported_utility_subdomains
+from opower import AggregateType, Opower, get_supported_utilities
 
 
 async def _main():
@@ -16,7 +16,8 @@ async def _main():
     parser.add_argument(
         "--utility",
         help="Utility (subdomain of opower.com). Defaults to pge",
-        choices=get_supported_utility_subdomains(),
+        choices=[utility.__name__.lower() for utility in get_supported_utilities()],
+        type=str.lower,
         default="pge",
     )
     parser.add_argument(

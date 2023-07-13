@@ -10,8 +10,8 @@ from .opower import (
     Opower,
     UnitOfMeasure,
     UsageRead,
+    get_supported_utilities,
     get_supported_utility_names,
-    get_supported_utility_subdomains,
 )
 
 __all__ = [
@@ -25,6 +25,6 @@ __all__ = [
     "Opower",
     "UnitOfMeasure",
     "UsageRead",
+    "get_supported_utilities",
     "get_supported_utility_names",
-    "get_supported_utility_subdomains",
 ]

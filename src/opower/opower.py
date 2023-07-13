@@ -107,20 +107,24 @@ class UsageRead:
     consumption: float  # taken from consumption.value field, in KWH or THERM
 
 
+def get_supported_utilities() -> list[type["UtilityBase"]]:
+    """Return a list of all supported utilities."""
+    return UtilityBase.subclasses
+
+
 def get_supported_utility_names() -> list[str]:
     """Return a list of names of all supported utilities."""
     return [utility.name() for utility in UtilityBase.subclasses]
 
 
-def get_supported_utility_subdomains() -> list[str]:
-    """Return a list of subdomains of all supported utilities."""
-    return [utility.subdomain() for utility in UtilityBase.subclasses]
-
-
 def _select_utility(name_or_subdomain: str) -> type[UtilityBase]:
     """Return the utility with the given name or subdomain."""
     for utility in UtilityBase.subclasses:
-        if name_or_subdomain in [utility.name(), utility.subdomain()]:
+        if name_or_subdomain.lower() in [
+            utility.name().lower(),
+            utility.__name__.lower(),
+            utility.subdomain().lower(),
+        ]:
             return utility
     raise ValueError(f"Utility {name_or_subdomain} not found")
 
