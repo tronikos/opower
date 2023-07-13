@@ -4,16 +4,16 @@ from html.parser import HTMLParser
 
 import aiohttp
 
-from ..exceptions import CannotConnect, InvalidAuth
+from ..exceptions import InvalidAuth
 from .base import UtilityBase
 
 
 class EvergyLoginParser(HTMLParser):
     """HTML parser to extract login verification token from Evergy Login page."""
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self) -> None:
         """Initialize."""
-        super().__init__(*args, **kwargs)
+        super().__init__()
         self.verification_token = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -56,8 +56,9 @@ class Evergy(UtilityBase):
         async with session.get("https://www.evergy.com/log-in") as resp:
             login_parser.feed(await resp.text())
 
-            if login_parser.verification_token is None:
-                raise CannotConnect("Failed to parse login verification token")
+            assert (
+                login_parser.verification_token
+            ), "Failed to parse login verification token"
 
         login_payload = {
             "username": username,
@@ -86,7 +87,6 @@ class Evergy(UtilityBase):
         ) as resp:
             opower_access_token = resp.headers["jwt"]
 
-            if opower_access_token is None:
-                raise InvalidAuth("Failed to parse OPower bearer token")
+            assert opower_access_token, "Failed to parse OPower bearer token"
 
         session.headers.add("authorization", f"{opower_access_token}")

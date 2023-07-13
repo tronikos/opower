@@ -4,7 +4,8 @@ import json
 import re
 
 import aiohttp
-from aiohttp.client_exceptions import ClientResponseError
+
+from ..exceptions import InvalidAuth
 
 
 class Exelon:
@@ -61,12 +62,7 @@ class Exelon:
             result = json.loads(await resp.text())
 
         if result["status"] != "200":
-            raise ClientResponseError(
-                resp.request_info,
-                resp.history,
-                status=403,
-                message=result["message"],
-            )
+            raise InvalidAuth(result["message"])
 
         async with session.get(
             "https://"

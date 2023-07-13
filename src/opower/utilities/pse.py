@@ -4,17 +4,17 @@ from html.parser import HTMLParser
 import re
 
 import aiohttp
-from aiohttp.client_exceptions import ClientResponseError
 
+from ..exceptions import InvalidAuth
 from .base import UtilityBase
 
 
 class PSELoginParser(HTMLParser):
     """HTML parser to extract login verification token from PSE Login page."""
 
-    def __init__(self, *, convert_charrefs: bool = True) -> None:
+    def __init__(self) -> None:
         """Initialize."""
-        super().__init__(convert_charrefs=convert_charrefs)
+        super().__init__()
         self.verification_token = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -29,9 +29,9 @@ class PSEUsageParser(HTMLParser):
 
     _regexp = re.compile(r'var accessToken\s+=\s+["\'](?P<token>.+)["\']')
 
-    def __init__(self, *, convert_charrefs: bool = True) -> None:
+    def __init__(self) -> None:
         """Initialize."""
-        super().__init__(convert_charrefs=convert_charrefs)
+        super().__init__()
         self.opower_access_token = None
         self._in_inline_script = False
 
@@ -84,13 +84,9 @@ class PSE(UtilityBase):
         async with session.get("https://www.pse.com/en/login") as resp:
             login_parser.feed(await resp.text())
 
-            if login_parser.verification_token is None:
-                raise ClientResponseError(
-                    resp.request_info,
-                    resp.history,
-                    status=403,
-                    message="Failed to parse __RequestVerificationToken",
-                )
+            assert (
+                login_parser.verification_token
+            ), "Failed to parse __RequestVerificationToken"
 
         await session.post(
             "https://www.pse.com/api/pseauthentication/AsyncSignIn",
@@ -110,12 +106,7 @@ class PSE(UtilityBase):
             "https://www.pse.com/api/AccountSelector/GetContractAccountJson"
         ) as resp:
             if len(await resp.text()) == 0:
-                raise ClientResponseError(
-                    resp.request_info,
-                    resp.history,
-                    status=403,
-                    message="Login failed",
-                )
+                raise InvalidAuth("Login failed")
 
         usage_parser = PSEUsageParser()
 
@@ -124,13 +115,9 @@ class PSE(UtilityBase):
         ) as resp:
             usage_parser.feed(await resp.text())
 
-            if usage_parser.opower_access_token is None:
-                raise ClientResponseError(
-                    resp.request_info,
-                    resp.history,
-                    status=403,
-                    message="Failed to parse OPower bearer token",
-                )
+            assert (
+                usage_parser.opower_access_token
+            ), "Failed to parse OPower bearer token"
 
         session.headers.add(
             "authorization", f"Bearer {usage_parser.opower_access_token}"

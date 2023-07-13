@@ -38,6 +38,6 @@ class UtilityBase:
     ) -> None:
         """Login to the utility website and authorize opower.
 
-        Any failure to login should raise ClientResponseError with status 401 or 403.
+        :raises InvalidAuth: if login information is incorrect
         """
         raise NotImplementedError
