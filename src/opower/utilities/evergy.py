@@ -3,7 +3,7 @@
 from html.parser import HTMLParser
 
 import aiohttp
-from aiohttp.client_exceptions import ClientResponseError
+from ..exceptions import CannotConnect, InvalidAuth
 
 from .base import UtilityBase
 
@@ -57,10 +57,9 @@ class Evergy(UtilityBase):
             login_parser.feed(await resp.text())
 
             if login_parser.verification_token is None:
-                raise ClientResponseError(
+                raise CannotConnect(
                     resp.request_info,
                     resp.history,
-                    status=403,
                     message="Failed to parse login verification token",
                 )
 
@@ -77,10 +76,9 @@ class Evergy(UtilityBase):
         ) as resp:
             # The response status will be 302 regardless of success, the redirect will tell us if we're logged in
             if resp.headers["location"] != "/ma/my-account/account-summary":
-                raise ClientResponseError(
+                raise InvalidAuth(
                     resp.request_info,
                     resp.history,
-                    status=403,
                     message="Login failed",
                 )
 
@@ -92,10 +90,9 @@ class Evergy(UtilityBase):
             opower_access_token = resp.headers["jwt"]
 
             if opower_access_token is None:
-                raise ClientResponseError(
+                raise InvalidAuth(
                     resp.request_info,
                     resp.history,
-                    status=403,
                     message="Failed to parse OPower bearer token",
                 )
 
