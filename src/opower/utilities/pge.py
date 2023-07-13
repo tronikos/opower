@@ -3,8 +3,8 @@
 import re
 
 import aiohttp
-from aiohttp.client_exceptions import ClientResponseError
 
+from ..exceptions import InvalidAuth
 from .base import UtilityBase
 
 
@@ -56,12 +56,7 @@ class PGE(UtilityBase):
         ) as resp:
             result = await resp.json()
             if "errorMsg" in result:
-                raise ClientResponseError(
-                    resp.request_info,
-                    resp.history,
-                    status=403,
-                    message=result["errorMsg"],
-                )
+                raise InvalidAuth(result["errorMsg"])
 
         # 2nd way of login
         # async with session.get(
