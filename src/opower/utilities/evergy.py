@@ -11,9 +11,9 @@ from .base import UtilityBase
 class EvergyLoginParser(HTMLParser):
     """HTML parser to extract login verification token from Evergy Login page."""
 
-    def __init__(self, *, convert_charrefs: bool = True) -> None:
+    def __init__(self, *args, **kwargs) -> None:
         """Initialize."""
-        super().__init__(convert_charrefs=convert_charrefs)
+        super().__init__(*args, **kwargs)
         self.verification_token = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -65,9 +65,9 @@ class Evergy(UtilityBase):
                 )
 
         login_payload = {
-            "username": str(username),
-            "password": str(password),
-            "evrgaf": str(login_parser.verification_token),
+            "username": username,
+            "password": password,
+            "evrgaf": login_parser.verification_token,
         }
 
         async with session.post(
