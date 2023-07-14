@@ -11,8 +11,6 @@ etc.
 
 Supported utilities:
 
-- Pacific Gas & Electric (PG&E)
-- Puget Sound Energy (PSE)
 - Evergy
 - Exelon subsidiaries
   - Atlantic City Electric
@@ -21,6 +19,8 @@ Supported utilities:
   - Delmarva Power
   - PECO Energy Company (PECO)
   - Potomac Electric Power Company (Pepco)
+- Pacific Gas & Electric (PG&E)
+- Puget Sound Energy (PSE)
 
 ## Example
 
