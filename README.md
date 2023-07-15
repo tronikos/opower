@@ -7,7 +7,6 @@ To add support for a new utility that uses opower JSON API (you can tell if the 
 or [pse.py](https://github.com/tronikos/opower/blob/main/src/opower/utilities/pse.py)
 or [bge.py](https://github.com/tronikos/opower/blob/main/src/opower/utilities/bge.py)
 etc.
-.
 
 Supported utilities:
 
