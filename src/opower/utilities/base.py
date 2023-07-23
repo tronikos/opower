@@ -12,7 +12,8 @@ class UtilityBase:
     def __init_subclass__(cls, **kwargs) -> None:
         """Keep track of all subclass implementations."""
         super().__init_subclass__(**kwargs)
-        cls.subclasses.append(cls)
+        if not cls.__name__.startswith("_"):
+            cls.subclasses.append(cls)
 
     @staticmethod
     def name() -> str:
