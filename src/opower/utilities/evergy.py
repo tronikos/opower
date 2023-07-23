@@ -23,18 +23,13 @@ class EvergyLoginParser(HTMLParser):
             self.verification_token = token
 
 
-class Evergy(UtilityBase):
+class __EvergyBase(UtilityBase):
     """Evergy."""
 
     @staticmethod
     def name() -> str:
         """Distinct recognizable name of the utility."""
         return "Evergy"
-
-    @staticmethod
-    def subdomain() -> str:
-        """Return the opower.com subdomain for this utility."""
-        return "kcpk"
 
     @staticmethod
     def timezone() -> str:
@@ -90,3 +85,16 @@ class Evergy(UtilityBase):
             assert opower_access_token, "Failed to parse OPower bearer token"
 
         session.headers.add("authorization", f"{opower_access_token}")
+
+
+class EvergyKS(__EvergyBase):
+    @staticmethod
+    def subdomain() -> str:
+        """Return the opower.com subdomain for this utility."""
+        return "kcpk"
+    
+class EvergyMO(__EvergyBase):
+    @staticmethod
+    def subdomain() -> str:
+        """Return the opower.com subdomain for this utility."""
+        return "kcpl"
