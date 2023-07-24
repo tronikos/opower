@@ -26,6 +26,8 @@ class EvergyLoginParser(HTMLParser):
 class Evergy(UtilityBase):
     """Evergy."""
 
+    _subdomain = None
+
     @staticmethod
     def name() -> str:
         """Distinct recognizable name of the utility."""
@@ -34,7 +36,9 @@ class Evergy(UtilityBase):
     @staticmethod
     def subdomain() -> str:
         """Return the opower.com subdomain for this utility."""
-        return "kcpk"
+        if Evergy._subdomain:
+            return Evergy._subdomain
+        raise RuntimeError("async_login not called")
 
     @staticmethod
     def timezone() -> str:
@@ -90,3 +94,6 @@ class Evergy(UtilityBase):
             assert opower_access_token, "Failed to parse OPower bearer token"
 
         session.headers.add("authorization", f"{opower_access_token}")
+
+        # TODO: https://www.evergy.com/sc-api/account/getaccountpremiseselector
+        Evergy._subdomain = "kcpk"
