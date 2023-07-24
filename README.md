@@ -7,12 +7,9 @@ To add support for a new utility that uses opower JSON API (you can tell if the 
 or [pse.py](https://github.com/tronikos/opower/blob/main/src/opower/utilities/pse.py)
 or [bge.py](https://github.com/tronikos/opower/blob/main/src/opower/utilities/bge.py)
 etc.
-.
 
 Supported utilities:
 
-- Pacific Gas & Electric (PG&E)
-- Puget Sound Energy (PSE)
 - Evergy
 - Exelon subsidiaries
   - Atlantic City Electric
@@ -21,6 +18,8 @@ Supported utilities:
   - Delmarva Power
   - PECO Energy Company (PECO)
   - Potomac Electric Power Company (Pepco)
+- Pacific Gas & Electric (PG&E)
+- Puget Sound Energy (PSE)
 
 ## Example
 
