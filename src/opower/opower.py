@@ -117,16 +117,12 @@ def get_supported_utility_names() -> list[str]:
     return [utility.name() for utility in UtilityBase.subclasses]
 
 
-def _select_utility(name_or_subdomain: str) -> type[UtilityBase]:
-    """Return the utility with the given name or subdomain."""
+def _select_utility(name: str) -> type[UtilityBase]:
+    """Return the utility with the given name."""
     for utility in UtilityBase.subclasses:
-        if name_or_subdomain.lower() in [
-            utility.name().lower(),
-            utility.__name__.lower(),
-            utility.subdomain().lower(),
-        ]:
+        if name.lower() in [utility.name().lower(), utility.__name__.lower()]:
             return utility
-    raise ValueError(f"Utility {name_or_subdomain} not found")
+    raise ValueError(f"Utility {name} not found")
 
 
 class Opower:
