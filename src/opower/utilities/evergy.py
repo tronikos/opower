@@ -8,7 +8,6 @@ import aiohttp
 from ..exceptions import InvalidAuth
 from .base import UtilityBase
 
-
 _LOGGER = logging.getLogger(__file__)
 
 
@@ -40,9 +39,8 @@ class Evergy(UtilityBase):
     @staticmethod
     def subdomain() -> str:
         """Return the opower.com subdomain for this utility."""
-        if Evergy._subdomain:
-            return Evergy._subdomain
-        raise RuntimeError("async_login not called")
+        assert Evergy._subdomain, "async_login not called"
+        return Evergy._subdomain
 
     @staticmethod
     def timezone() -> str:
