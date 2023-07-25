@@ -1,11 +1,15 @@
 """Evergy."""
 
 from html.parser import HTMLParser
+import logging
 
 import aiohttp
 
 from ..exceptions import InvalidAuth
 from .base import UtilityBase
+
+
+_LOGGER = logging.getLogger(__file__)
 
 
 class EvergyLoginParser(HTMLParser):
@@ -95,5 +99,18 @@ class Evergy(UtilityBase):
 
         session.headers.add("authorization", f"{opower_access_token}")
 
-        # TODO: https://www.evergy.com/sc-api/account/getaccountpremiseselector
-        Evergy._subdomain = "kcpk"
+        async with session.get(
+            "https://www.evergy.com/sc-api/account/getaccountpremiseselector",
+            params={"isWidgetPage": "false", "hasNoSelector": "false"},
+        ) as resp:
+            # returned mimetype is nonstandard, so this avoids a ContentTypeError
+            data = await resp.json(content_type=None)
+            # shape is: [{"accountNumber": 123456789, "oPowerDomain": "kcpl.opower.com", ...}]
+            domain: str = data[0]["oPowerDomain"]
+            Evergy._subdomain = domain.split(".", 1)[0]
+            _LOGGER.debug("detected Evergy subdomain: %s", Evergy._subdomain)
+            if Evergy._subdomain not in {"kcpk", "kcpl"}:
+                _LOGGER.warn(
+                    "unexpected Evergy subdomain %s, continuing",
+                    Evergy._subdomain,
+                )
