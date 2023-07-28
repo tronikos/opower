@@ -113,8 +113,8 @@ def get_supported_utilities() -> list[type["UtilityBase"]]:
 
 
 def get_supported_utility_names() -> list[str]:
-    """Return a list of names of all supported utilities."""
-    return [utility.name() for utility in UtilityBase.subclasses]
+    """Return a sorted list of names of all supported utilities."""
+    return sorted([utility.name() for utility in UtilityBase.subclasses])
 
 
 def _select_utility(name: str) -> type[UtilityBase]:
