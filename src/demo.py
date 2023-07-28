@@ -34,6 +34,7 @@ async def _main():
         "--aggregate_type",
         help="How to aggregate historical data. Defaults to day",
         choices=list(AggregateType),
+        type=AggregateType,
         default=AggregateType.DAY,
     )
     parser.add_argument(
