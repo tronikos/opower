@@ -5,6 +5,7 @@ import re
 
 import aiohttp
 
+from ..const import USER_AGENT
 from ..exceptions import InvalidAuth
 from .base import UtilityBase
 
@@ -77,11 +78,15 @@ class PSE(UtilityBase):
     @staticmethod
     async def async_login(
         session: aiohttp.ClientSession, username: str, password: str
-    ) -> None:
+    ) -> str:
         """Login to the utility website and authorize opower."""
         login_parser = PSELoginParser()
 
-        async with session.get("https://www.pse.com/en/login") as resp:
+        async with session.get(
+            "https://www.pse.com/en/login",
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+        ) as resp:
             login_parser.feed(await resp.text())
 
             assert (
@@ -100,10 +105,14 @@ class PSE(UtilityBase):
                 "Password": password,
                 "RememberMe": "true",
             },
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
         )
 
         async with session.get(
-            "https://www.pse.com/api/AccountSelector/GetContractAccountJson"
+            "https://www.pse.com/api/AccountSelector/GetContractAccountJson",
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
         ) as resp:
             if len(await resp.text()) == 0:
                 raise InvalidAuth("Login failed")
@@ -111,7 +120,9 @@ class PSE(UtilityBase):
         usage_parser = PSEUsageParser()
 
         async with session.get(
-            "https://www.pse.com/en/account-and-billing/my-usage/view-my-usage"
+            "https://www.pse.com/en/account-and-billing/my-usage/view-my-usage",
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
         ) as resp:
             usage_parser.feed(await resp.text())
 
@@ -119,6 +130,4 @@ class PSE(UtilityBase):
                 usage_parser.opower_access_token
             ), "Failed to parse OPower bearer token"
 
-        session.headers.add(
-            "authorization", f"Bearer {usage_parser.opower_access_token}"
-        )
+        return usage_parser.opower_access_token

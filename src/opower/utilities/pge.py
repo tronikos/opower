@@ -4,6 +4,7 @@ import re
 
 import aiohttp
 
+from ..const import USER_AGENT
 from ..exceptions import InvalidAuth
 from .base import UtilityBase
 
@@ -53,6 +54,8 @@ class PGE(UtilityBase):
                 "password": password,
                 "appName": "CustomerSSO",
             },
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
         ) as resp:
             result = await resp.json()
             if "errorMsg" in result:
@@ -64,7 +67,9 @@ class PGE(UtilityBase):
         #     headers={
         #         "Authorization": "Basic "
         #         + base64.b64encode(f"{username}:{password}".encode()).decode(),
+        #         "User-Agent": USER_AGENT,
         #     },
+        #     raise_for_status=True,
         # ) as resp:
         #     await resp.json()
 
@@ -75,6 +80,8 @@ class PGE(UtilityBase):
         # async with session.get(
         #     "https://apigprd.cloud.pge.com/myaccount/v1/cocaccount/secure/account/retrieveMyEnergyAccounts",
         #     params=(("userId", username),),
+        #     headers={"User-Agent": USER_AGENT},
+        #     raise_for_status=True,
         # ) as resp:
         #     energy_accounts = await resp.json()
 
@@ -86,7 +93,9 @@ class PGE(UtilityBase):
         #     break
 
         # async with session.get(
-        #     f"https://apigprd.cloud.pge.com/myaccount/v1/cocaccount/secure/retrieveEnergyManagementInfo/{accountNumber}/myusage"
+        #     f"https://apigprd.cloud.pge.com/myaccount/v1/cocaccount/secure/retrieveEnergyManagementInfo/{accountNumber}/myusage",
+        #     headers={"User-Agent": USER_AGENT},
+        #     raise_for_status=True,
         # ) as resp:
         #     result = await resp.json()
 
@@ -114,11 +123,21 @@ class PGE(UtilityBase):
         assert set(hidden_inputs.keys()) == {"RelayState", "SAMLResponse"}
 
         # Pass them to https://sso2.opower.com/sp/ACS.saml2 to get opentoken.
-        async with session.post(action_url, data=hidden_inputs) as resp:
+        async with session.post(
+            action_url,
+            data=hidden_inputs,
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+        ) as resp:
             result = await resp.text()
         action_url, hidden_inputs = _get_form_action_url_and_hidden_inputs(result)
         assert set(hidden_inputs.keys()) == {"opentoken"}
 
         # Pass it back to the utility website.
-        async with session.post(action_url, data=hidden_inputs) as resp:
+        async with session.post(
+            action_url,
+            data=hidden_inputs,
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+        ) as resp:
             pass

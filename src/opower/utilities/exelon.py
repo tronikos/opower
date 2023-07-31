@@ -5,6 +5,7 @@ import re
 
 import aiohttp
 
+from ..const import USER_AGENT
 from ..exceptions import InvalidAuth
 
 
@@ -28,7 +29,7 @@ class Exelon:
     @classmethod
     async def async_login(
         cls, session: aiohttp.ClientSession, username: str, password: str
-    ) -> None:
+    ) -> str:
         """Login to the utility website and authorize opower."""
         async with session.get(
             "https://" + cls.login_domain() + "/Pages/Login.aspx?/login"
@@ -57,7 +58,9 @@ class Exelon:
             },
             headers={
                 "X-CSRF-TOKEN": settings["csrf"],
+                "User-Agent": USER_AGENT,
             },
+            raise_for_status=True,
         ) as resp:
             result = json.loads(await resp.text())
 
@@ -84,16 +87,18 @@ class Exelon:
                     }
                 ),
             },
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
         ) as resp:
-            result = await resp.text()
+            result = await resp.text(encoding = "utf-8")
 
         async with session.post(
             "https://"
             + cls.login_domain()
             + "/api/Services/OpowerService.svc/GetOpowerToken",
             json={},
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
         ) as resp:
             result = await resp.json()
-        access_token = result["access_token"]
-
-        session.headers.add("authorization", f"Bearer {access_token}")
+        return result["access_token"]

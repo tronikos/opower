@@ -35,7 +35,7 @@ class UtilityBase:
     @staticmethod
     async def async_login(
         session: aiohttp.ClientSession, username: str, password: str
-    ) -> None:
+    ) -> str | None:
         """Login to the utility website and authorize opower.
 
         :raises InvalidAuth: if login information is incorrect

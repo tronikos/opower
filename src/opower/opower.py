@@ -11,8 +11,8 @@ from urllib.parse import urlencode
 import aiohttp
 from aiohttp.client_exceptions import ClientResponseError
 import arrow
-from multidict import CIMultiDict
 
+from .const import USER_AGENT
 from .exceptions import CannotConnect, InvalidAuth
 from .utilities import UtilityBase
 
@@ -133,11 +133,10 @@ class Opower:
     ) -> None:
         """Initialize."""
         self.session = session
-        self.session._default_headers = CIMultiDict({"User-Agent": "Mozilla/5.0"})
-        self.session._raise_for_status = True
         self.utility: type[UtilityBase] = _select_utility(utility)
         self.username = username
         self.password = password
+        self.access_token = None
         self.customers = []
 
     async def async_login(self) -> None:
@@ -147,7 +146,9 @@ class Opower:
         :raises CannotConnect: if we receive any HTTP error
         """
         try:
-            await self.utility.async_login(self.session, self.username, self.password)
+            self.access_token = await self.utility.async_login(
+                self.session, self.username, self.password
+            )
         except ClientResponseError as err:
             if err.status in (401, 403):
                 raise InvalidAuth(err)
@@ -171,7 +172,9 @@ class Opower:
                 "/combined-forecast"
             )
             _LOGGER.debug("Fetching: %s", url)
-            async with self.session.get(url) as resp:
+            async with self.session.get(
+                url, headers=self._get_headers(), raise_for_status=True
+            ) as resp:
                 result = await resp.json()
                 if DEBUG_LOG_RESPONSE:
                     _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
@@ -212,7 +215,9 @@ class Opower:
                 "/customers?offset=0&batchSize=100&addressFilter="
             )
             _LOGGER.debug("Fetching: %s", url)
-            async with self.session.get(url) as resp:
+            async with self.session.get(
+                url, headers=self._get_headers(), raise_for_status=True
+            ) as resp:
                 result = await resp.json()
                 if DEBUG_LOG_RESPONSE:
                     _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
@@ -351,9 +356,10 @@ class Opower:
     ) -> list[Any]:
         convert_to_date = "/cws/utilities/" in url
         params = {"aggregateType": aggregate_type.value}
-        headers = {
-            "Opower-Selected-Entities": f'["urn:opower:customer:uuid:{customer.uuid}"]'
-        }
+        headers = self._get_headers()
+        headers[
+            "Opower-Selected-Entities"
+        ] = f'["urn:opower:customer:uuid:{customer.uuid}"]'
         if start_date:
             params["startDate"] = (
                 start_date.date() if convert_to_date else start_date
@@ -364,7 +370,9 @@ class Opower:
             ).isoformat()
         _LOGGER.debug("Fetching: %s?%s", url, urlencode(params))
         try:
-            async with self.session.get(url, params=params, headers=headers) as resp:
+            async with self.session.get(
+                url, params=params, headers=headers, raise_for_status=True
+            ) as resp:
                 result = await resp.json()
                 if DEBUG_LOG_RESPONSE:
                     _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
@@ -375,3 +383,9 @@ class Opower:
             if err.status == 500 and aggregate_type == AggregateType.BILL:
                 return []
             raise err
+
+    def _get_headers(self):
+        headers = {"User-Agent": USER_AGENT}
+        if self.access_token:
+            headers["authorization"] = f"Bearer {self.access_token}"
+        return headers

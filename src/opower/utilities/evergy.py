@@ -5,6 +5,7 @@ import logging
 
 import aiohttp
 
+from ..const import USER_AGENT
 from ..exceptions import InvalidAuth
 from .base import UtilityBase
 
@@ -50,16 +51,15 @@ class Evergy(UtilityBase):
     @staticmethod
     async def async_login(
         session: aiohttp.ClientSession, username: str, password: str
-    ) -> None:
+    ) -> str:
         """Login to the utility website and authorize opower."""
-        # Evergy does not like the default user agent and will block the page. We need to make it more believable
-        session.headers[
-            "User-Agent"
-        ] = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0"
-
         login_parser = EvergyLoginParser()
 
-        async with session.get("https://www.evergy.com/log-in") as resp:
+        async with session.get(
+            "https://www.evergy.com/log-in",
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+        ) as resp:
             login_parser.feed(await resp.text())
 
             assert (
@@ -75,6 +75,7 @@ class Evergy(UtilityBase):
         async with session.post(
             "https://www.evergy.com/log-in",
             data=login_payload,
+            headers={"User-Agent": USER_AGENT},
             allow_redirects=False,
             raise_for_status=False,
         ) as resp:
@@ -89,17 +90,19 @@ class Evergy(UtilityBase):
         opower_access_token = None
 
         async with session.get(
-            "https://www.evergy.com/api/sso/jwt", raise_for_status=False
+            "https://www.evergy.com/api/sso/jwt",
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=False,
         ) as resp:
             opower_access_token = resp.headers["jwt"]
 
             assert opower_access_token, "Failed to parse OPower bearer token"
 
-        session.headers.add("authorization", f"{opower_access_token}")
-
         async with session.get(
             "https://www.evergy.com/sc-api/account/getaccountpremiseselector",
             params={"isWidgetPage": "false", "hasNoSelector": "false"},
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
         ) as resp:
             # returned mimetype is nonstandard, so this avoids a ContentTypeError
             data = await resp.json(content_type=None)
@@ -112,3 +115,5 @@ class Evergy(UtilityBase):
                     "unexpected Evergy subdomain %s, continuing",
                     Evergy._subdomain,
                 )
+
+        return opower_access_token
