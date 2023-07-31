@@ -132,6 +132,8 @@ class Opower:
         self, session: aiohttp.ClientSession, utility: str, username: str, password: str
     ) -> None:
         """Initialize."""
+        # Note: Do not modify default headers since Home Assistant that uses this library needs to use
+        # a default session for all integrations. Instead specify the headers for each request.
         self.session = session
         self.utility: type[UtilityBase] = _select_utility(utility)
         self.username = username

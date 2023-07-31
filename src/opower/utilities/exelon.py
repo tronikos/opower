@@ -32,7 +32,9 @@ class Exelon:
     ) -> str:
         """Login to the utility website and authorize opower."""
         async with session.get(
-            "https://" + cls.login_domain() + "/Pages/Login.aspx?/login"
+            "https://" + cls.login_domain() + "/Pages/Login.aspx?/login",
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
         ) as resp:
             result = await resp.text()
         # transId = "StateProperties=..."
@@ -90,7 +92,7 @@ class Exelon:
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         ) as resp:
-            result = await resp.text(encoding = "utf-8")
+            result = await resp.text(encoding="utf-8")
 
         async with session.post(
             "https://"
