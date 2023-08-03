@@ -94,7 +94,7 @@ class Evergy(UtilityBase):
             headers={"User-Agent": USER_AGENT},
             raise_for_status=False,
         ) as resp:
-            opower_access_token = resp.headers["jwt"]
+            opower_access_token = resp.headers["jwt"].removeprefix('Bearer ')
 
             assert opower_access_token, "Failed to parse OPower bearer token"
 
