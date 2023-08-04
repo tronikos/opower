@@ -67,6 +67,8 @@ async def _main():
     async with aiohttp.ClientSession() as session:
         opower = Opower(session, args.utility, username, password)
         await opower.async_login()
+        # Re-login to make sure code handles already logged in sessions.
+        await opower.async_login()
         forecasts = await opower.async_get_forecast()
         for forecast in forecasts:
             print("\nData for meter:", forecast.account.meter_type)

@@ -37,62 +37,65 @@ class Exelon:
             raise_for_status=True,
         ) as resp:
             result = await resp.text()
-        # transId = "StateProperties=..."
-        # policy = "B2C_1A_SignIn"
-        # tenant = "/euazurebge.onmicrosoft.com/B2C_1A_SignIn"
-        # api = "CombinedSigninAndSignup"
-        settings = json.loads(re.search(r"var SETTINGS = ({.*});", result).group(1))
-        login_post_domain = resp.real_url.host
 
-        async with session.post(
-            "https://"
-            + login_post_domain
-            + settings["hosts"]["tenant"]
-            + "/SelfAsserted",
-            params={
-                "tx": settings["transId"],
-                "p": settings["hosts"]["policy"],
-            },
-            data={
-                "request_type": "RESPONSE",
-                "signInName": username,
-                "password": password,
-            },
-            headers={
-                "X-CSRF-TOKEN": settings["csrf"],
-                "User-Agent": USER_AGENT,
-            },
-            raise_for_status=True,
-        ) as resp:
-            result = json.loads(await resp.text())
+        # If we are already logged in, we get redirected to /accounts/dashboard, so skip the login
+        if not resp.request_info.url.path.endswith("dashboard"):
+            # transId = "StateProperties=..."
+            # policy = "B2C_1A_SignIn"
+            # tenant = "/euazurebge.onmicrosoft.com/B2C_1A_SignIn"
+            # api = "CombinedSigninAndSignup"
+            settings = json.loads(re.search(r"var SETTINGS = ({.*});", result).group(1))
+            login_post_domain = resp.real_url.host
 
-        if result["status"] != "200":
-            raise InvalidAuth(result["message"])
+            async with session.post(
+                "https://"
+                + login_post_domain
+                + settings["hosts"]["tenant"]
+                + "/SelfAsserted",
+                params={
+                    "tx": settings["transId"],
+                    "p": settings["hosts"]["policy"],
+                },
+                data={
+                    "request_type": "RESPONSE",
+                    "signInName": username,
+                    "password": password,
+                },
+                headers={
+                    "X-CSRF-TOKEN": settings["csrf"],
+                    "User-Agent": USER_AGENT,
+                },
+                raise_for_status=True,
+            ) as resp:
+                result = json.loads(await resp.text())
 
-        async with session.get(
-            "https://"
-            + login_post_domain
-            + settings["hosts"]["tenant"]
-            + "/api/"
-            + settings["api"]
-            + "/confirmed",
-            params={
-                "rememberMe": settings["config"]["enableRememberMe"],
-                "csrf_token": settings["csrf"],
-                "tx": settings["transId"],
-                "p": settings["hosts"]["policy"],
-                "diags": json.dumps(
-                    {
-                        "pageViewId": settings["pageViewId"],
-                        "pageId": settings["api"],
-                        "trace": [],
-                    }
-                ),
-            },
-            headers={"User-Agent": USER_AGENT},
-            raise_for_status=True,
-        ) as resp:
-            result = await resp.text(encoding="utf-8")
+            if result["status"] != "200":
+                raise InvalidAuth(result["message"])
+
+            async with session.get(
+                "https://"
+                + login_post_domain
+                + settings["hosts"]["tenant"]
+                + "/api/"
+                + settings["api"]
+                + "/confirmed",
+                params={
+                    "rememberMe": settings["config"]["enableRememberMe"],
+                    "csrf_token": settings["csrf"],
+                    "tx": settings["transId"],
+                    "p": settings["hosts"]["policy"],
+                    "diags": json.dumps(
+                        {
+                            "pageViewId": settings["pageViewId"],
+                            "pageId": settings["api"],
+                            "trace": [],
+                        }
+                    ),
+                },
+                headers={"User-Agent": USER_AGENT},
+                raise_for_status=True,
+            ) as resp:
+                result = await resp.text(encoding="utf-8")
 
         async with session.post(
             "https://"
