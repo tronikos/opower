@@ -194,7 +194,6 @@ class Opower:
                 "/combined-forecast"
             )
             _LOGGER.debug("Fetching: %s", url)
-            # TODO: handle 404
             try:
                 async with self.session.get(
                     url, headers=self._get_headers(), raise_for_status=True
