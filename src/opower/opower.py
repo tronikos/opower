@@ -36,6 +36,7 @@ class UnitOfMeasure(Enum):
 
     KWH = "KWH"
     THERM = "THERM"
+    CCF = "CCF"
 
     def __str__(self):
         """Return the value of the enum."""
