@@ -12,13 +12,15 @@ from opower import AggregateType, Opower, get_supported_utilities
 
 
 async def _main():
+    supported_utilities = [
+        utility.__name__.lower() for utility in get_supported_utilities()
+    ]
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--utility",
-        help="Utility (subdomain of opower.com). Defaults to pge",
-        choices=[utility.__name__.lower() for utility in get_supported_utilities()],
+        help="Utility. If not provided, you will be asked for it",
+        choices=supported_utilities,
         type=str.lower,
-        default="pge",
     )
     parser.add_argument(
         "--username",
@@ -61,11 +63,12 @@ async def _main():
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
 
+    utility = args.utility or input(f"Utility, one of {supported_utilities}: ")
     username = args.username or input("Username: ")
     password = args.password or getpass("Password: ")
 
     async with aiohttp.ClientSession() as session:
-        opower = Opower(session, args.utility, username, password)
+        opower = Opower(session, utility, username, password)
         await opower.async_login()
         # Re-login to make sure code handles already logged in sessions.
         await opower.async_login()
