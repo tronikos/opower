@@ -13,7 +13,7 @@ class AtlanticCityElectric(Exelon, UtilityBase):
         return "Atlantic City Electric"
 
     @staticmethod
-    def subdomain() -> str:
+    async def subdomain() -> str:
         """Return the opower.com subdomain for this utility."""
         return "ace"
 

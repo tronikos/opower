@@ -13,7 +13,7 @@ class BGE(Exelon, UtilityBase):
         return "Baltimore Gas and Electric (BGE)"
 
     @staticmethod
-    def subdomain() -> str:
+    async def subdomain() -> str:
         """Return the opower.com subdomain for this utility."""
         return "bgec"
 

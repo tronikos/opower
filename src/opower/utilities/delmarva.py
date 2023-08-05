@@ -13,7 +13,7 @@ class Delmarva(Exelon, UtilityBase):
         return "Delmarva Power"
 
     @staticmethod
-    def subdomain() -> str:
+    async def subdomain() -> str:
         """Return the opower.com subdomain for this utility."""
         return "dpl"
 

@@ -32,7 +32,7 @@ class PGE(UtilityBase):
         return "Pacific Gas and Electric Company (PG&E)"
 
     @staticmethod
-    def subdomain() -> str:
+    async def subdomain() -> str:
         """Return the opower.com subdomain for this utility."""
         return "pge"
 

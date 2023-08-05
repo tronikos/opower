@@ -66,7 +66,7 @@ class PSE(UtilityBase):
         return "Puget Sound Energy (PSE)"
 
     @staticmethod
-    def subdomain() -> str:
+    async def subdomain() -> str:
         """Return the opower.com subdomain for this utility."""
         return "pse"
 

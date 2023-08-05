@@ -186,9 +186,9 @@ class Opower:
             customer_uuid = customer["uuid"]
             url = (
                 "https://"
-                f"{self.utility.subdomain()}"
+                f"{await self.utility.subdomain()}"
                 ".opower.com/ei/edge/apis/bill-forecast-cws-v1/cws/"
-                f"{self.utility.subdomain()}"
+                f"{await self.utility.subdomain()}"
                 "/customers/"
                 f"{customer_uuid}"
                 "/combined-forecast"
@@ -236,9 +236,9 @@ class Opower:
         if not self.customers:
             url = (
                 "https://"
-                f"{self.utility.subdomain()}"
+                f"{await self.utility.subdomain()}"
                 ".opower.com/ei/edge/apis/multi-account-v1/cws/"
-                f"{self.utility.subdomain()}"
+                f"{await self.utility.subdomain()}"
                 "/customers?offset=0&batchSize=100&addressFilter="
             )
             _LOGGER.debug("Fetching: %s", url)
@@ -267,7 +267,7 @@ class Opower:
         """
         url = (
             "https://"
-            f"{self.utility.subdomain()}"
+            f"{await self.utility.subdomain()}"
             ".opower.com/ei/edge/apis/DataBrowser-v1/cws/cost/utilityAccount/"
             f"{account.uuid}"
         )
@@ -306,9 +306,9 @@ class Opower:
         """
         url = (
             "https://"
-            f"{self.utility.subdomain()}"
+            f"{await self.utility.subdomain()}"
             ".opower.com/ei/edge/apis/DataBrowser-v1/cws/utilities/"
-            f"{self.utility.subdomain()}"
+            f"{await self.utility.subdomain()}"
             "/utilityAccounts/"
             f"{account.uuid}"
             "/reads"

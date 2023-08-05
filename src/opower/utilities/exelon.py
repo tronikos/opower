@@ -2,15 +2,22 @@
 
 import json
 import re
+import logging
 
 import aiohttp
 
 from ..const import USER_AGENT
 from ..exceptions import InvalidAuth
 
+_LOGGER = logging.getLogger(__file__)
+
 
 class Exelon:
     """Base class for Exelon subsidiaries."""
+
+    _access_token = None
+    _subdomain = None
+    _session = None
 
     # Can find the opower.com subdomain using the GetConfiguration endpoint
     # e.g. https://secure.bge.com/api/Services/MyAccountService.svc/GetConfiguration
@@ -25,11 +32,63 @@ class Exelon:
     def login_domain() -> str:
         """Return the domain that hosts the login page."""
         raise NotImplementedError
+    
+    @classmethod
+    async def subdomain(cls) -> str:
+        """Return the opower.com subdomain for this utility."""
+        if Exelon._subdomain is not None:
+            return Exelon._subdomain
+        else:
+            # Get the potential url subdomains, they can vary based on account type/location
+            async with cls._session.get(
+                "https://" + cls.login_domain() + "/api/Services/MyAccountService.svc/GetConfiguration",
+                headers={"User-Agent": USER_AGENT},
+                raise_for_status=True,
+            ) as resp:
+                data = await resp.json()
+
+                opCo = data["opCo"].lower()
+                oPowerURLBase = data["oPowerURLBase"].split(".", 1)[0].replace("https://", "")
+                oPowerURLBaseJurisdiction = data["oPowerURLBaseJurisdiction"].split(".", 1)[0].replace("https://", "")
+                _LOGGER.debug("found exelon opCo: %s", opCo)
+                _LOGGER.debug("found exelon oPowerURLBase: %s", oPowerURLBase)
+                _LOGGER.debug("found exelon oPowerURLBaseJurisdiction: %s", oPowerURLBaseJurisdiction)
+
+            # Get the account type & state
+            async with cls._session.get(
+                "https://" + cls.login_domain() + "/.euapi/mobile/custom/auth/accounts",
+                headers={"User-Agent": USER_AGENT, "authorization": f"Bearer {cls._access_token}"},
+                raise_for_status=True,
+            ) as resp:
+                # returned mimetype is nonstandard, so this avoids a ContentTypeError
+                response = await resp.json(content_type=None)
+
+                #Only include active accounts (after moving, old accounts have status: "Inactive")
+                #NOTE: this logic currently assumes 1 active address per account, if multiple accounts found
+                #      we default to taking the first in the list. Future enhancement is to support
+                #      multiple accounts (which could result in different subdomain for each)
+                active_accounts = [account for account in response['data'] if account['status'] == 'Active']
+                isResidential = active_accounts[0]["isResidential"]
+                state = active_accounts[0]['PremiseInfo'][0]['mainAddress']['townDetail']['stateOrProvince']
+                _LOGGER.debug("found exelon account isResidential: %s", isResidential)
+                _LOGGER.debug("found exelon account state: %s", state)
+
+            # Determine subdomain to use by matching logic found in https://cls.login_domain()/dist/app.js
+            Exelon._subdomain = oPowerURLBase
+            if('dpl' != opCo and
+            'pepco' != opCo or
+            not isResidential or
+            'MD' != state):
+                Exelon._subdomain = oPowerURLBaseJurisdiction
+
+            _LOGGER.debug("detected exelon subdomain to be: %s", Exelon._subdomain)
+            return Exelon._subdomain
 
     @classmethod
     async def async_login(
         cls, session: aiohttp.ClientSession, username: str, password: str
     ) -> str:
+        cls._session = session
         """Login to the utility website and authorize opower."""
         async with session.get(
             "https://" + cls.login_domain() + "/Pages/Login.aspx?/login",
@@ -106,4 +165,5 @@ class Exelon:
             raise_for_status=True,
         ) as resp:
             result = await resp.json()
+            cls._access_token = result["access_token"]
         return result["access_token"]

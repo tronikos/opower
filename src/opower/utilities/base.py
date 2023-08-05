@@ -20,7 +20,7 @@ class UtilityBase:
         raise NotImplementedError
 
     @staticmethod
-    def subdomain() -> str:
+    async def subdomain() -> str:
         """Return the opower.com subdomain for this utility."""
         raise NotImplementedError
 

@@ -13,7 +13,7 @@ class PECO(Exelon, UtilityBase):
         return "PECO Energy Company (PECO)"
 
     @staticmethod
-    def subdomain() -> str:
+    async def subdomain() -> str:
         """Return the opower.com subdomain for this utility."""
         return "peco"
 
