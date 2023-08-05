@@ -72,12 +72,13 @@ async def _main():
         await opower.async_login()
         # Re-login to make sure code handles already logged in sessions.
         await opower.async_login()
-        forecasts = await opower.async_get_forecast()
-        for forecast in forecasts:
-            print("\nData for meter:", forecast.account.meter_type)
+        for forecast in await opower.async_get_forecast():
             print("\nCurrent bill forecast:", forecast)
+        for account in await opower.async_get_accounts():
             print(
-                "\nGetting historical data: aggregate_type=",
+                "\nGetting historical data: meter=",
+                account.meter_type,
+                "aggregate_type=",
                 args.aggregate_type,
                 "start_date=",
                 args.start_date,
@@ -86,7 +87,7 @@ async def _main():
             )
             if args.usage_only:
                 usage_data = await opower.async_get_usage_reads(
-                    forecast.account,
+                    account,
                     args.aggregate_type,
                     args.start_date,
                     args.end_date,
@@ -113,7 +114,7 @@ async def _main():
                     )
             else:
                 cost_data = await opower.async_get_cost_reads(
-                    forecast.account,
+                    account,
                     args.aggregate_type,
                     args.start_date,
                     args.end_date,

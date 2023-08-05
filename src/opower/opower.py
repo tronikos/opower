@@ -158,6 +158,24 @@ class Opower:
             else:
                 raise CannotConnect(err)
 
+    async def async_get_accounts(self) -> list[Account]:
+        """Get a list of accounts for the signed in user.
+
+        Typically one account for electricity and one for gas.
+        """
+        accounts = []
+        for customer in await self._async_get_customers():
+            for account in customer["utilityAccounts"]:
+                accounts.append(
+                    Account(
+                        customer=Customer(uuid=customer["uuid"]),
+                        uuid=account["uuid"],
+                        utility_account_id=account["preferredUtilityAccountId"],
+                        meter_type=MeterType(account["meterType"]),
+                    )
+                )
+        return accounts
+
     async def async_get_forecast(self) -> list[Forecast]:
         """Get current and forecasted usage and cost for the current monthly bill.
 
@@ -165,27 +183,34 @@ class Opower:
         """
         forecasts = []
         for customer in await self._async_get_customers():
+            customer_uuid = customer["uuid"]
             url = (
                 "https://"
                 f"{self.utility.subdomain()}"
                 ".opower.com/ei/edge/apis/bill-forecast-cws-v1/cws/"
                 f"{self.utility.subdomain()}"
                 "/customers/"
-                f"{customer.uuid}"
+                f"{customer_uuid}"
                 "/combined-forecast"
             )
             _LOGGER.debug("Fetching: %s", url)
-            async with self.session.get(
-                url, headers=self._get_headers(), raise_for_status=True
-            ) as resp:
-                result = await resp.json()
-                if DEBUG_LOG_RESPONSE:
-                    _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
+            # TODO: handle 404
+            try:
+                async with self.session.get(
+                    url, headers=self._get_headers(), raise_for_status=True
+                ) as resp:
+                    result = await resp.json()
+                    if DEBUG_LOG_RESPONSE:
+                        _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
+            except ClientResponseError as err:
+                # Some utilities don't provide forecast and return 404
+                if err.status == 404:
+                    return []
             for forecast in result["accountForecasts"]:
                 forecasts.append(
                     Forecast(
                         account=Account(
-                            customer=customer,
+                            customer=Customer(uuid=customer["uuid"]),
                             uuid=forecast["accountUuids"][0],
                             utility_account_id=str(
                                 forecast["preferredUtilityAccountId"]
@@ -206,7 +231,7 @@ class Opower:
                 )
         return forecasts
 
-    async def _async_get_customers(self) -> list[Customer]:
+    async def _async_get_customers(self) -> list[Any]:
         """Get customers associated to the user."""
         # Cache the customers
         if not self.customers:
@@ -225,7 +250,7 @@ class Opower:
                 if DEBUG_LOG_RESPONSE:
                     _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
             for customer in result["customers"]:
-                self.customers.append(Customer(uuid=customer["uuid"]))
+                self.customers.append(customer)
         assert self.customers
         return self.customers
 
