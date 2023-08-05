@@ -25,7 +25,7 @@ etc.
 
 Name the file after the utility website, e.g. pge.py for pge.com.
 
-Since this library is used by Home Assistant, see https://www.home-assistant.io/integrations/opower/, per https://github.com/home-assistant/architecture/blob/master/adr/0004-webscraping.md we cannot have a dependency on a headless browser and we can only parse HTML during login.
+Since this library is used by Home Assistant, see <https://www.home-assistant.io/integrations/opower/>, per <https://github.com/home-assistant/architecture/blob/master/adr/0004-webscraping.md> we cannot have a dependency on a headless browser and we can only parse HTML during login.
 
 > An exception is made for the authentication phase. An integration is allowed to extract fields from forms. To make it more robust, data should not be gathered by scraping individual fields but instead scrape all fields at once.
 
