@@ -3,7 +3,7 @@
 import json
 import logging
 import re
-from typing import Optional
+from typing import Any, Optional
 
 import aiohttp
 
@@ -38,6 +38,50 @@ class Exelon:
         return Exelon._subdomain
 
     @classmethod
+    async def async_account(
+        cls,
+        session: aiohttp.ClientSession,
+        bearer_token: str,
+    ) -> Any:
+        """Return the accounts for the current session."""
+        # this path comes from GetConfiguration, unsure if its different
+        # per utility, if so, would need to add it to the subtypes:
+        # "euApiRoutePrefix": "/mobile/custom",
+        eu_api_route_prefix = "/mobile/custom"
+        # "euApiUrl": "/.euapi",
+        eu_api_url = "/.euapi"
+        async with session.get(
+            "https://"
+            + cls.login_domain()
+            + eu_api_url
+            + eu_api_route_prefix
+            + "/auth/accounts",
+            headers={
+                "User-Agent": USER_AGENT,
+                "Authorization": "Bearer " + bearer_token,
+            },
+            raise_for_status=True,
+        ) as resp:
+            # this has the wrong mime type for some reason
+            result = await resp.json(content_type="text/html")
+
+        if result["success"] is not True:
+            raise InvalidAuth("Unable to list accounts")
+
+        # Only include active accounts (after moving, old accounts have status: "Inactive")
+        # NOTE: this logic currently assumes 1 active address per account, if multiple accounts found
+        #      we default to taking the first in the list. Future enhancement is to support
+        #      multiple accounts (which could result in different subdomain for each)
+        active_accounts = [
+            account for account in result["data"] if account["status"] == "Active"
+        ]
+
+        if len(active_accounts) == 0:
+            raise InvalidAuth("No active accounts found")
+
+        return active_accounts[0]
+
+    @classmethod
     async def async_login(
         cls,
         session: aiohttp.ClientSession,
@@ -51,10 +95,10 @@ class Exelon:
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         ) as resp:
-            result = await resp.text()
+            result = await resp.text(encoding="utf-8")
 
-        # If we are already logged in, we get redirected to /accounts/dashboard, so skip the login
-        if not resp.request_info.url.path.endswith("dashboard"):
+        # if we don't go to /accounts/dashboard, we need to perform some authorization steps
+        if resp.request_info.url.path.endswith("/authorize"):
             # transId = "StateProperties=..."
             # policy = "B2C_1A_SignIn"
             # tenant = "/euazurebge.onmicrosoft.com/B2C_1A_SignIn"
@@ -82,7 +126,7 @@ class Exelon:
                 },
                 raise_for_status=True,
             ) as resp:
-                result = json.loads(await resp.text())
+                result = json.loads(await resp.text(encoding="utf-8"))
 
             if result["status"] != "200":
                 raise InvalidAuth(result["message"])
@@ -112,6 +156,38 @@ class Exelon:
             ) as resp:
                 result = await resp.text(encoding="utf-8")
 
+            if resp.request_info.url.path.endswith("/accounts/login/select-account"):
+                # we probably need to select an account as we didn't automatically go to the dashboard
+                async with session.get(
+                    "https://"
+                    + cls.login_domain()
+                    + "/api/Services/MyAccountService.svc/GetSession",
+                    headers={"User-Agent": USER_AGENT},
+                    raise_for_status=True,
+                ) as resp:
+                    result = await resp.json()
+
+                # confirm no account number is set
+                if result["accountNumber"] is None:
+                    bearer_token = result["token"]
+                    # if we don't yet have an account, look one up and set it
+                    account = await cls.async_account(session, bearer_token)
+
+                    # set the first active one
+                    account_number = account["accountNumber"]
+
+                    async with session.post(
+                        "https://"
+                        + cls.login_domain()
+                        + "/api/Services/AccountList.svc/ViewAccount",
+                        json={
+                            "accountNumber": account_number,
+                        },
+                        headers={"User-Agent": USER_AGENT},
+                        raise_for_status=True,
+                    ) as resp:
+                        result = await resp.text(encoding="utf-8")
+
         async with session.post(
             "https://"
             + cls.login_domain()
@@ -125,32 +201,14 @@ class Exelon:
         # If pepco or delmarva, determine if we should use secondary subdomain
         if cls.login_domain() in ["secure.pepco.com", "secure.delmarva.com"]:
             # Get the account type & state
-            async with session.get(
-                "https://" + cls.login_domain() + "/.euapi/mobile/custom/auth/accounts",
-                headers={
-                    "User-Agent": USER_AGENT,
-                    "authorization": f"Bearer {result['access_token']}",
-                },
-                raise_for_status=True,
-            ) as resp:
-                # returned mimetype is nonstandard, so this avoids a ContentTypeError
-                response = await resp.json(content_type=None)
+            account = await cls.async_account(session, result["access_token"])
 
-                # Only include active accounts (after moving, old accounts have status: "Inactive")
-                # NOTE: this logic currently assumes 1 active address per account, if multiple accounts found
-                #      we default to taking the first in the list. Future enhancement is to support
-                #      multiple accounts (which could result in different subdomain for each)
-                active_accounts = [
-                    account
-                    for account in response["data"]
-                    if account["status"] == "Active"
-                ]
-                isResidential = active_accounts[0]["isResidential"]
-                state = active_accounts[0]["PremiseInfo"][0]["mainAddress"][
-                    "townDetail"
-                ]["stateOrProvince"]
-                _LOGGER.debug("found exelon account isResidential: %s", isResidential)
-                _LOGGER.debug("found exelon account state: %s", state)
+            isResidential = account["isResidential"]
+            state = account["PremiseInfo"][0]["mainAddress"]["townDetail"][
+                "stateOrProvince"
+            ]
+            _LOGGER.debug("found exelon account isResidential: %s", isResidential)
+            _LOGGER.debug("found exelon account state: %s", state)
 
             # Determine subdomain to use by matching logic found in https://cls.login_domain()/dist/app.js
             Exelon._subdomain = cls.primary_subdomain()
