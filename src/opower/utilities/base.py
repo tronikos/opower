@@ -1,6 +1,8 @@
 """Base class that each utility needs to extend."""
 
 
+from typing import Optional
+
 import aiohttp
 
 
@@ -33,8 +35,16 @@ class UtilityBase:
         raise NotImplementedError
 
     @staticmethod
+    def accepts_mfa() -> str:
+        """Check if Utility implementations supports MFA."""
+        return False
+
+    @staticmethod
     async def async_login(
-        session: aiohttp.ClientSession, username: str, password: str
+        session: aiohttp.ClientSession,
+        username: str,
+        password: str,
+        optional_mfa_secret: Optional[str],
     ) -> str | None:
         """Login to the utility website and authorize opower.
 
