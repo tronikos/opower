@@ -34,7 +34,7 @@ class Exelon:
         raise NotImplementedError
     
     @classmethod
-    async def subdomain(cls) -> str:
+    def subdomain(cls) -> str:
         """Return the opower.com subdomain for this utility."""
         return Exelon._subdomain
 

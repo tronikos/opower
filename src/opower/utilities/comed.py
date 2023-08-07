@@ -13,7 +13,7 @@ class ComEd(Exelon, UtilityBase):
         return "Commonwealth Edison (ComEd)"
 
     @staticmethod
-    async def subdomain() -> str:
+    def subdomain() -> str:
         """Return the opower.com subdomain for this utility."""
         return "cec"
 

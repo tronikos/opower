@@ -38,7 +38,7 @@ class Evergy(UtilityBase):
         return "Evergy"
 
     @staticmethod
-    async def subdomain() -> str:
+    def subdomain() -> str:
         """Return the opower.com subdomain for this utility."""
         assert Evergy._subdomain, "async_login not called"
         return Evergy._subdomain
