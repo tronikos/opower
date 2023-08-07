@@ -1,6 +1,7 @@
 """Pacific Gas & Electric (PG&E)."""
 
 import re
+from typing import Optional
 
 import aiohttp
 
@@ -43,7 +44,10 @@ class PGE(UtilityBase):
 
     @staticmethod
     async def async_login(
-        session: aiohttp.ClientSession, username: str, password: str
+        session: aiohttp.ClientSession,
+        username: str,
+        password: str,
+        optional_mfa_secret: Optional[str],
     ) -> None:
         """Login to the utility website."""
         # 1st way of login

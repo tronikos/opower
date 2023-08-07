@@ -2,6 +2,7 @@
 
 from html.parser import HTMLParser
 import re
+from typing import Optional
 
 import aiohttp
 
@@ -77,7 +78,10 @@ class PSE(UtilityBase):
 
     @staticmethod
     async def async_login(
-        session: aiohttp.ClientSession, username: str, password: str
+        session: aiohttp.ClientSession,
+        username: str,
+        password: str,
+        optional_mfa_secret: Optional[str],
     ) -> str:
         """Login to the utility website and authorize opower."""
         login_parser = PSELoginParser()

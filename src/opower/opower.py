@@ -5,7 +5,7 @@ from datetime import date, datetime
 from enum import Enum
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import urlencode
 
 import aiohttp
@@ -55,6 +55,31 @@ class AggregateType(Enum):
         return self.value
 
 
+class ReadResolution(Enum):
+    """Minimum supported resolution."""
+
+    BILLING = "BILLING"
+    DAY = "DAY"
+    HOUR = "HOUR"
+    QUARTER_HOUR = "QUARTER_HOUR"
+
+    def __str__(self):
+        """Return the value of the enum."""
+        return self.value
+
+
+SUPPORTED_AGGREGATE_TYPES = {
+    ReadResolution.BILLING: [AggregateType.BILL],
+    ReadResolution.DAY: [AggregateType.BILL, AggregateType.DAY],
+    ReadResolution.HOUR: [AggregateType.BILL, AggregateType.DAY, AggregateType.HOUR],
+    ReadResolution.QUARTER_HOUR: [
+        AggregateType.BILL,
+        AggregateType.DAY,
+        AggregateType.HOUR,
+    ],
+}
+
+
 @dataclasses.dataclass
 class Customer:
     """Data about a customer."""
@@ -70,6 +95,7 @@ class Account:
     uuid: str
     utility_account_id: str
     meter_type: MeterType
+    read_resolution: Optional[ReadResolution]
 
 
 @dataclasses.dataclass
@@ -108,14 +134,22 @@ class UsageRead:
     consumption: float  # taken from consumption.value field, in KWH or THERM
 
 
-def get_supported_utilities() -> list[type["UtilityBase"]]:
+def get_supported_utilities(supports_mfa=False) -> list[type["UtilityBase"]]:
     """Return a list of all supported utilities."""
-    return UtilityBase.subclasses
+    return [
+        cls for cls in UtilityBase.subclasses if supports_mfa or not cls.accepts_mfa()
+    ]
 
 
-def get_supported_utility_names() -> list[str]:
+def get_supported_utility_names(supports_mfa=False) -> list[str]:
     """Return a sorted list of names of all supported utilities."""
-    return sorted([utility.name() for utility in UtilityBase.subclasses])
+    return sorted(
+        [
+            utility.name()
+            for utility in UtilityBase.subclasses
+            if supports_mfa or not utility.accepts_mfa()
+        ]
+    )
 
 
 def _select_utility(name: str) -> type[UtilityBase]:
@@ -130,7 +164,12 @@ class Opower:
     """Class that can get historical and forecasted usage/cost from an utility."""
 
     def __init__(
-        self, session: aiohttp.ClientSession, utility: str, username: str, password: str
+        self,
+        session: aiohttp.ClientSession,
+        utility: str,
+        username: str,
+        password: str,
+        optional_mfa_secret: Optional[str] = None,
     ) -> None:
         """Initialize."""
         # Note: Do not modify default headers since Home Assistant that uses this library needs to use
@@ -139,6 +178,7 @@ class Opower:
         self.utility: type[UtilityBase] = _select_utility(utility)
         self.username = username
         self.password = password
+        self.optional_mfa_secret = optional_mfa_secret
         self.access_token = None
         self.customers = []
 
@@ -150,8 +190,9 @@ class Opower:
         """
         try:
             self.access_token = await self.utility.async_login(
-                self.session, self.username, self.password
+                self.session, self.username, self.password, self.optional_mfa_secret
             )
+
         except ClientResponseError as err:
             if err.status in (401, 403):
                 raise InvalidAuth(err)
@@ -172,6 +213,7 @@ class Opower:
                         uuid=account["uuid"],
                         utility_account_id=account["preferredUtilityAccountId"],
                         meter_type=MeterType(account["meterType"]),
+                        read_resolution=ReadResolution(account["readResolution"]),
                     )
                 )
         return accounts
@@ -215,6 +257,7 @@ class Opower:
                                 forecast["preferredUtilityAccountId"]
                             ),
                             meter_type=MeterType(forecast["meterType"]),
+                            read_resolution=None,
                         ),
                         start_date=date.fromisoformat(forecast["startDate"]),
                         end_date=date.fromisoformat(forecast["endDate"]),
@@ -272,7 +315,7 @@ class Opower:
             f"{account.uuid}"
         )
         reads = await self._async_get_dated_data(
-            account.customer, url, aggregate_type, start_date, end_date
+            account, url, aggregate_type, start_date, end_date
         )
         result = []
         for read in reads:
@@ -314,7 +357,7 @@ class Opower:
             "/reads"
         )
         reads = await self._async_get_dated_data(
-            account.customer, url, aggregate_type, start_date, end_date
+            account, url, aggregate_type, start_date, end_date
         )
         result = []
         for read in reads:
@@ -329,17 +372,22 @@ class Opower:
 
     async def _async_get_dated_data(
         self,
-        customer: Customer,
+        account: Account,
         url: str,
         aggregate_type: AggregateType,
         start_date: datetime | None = None,
         end_date: datetime | None = None,
     ) -> list[Any]:
         """Wrap _async_fetch by breaking requests for big date ranges to smaller ones to satisfy opower imposed limits."""
+        if aggregate_type not in SUPPORTED_AGGREGATE_TYPES.get(account.read_resolution):
+            raise ValueError(
+                f"Requested aggregate_type: {aggregate_type} "
+                f"not supported by account's read_resolution: {account.read_resolution}"
+            )
         if start_date is None:
             if aggregate_type == AggregateType.BILL:
                 return await self._async_fetch(
-                    customer, url, aggregate_type, start_date, end_date
+                    account.customer, url, aggregate_type, start_date, end_date
                 )
             raise ValueError("start_date is required unless aggregate_type=BILL")
         if end_date is None:
@@ -366,7 +414,7 @@ class Opower:
             if req_start >= req_end:
                 return result
             reads = await self._async_fetch(
-                customer, url, aggregate_type, req_start, req_end
+                account.customer, url, aggregate_type, req_start, req_end
             )
             if not reads:
                 return result

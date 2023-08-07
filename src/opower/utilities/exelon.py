@@ -3,6 +3,7 @@
 import json
 import re
 import logging
+from typing import Optional
 
 import aiohttp
 
@@ -10,7 +11,6 @@ from ..const import USER_AGENT
 from ..exceptions import InvalidAuth
 
 _LOGGER = logging.getLogger(__file__)
-
 
 class Exelon:
     """Base class for Exelon subsidiaries."""
@@ -38,7 +38,11 @@ class Exelon:
 
     @classmethod
     async def async_login(
-        cls, session: aiohttp.ClientSession, username: str, password: str
+        cls,
+        session: aiohttp.ClientSession,
+        username: str,
+        password: str,
+        optional_mfa_secret: Optional[str],
     ) -> str:
         """Login to the utility website and authorize opower."""
         async with session.get(
