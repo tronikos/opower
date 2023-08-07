@@ -49,6 +49,7 @@ class AggregateType(Enum):
     BILL = "bill"
     DAY = "day"
     HOUR = "hour"
+    QUARTER_HOUR = "quarter_hour"
 
     def __str__(self):
         """Return the value of the enum."""
@@ -76,6 +77,7 @@ SUPPORTED_AGGREGATE_TYPES = {
         AggregateType.BILL,
         AggregateType.DAY,
         AggregateType.HOUR,
+        AggregateType.QUARTER_HOUR,
     ],
 }
 
@@ -401,6 +403,8 @@ class Opower:
             max_request_days = 363
         elif aggregate_type == AggregateType.HOUR:
             max_request_days = 26
+        elif aggregate_type == AggregateType.QUARTER_HOUR:
+            max_request_days = 6
 
         # Fetch data in batches in reverse chronological order
         # until we reach start or there is no fetched data
