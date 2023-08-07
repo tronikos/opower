@@ -5,7 +5,7 @@ from datetime import date, datetime
 from enum import Enum
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import urlencode
 
 import aiohttp
@@ -55,6 +55,31 @@ class AggregateType(Enum):
         return self.value
 
 
+class ReadResolution(Enum):
+    """Minimum supported resolution."""
+
+    BILLING = "BILLING"
+    DAY = "DAY"
+    HOUR = "HOUR"
+    QUARTER_HOUR = "QUARTER_HOUR"
+
+    def __str__(self):
+        """Return the value of the enum."""
+        return self.value
+
+
+SUPPORTED_AGGREGATE_TYPES = {
+    ReadResolution.BILLING: [AggregateType.BILL],
+    ReadResolution.DAY: [AggregateType.BILL, AggregateType.DAY],
+    ReadResolution.HOUR: [AggregateType.BILL, AggregateType.DAY, AggregateType.HOUR],
+    ReadResolution.QUARTER_HOUR: [
+        AggregateType.BILL,
+        AggregateType.DAY,
+        AggregateType.HOUR,
+    ],
+}
+
+
 @dataclasses.dataclass
 class Customer:
     """Data about a customer."""
@@ -70,6 +95,7 @@ class Account:
     uuid: str
     utility_account_id: str
     meter_type: MeterType
+    read_resolution: Optional[ReadResolution]
 
 
 @dataclasses.dataclass
@@ -172,6 +198,7 @@ class Opower:
                         uuid=account["uuid"],
                         utility_account_id=account["preferredUtilityAccountId"],
                         meter_type=MeterType(account["meterType"]),
+                        read_resolution=ReadResolution(account["readResolution"]),
                     )
                 )
         return accounts
@@ -215,6 +242,7 @@ class Opower:
                                 forecast["preferredUtilityAccountId"]
                             ),
                             meter_type=MeterType(forecast["meterType"]),
+                            read_resolution=None,
                         ),
                         start_date=date.fromisoformat(forecast["startDate"]),
                         end_date=date.fromisoformat(forecast["endDate"]),
@@ -272,7 +300,7 @@ class Opower:
             f"{account.uuid}"
         )
         reads = await self._async_get_dated_data(
-            account.customer, url, aggregate_type, start_date, end_date
+            account, url, aggregate_type, start_date, end_date
         )
         result = []
         for read in reads:
@@ -314,7 +342,7 @@ class Opower:
             "/reads"
         )
         reads = await self._async_get_dated_data(
-            account.customer, url, aggregate_type, start_date, end_date
+            account, url, aggregate_type, start_date, end_date
         )
         result = []
         for read in reads:
@@ -329,17 +357,22 @@ class Opower:
 
     async def _async_get_dated_data(
         self,
-        customer: Customer,
+        account: Account,
         url: str,
         aggregate_type: AggregateType,
         start_date: datetime | None = None,
         end_date: datetime | None = None,
     ) -> list[Any]:
         """Wrap _async_fetch by breaking requests for big date ranges to smaller ones to satisfy opower imposed limits."""
+        if aggregate_type not in SUPPORTED_AGGREGATE_TYPES.get(account.read_resolution):
+            raise ValueError(
+                f"Requested aggregate_type: {aggregate_type} "
+                f"not supported by account's read_resolution: {account.read_resolution}"
+            )
         if start_date is None:
             if aggregate_type == AggregateType.BILL:
                 return await self._async_fetch(
-                    customer, url, aggregate_type, start_date, end_date
+                    account.customer, url, aggregate_type, start_date, end_date
                 )
             raise ValueError("start_date is required unless aggregate_type=BILL")
         if end_date is None:
@@ -366,7 +399,7 @@ class Opower:
             if req_start >= req_end:
                 return result
             reads = await self._async_fetch(
-                customer, url, aggregate_type, req_start, req_end
+                account.customer, url, aggregate_type, req_start, req_end
             )
             if not reads:
                 return result

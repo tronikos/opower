@@ -76,8 +76,8 @@ async def _main():
             print("\nCurrent bill forecast:", forecast)
         for account in await opower.async_get_accounts():
             print(
-                "\nGetting historical data: meter=",
-                account.meter_type,
+                "\nGetting historical data: account=",
+                account,
                 "aggregate_type=",
                 args.aggregate_type,
                 "start_date=",
