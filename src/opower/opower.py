@@ -134,14 +134,22 @@ class UsageRead:
     consumption: float  # taken from consumption.value field, in KWH or THERM
 
 
-def get_supported_utilities() -> list[type["UtilityBase"]]:
+def get_supported_utilities(supports_mfa=False) -> list[type["UtilityBase"]]:
     """Return a list of all supported utilities."""
-    return UtilityBase.subclasses
+    return [
+        cls for cls in UtilityBase.subclasses if supports_mfa or not cls.accepts_mfa()
+    ]
 
 
-def get_supported_utility_names() -> list[str]:
+def get_supported_utility_names(supports_mfa=False) -> list[str]:
     """Return a sorted list of names of all supported utilities."""
-    return sorted([utility.name() for utility in UtilityBase.subclasses])
+    return sorted(
+        [
+            utility.name()
+            for utility in UtilityBase.subclasses
+            if supports_mfa or not utility.accepts_mfa()
+        ]
+    )
 
 
 def _select_utility(name: str) -> type[UtilityBase]:
@@ -156,7 +164,12 @@ class Opower:
     """Class that can get historical and forecasted usage/cost from an utility."""
 
     def __init__(
-        self, session: aiohttp.ClientSession, utility: str, username: str, password: str
+        self,
+        session: aiohttp.ClientSession,
+        utility: str,
+        username: str,
+        password: str,
+        optional_mfa_secret: Optional[str] = None,
     ) -> None:
         """Initialize."""
         # Note: Do not modify default headers since Home Assistant that uses this library needs to use
@@ -165,6 +178,7 @@ class Opower:
         self.utility: type[UtilityBase] = _select_utility(utility)
         self.username = username
         self.password = password
+        self.optional_mfa_secret = optional_mfa_secret
         self.access_token = None
         self.customers = []
 
@@ -176,8 +190,9 @@ class Opower:
         """
         try:
             self.access_token = await self.utility.async_login(
-                self.session, self.username, self.password
+                self.session, self.username, self.password, self.optional_mfa_secret
             )
+
         except ClientResponseError as err:
             if err.status in (401, 403):
                 raise InvalidAuth(err)

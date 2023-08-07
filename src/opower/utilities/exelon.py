@@ -2,6 +2,7 @@
 
 import json
 import re
+from typing import Optional
 
 import aiohttp
 
@@ -28,7 +29,11 @@ class Exelon:
 
     @classmethod
     async def async_login(
-        cls, session: aiohttp.ClientSession, username: str, password: str
+        cls,
+        session: aiohttp.ClientSession,
+        username: str,
+        password: str,
+        optional_mfa_secret: Optional[str],
     ) -> str:
         """Login to the utility website and authorize opower."""
         async with session.get(

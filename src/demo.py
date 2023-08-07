@@ -13,7 +13,8 @@ from opower import AggregateType, Opower, get_supported_utilities
 
 async def _main():
     supported_utilities = [
-        utility.__name__.lower() for utility in get_supported_utilities()
+        utility.__name__.lower()
+        for utility in get_supported_utilities(supports_mfa=True)
     ]
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -31,6 +32,10 @@ async def _main():
         "--password",
         help="Password for logging into the utility's website. "
         "If not provided, you will be asked for it",
+    )
+    parser.add_argument(
+        "--mfa_secret",
+        help="MFA secret for logging into the utility's website.",
     )
     parser.add_argument(
         "--aggregate_type",
@@ -68,7 +73,7 @@ async def _main():
     password = args.password or getpass("Password: ")
 
     async with aiohttp.ClientSession() as session:
-        opower = Opower(session, utility, username, password)
+        opower = Opower(session, utility, username, password, args.mfa_secret)
         await opower.async_login()
         # Re-login to make sure code handles already logged in sessions.
         await opower.async_login()

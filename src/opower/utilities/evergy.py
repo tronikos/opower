@@ -2,6 +2,7 @@
 
 from html.parser import HTMLParser
 import logging
+from typing import Optional
 
 import aiohttp
 
@@ -50,7 +51,10 @@ class Evergy(UtilityBase):
 
     @staticmethod
     async def async_login(
-        session: aiohttp.ClientSession, username: str, password: str
+        session: aiohttp.ClientSession,
+        username: str,
+        password: str,
+        optional_mfa_secret: Optional[str],
     ) -> str:
         """Login to the utility website and authorize opower."""
         login_parser = EvergyLoginParser()
