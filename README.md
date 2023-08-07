@@ -4,6 +4,7 @@ A Python library for getting historical and forecasted usage/cost from utilities
 
 Supported utilities:
 
+- condEdison (ConEd)
 - Evergy
 - Exelon subsidiaries
   - Atlantic City Electric
