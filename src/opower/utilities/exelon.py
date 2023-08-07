@@ -15,9 +15,7 @@ _LOGGER = logging.getLogger(__file__)
 class Exelon:
     """Base class for Exelon subsidiaries."""
 
-    _access_token = None
     _subdomain = None
-    _session = None
 
     # Can find the opower.com subdomain using the GetConfiguration endpoint
     # e.g. https://secure.bge.com/api/Services/MyAccountService.svc/GetConfiguration
@@ -42,7 +40,6 @@ class Exelon:
     async def async_login(
         cls, session: aiohttp.ClientSession, username: str, password: str
     ) -> str:
-        cls._session = session
         """Login to the utility website and authorize opower."""
         async with session.get(
             "https://" + cls.login_domain() + "/Pages/Login.aspx?/login",
@@ -119,11 +116,10 @@ class Exelon:
             raise_for_status=True,
         ) as resp:
             result = await resp.json()
-            cls._access_token = result["access_token"]
 
 
         # Get the potential url subdomains, they can vary based on account type/location
-        async with cls._session.get(
+        async with session.get(
             "https://" + cls.login_domain() + "/api/Services/MyAccountService.svc/GetConfiguration",
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
@@ -138,9 +134,9 @@ class Exelon:
             _LOGGER.debug("found exelon oPowerURLBaseJurisdiction: %s", oPowerURLBaseJurisdiction)
 
         # Get the account type & state
-        async with cls._session.get(
+        async with session.get(
             "https://" + cls.login_domain() + "/.euapi/mobile/custom/auth/accounts",
-            headers={"User-Agent": USER_AGENT, "authorization": f"Bearer {cls._access_token}"},
+            headers={"User-Agent": USER_AGENT, "authorization": f"Bearer {result['access_token']}"},
             raise_for_status=True,
         ) as resp:
             # returned mimetype is nonstandard, so this avoids a ContentTypeError
