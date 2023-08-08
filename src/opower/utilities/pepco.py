@@ -21,7 +21,7 @@ class Pepco(Exelon, UtilityBase):
     def secondary_subdomain() -> str:
         """Return the opower.com secondary subdomain for this utility."""
         return "pepd"
-    
+
     @staticmethod
     def login_domain() -> str:
         """Return the domain that hosts the login page."""

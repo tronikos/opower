@@ -58,7 +58,10 @@ black .
 # Run lint
 python -m pip install flake8 ruff
 flake8 .
-ruff .
+ruff . --fix
+
+# Run formatter and lint
+isort . ; black . ; flake8 . ; ruff . --fix
 
 # Run tests
 python -m pip install pytest

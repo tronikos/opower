@@ -21,7 +21,7 @@ class Delmarva(Exelon, UtilityBase):
     def secondary_subdomain() -> str:
         """Return the opower.com secondary subdomain for this utility."""
         return "dpld"
-    
+
     @staticmethod
     def login_domain() -> str:
         """Return the domain that hosts the login page."""

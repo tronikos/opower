@@ -1,8 +1,8 @@
 """Base class for Exelon subsidiaries."""
 
 import json
-import re
 import logging
+import re
 from typing import Optional
 
 import aiohttp
@@ -11,6 +11,7 @@ from ..const import USER_AGENT
 from ..exceptions import InvalidAuth
 
 _LOGGER = logging.getLogger(__file__)
+
 
 class Exelon:
     """Base class for Exelon subsidiaries."""
@@ -30,7 +31,7 @@ class Exelon:
     def login_domain() -> str:
         """Return the domain that hosts the login page."""
         raise NotImplementedError
-    
+
     @classmethod
     def subdomain(cls) -> str:
         """Return the opower.com subdomain for this utility."""
@@ -122,29 +123,38 @@ class Exelon:
             result = await resp.json()
 
         # If pepco or delmarva, determine if we should use secondary subdomain
-        if (cls.login_domain() in ["secure.pepco.com", "secure.delmarva.com"]):
+        if cls.login_domain() in ["secure.pepco.com", "secure.delmarva.com"]:
             # Get the account type & state
             async with session.get(
                 "https://" + cls.login_domain() + "/.euapi/mobile/custom/auth/accounts",
-                headers={"User-Agent": USER_AGENT, "authorization": f"Bearer {result['access_token']}"},
+                headers={
+                    "User-Agent": USER_AGENT,
+                    "authorization": f"Bearer {result['access_token']}",
+                },
                 raise_for_status=True,
             ) as resp:
                 # returned mimetype is nonstandard, so this avoids a ContentTypeError
                 response = await resp.json(content_type=None)
 
-                #Only include active accounts (after moving, old accounts have status: "Inactive")
-                #NOTE: this logic currently assumes 1 active address per account, if multiple accounts found
+                # Only include active accounts (after moving, old accounts have status: "Inactive")
+                # NOTE: this logic currently assumes 1 active address per account, if multiple accounts found
                 #      we default to taking the first in the list. Future enhancement is to support
                 #      multiple accounts (which could result in different subdomain for each)
-                active_accounts = [account for account in response['data'] if account['status'] == 'Active']
+                active_accounts = [
+                    account
+                    for account in response["data"]
+                    if account["status"] == "Active"
+                ]
                 isResidential = active_accounts[0]["isResidential"]
-                state = active_accounts[0]['PremiseInfo'][0]['mainAddress']['townDetail']['stateOrProvince']
+                state = active_accounts[0]["PremiseInfo"][0]["mainAddress"][
+                    "townDetail"
+                ]["stateOrProvince"]
                 _LOGGER.debug("found exelon account isResidential: %s", isResidential)
                 _LOGGER.debug("found exelon account state: %s", state)
 
             # Determine subdomain to use by matching logic found in https://cls.login_domain()/dist/app.js
             Exelon._subdomain = cls.primary_subdomain()
-            if(not isResidential or 'MD' != state):
+            if not isResidential or state != "MD":
                 Exelon._subdomain = cls.secondary_subdomain()
 
             _LOGGER.debug("detected exelon subdomain to be: %s", Exelon._subdomain)
