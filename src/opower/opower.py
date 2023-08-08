@@ -134,6 +134,7 @@ class UsageRead:
     consumption: float  # taken from consumption.value field, in KWH or THERM
 
 
+# TODO: remove supports_mfa and accepts_mfa from all files after ConEd is released to Home Assistant
 def get_supported_utilities(supports_mfa=False) -> list[type["UtilityBase"]]:
     """Return a list of all supported utilities."""
     return [
@@ -379,7 +380,12 @@ class Opower:
         end_date: datetime | None = None,
     ) -> list[Any]:
         """Wrap _async_fetch by breaking requests for big date ranges to smaller ones to satisfy opower imposed limits."""
-        if aggregate_type not in SUPPORTED_AGGREGATE_TYPES.get(account.read_resolution):
+        # TODO: remove not None check after a Home Assistant release
+        if (
+            account.read_resolution is not None
+            and aggregate_type
+            not in SUPPORTED_AGGREGATE_TYPES.get(account.read_resolution)
+        ):
             raise ValueError(
                 f"Requested aggregate_type: {aggregate_type} "
                 f"not supported by account's read_resolution: {account.read_resolution}"
