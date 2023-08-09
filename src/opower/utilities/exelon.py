@@ -156,6 +156,7 @@ class Exelon:
             ) as resp:
                 result = await resp.text(encoding="utf-8")
 
+            account = None
             if resp.request_info.url.path.endswith("/accounts/login/select-account"):
                 # we probably need to select an account as we didn't automatically go to the dashboard
                 async with session.get(
@@ -171,7 +172,8 @@ class Exelon:
                 if result["accountNumber"] is None:
                     bearer_token = result["token"]
                     # if we don't yet have an account, look one up and set it
-                    account = await cls.async_account(session, bearer_token)
+                    if account is None:
+                        account = await cls.async_account(session, bearer_token)
 
                     # set the first active one
                     account_number = account["accountNumber"]
@@ -201,7 +203,8 @@ class Exelon:
         # If pepco or delmarva, determine if we should use secondary subdomain
         if cls.login_domain() in ["secure.pepco.com", "secure.delmarva.com"]:
             # Get the account type & state
-            account = await cls.async_account(session, result["access_token"])
+            if account is None:
+                account = await cls.async_account(session, result["access_token"])
 
             isResidential = account["isResidential"]
             state = account["PremiseInfo"][0]["mainAddress"]["townDetail"][
