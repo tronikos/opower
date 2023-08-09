@@ -97,6 +97,7 @@ class Exelon:
         ) as resp:
             result = await resp.text(encoding="utf-8")
 
+        account = None
         # if we don't go to /accounts/dashboard, we need to perform some authorization steps
         if resp.request_info.url.path.endswith("/authorize"):
             # transId = "StateProperties=..."
@@ -156,7 +157,6 @@ class Exelon:
             ) as resp:
                 result = await resp.text(encoding="utf-8")
 
-            account = None
             if resp.request_info.url.path.endswith("/accounts/login/select-account"):
                 # we probably need to select an account as we didn't automatically go to the dashboard
                 async with session.get(
