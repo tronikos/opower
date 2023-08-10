@@ -49,6 +49,9 @@ class AggregateType(Enum):
     BILL = "bill"
     DAY = "day"
     HOUR = "hour"
+    # HALF_HOUR and QUARTER_HOUR are intentionally omitted.
+    # Home Assistant only has hourly data in the energy dashboard and
+    # some utilities (e.g. PG&E) claim QUARTER_HOUR but they only provide HOUR.
 
     def __str__(self):
         """Return the value of the enum."""
@@ -61,6 +64,7 @@ class ReadResolution(Enum):
     BILLING = "BILLING"
     DAY = "DAY"
     HOUR = "HOUR"
+    HALF_HOUR = "HALF_HOUR"
     QUARTER_HOUR = "QUARTER_HOUR"
 
     def __str__(self):
@@ -72,6 +76,11 @@ SUPPORTED_AGGREGATE_TYPES = {
     ReadResolution.BILLING: [AggregateType.BILL],
     ReadResolution.DAY: [AggregateType.BILL, AggregateType.DAY],
     ReadResolution.HOUR: [AggregateType.BILL, AggregateType.DAY, AggregateType.HOUR],
+    ReadResolution.HALF_HOUR: [
+        AggregateType.BILL,
+        AggregateType.DAY,
+        AggregateType.HOUR,
+    ],
     ReadResolution.QUARTER_HOUR: [
         AggregateType.BILL,
         AggregateType.DAY,
