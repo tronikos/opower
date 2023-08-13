@@ -11,8 +11,8 @@ from ..exceptions import InvalidAuth
 from .base import UtilityBase
 
 
-class PSELoginParser(HTMLParser):
-    """HTML parser to extract login verification token from PSE Login page."""
+class SMUDLoginParser(HTMLParser):
+    """HTML parser to extract login verification token from SMUD Login page."""
 
     def __init__(self) -> None:
         """Initialize."""
@@ -26,8 +26,8 @@ class PSELoginParser(HTMLParser):
             self.verification_token = token
 
 
-class PSEUsageParser(HTMLParser):
-    """HTML parser to extract OPower bearer token from PSE Usage page."""
+class SMUDUsageParser(HTMLParser):
+    """HTML parser to extract OPower bearer token from SMUD Usage page."""
 
     _regexp = re.compile(r'var accessToken\s+=\s+["\'](?P<token>.+)["\']')
 
@@ -58,7 +58,7 @@ class PSEUsageParser(HTMLParser):
             self._in_inline_script = False
 
 
-class PSE(UtilityBase):
+class SMUD(UtilityBase):
     """Sacramento Municipal Utility District (SMUD)."""
 
     @staticmethod
@@ -87,7 +87,7 @@ class PSE(UtilityBase):
         login_parser = SMUDLoginParser()
 
         async with session.get(
-            "https://https://myaccount.smud.org",
+            "https://myaccount.smud.org",
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         ) as resp:
@@ -98,7 +98,8 @@ class PSE(UtilityBase):
             ), "Failed to parse __RequestVerificationToken"
 
         await session.post(
-            "https://www.pse.com/api/pseauthentication/AsyncSignIn",
+            #"https://www.pse.com/api/pseauthentication/AsyncSignIn",
+            "https://myaccount.smud.org",
             data={
                 "__RequestVerificationToken": login_parser.verification_token,
                 "GenericMessage": "Incorrect username or password",
@@ -114,14 +115,15 @@ class PSE(UtilityBase):
         )
 
         async with session.get(
-            "https://www.pse.com/api/AccountSelector/GetContractAccountJson",
+            #"https://www.pse.com/api/AccountSelector/GetContractAccountJson",
+            "https://myaccount.smud.org",
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         ) as resp:
             if len(await resp.text()) == 0:
                 raise InvalidAuth("Login failed")
 
-        usage_parser = PSEUsageParser()
+        usage_parser = SMUDUsageParser()
 
         async with session.get(
             "https://myaccount.smud.org/manage/opowerresidential/energyusage",
