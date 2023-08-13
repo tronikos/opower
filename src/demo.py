@@ -8,7 +8,7 @@ import logging
 
 import aiohttp
 
-from opower import AggregateType, Opower, get_supported_utilities
+from opower import AggregateType, Opower, ReadResolution, get_supported_utilities
 
 
 async def _main():
@@ -80,11 +80,22 @@ async def _main():
         for forecast in await opower.async_get_forecast():
             print("\nCurrent bill forecast:", forecast)
         for account in await opower.async_get_accounts():
+            aggregate_type = args.aggregate_type
+            if (
+                aggregate_type == AggregateType.HOUR
+                and account.read_resolution == ReadResolution.DAY
+            ):
+                aggregate_type = AggregateType.DAY
+            elif (
+                aggregate_type != AggregateType.BILL
+                and account.read_resolution == ReadResolution.BILLING
+            ):
+                aggregate_type = AggregateType.BILL
             print(
                 "\nGetting historical data: account=",
                 account,
                 "aggregate_type=",
-                args.aggregate_type,
+                aggregate_type,
                 "start_date=",
                 args.start_date,
                 "end_date=",
@@ -93,7 +104,7 @@ async def _main():
             if args.usage_only:
                 usage_data = await opower.async_get_usage_reads(
                     account,
-                    args.aggregate_type,
+                    aggregate_type,
                     args.start_date,
                     args.end_date,
                 )
@@ -120,7 +131,7 @@ async def _main():
             else:
                 cost_data = await opower.async_get_cost_reads(
                     account,
-                    args.aggregate_type,
+                    aggregate_type,
                     args.start_date,
                     args.end_date,
                 )
