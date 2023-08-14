@@ -1,4 +1,4 @@
-"""condEdison (ConEd)."""
+"""Consolidated Edison (ConEd)."""
 
 from typing import Optional
 
@@ -18,12 +18,12 @@ RETURN_URL = "/en/accounts-billing/my-account/energy-use"
 
 
 class ConEd(UtilityBase):
-    """conEdison (ConEd)."""
+    """Consolidated Edison (ConEd)."""
 
     @staticmethod
     def name() -> str:
         """Distinct recognizable name of the utility."""
-        return "conEdison (ConEd)"
+        return "Consolidated Edison (ConEd)"
 
     @staticmethod
     def subdomain() -> str:
