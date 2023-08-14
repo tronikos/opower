@@ -254,9 +254,9 @@ class Opower:
                     if DEBUG_LOG_RESPONSE:
                         _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
             except ClientResponseError as err:
-                # Some utilities don't provide forecast and return 404
+                # For some customers utilities don't provide forecast and return 404
                 if err.status == 404:
-                    return []
+                    continue
             for forecast in result["accountForecasts"]:
                 forecasts.append(
                     Forecast(
