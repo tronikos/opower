@@ -130,7 +130,7 @@ class CostRead:
 
     start_time: datetime
     end_time: datetime
-    consumption: float  # taken from value field, in KWH or THERM
+    consumption: float  # taken from value field, in KWH or THERM/CCF
     provided_cost: float  # in $
 
 
@@ -140,7 +140,7 @@ class UsageRead:
 
     start_time: datetime
     end_time: datetime
-    consumption: float  # taken from consumption.value field, in KWH or THERM
+    consumption: float  # taken from consumption.value field, in KWH or THERM/CCF
 
 
 # TODO: remove supports_mfa and accepts_mfa from all files after ConEd is released to Home Assistant
