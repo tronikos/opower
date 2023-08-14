@@ -32,7 +32,7 @@ class MeterType(Enum):
 
 
 class UnitOfMeasure(Enum):
-    """Unit of measure for the associated meter type. kWh for electricity or Therm for gas,."""
+    """Unit of measure for the associated meter type. kWh for electricity or Therm/CCF for gas."""
 
     KWH = "KWH"
     THERM = "THERM"
