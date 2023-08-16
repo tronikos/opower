@@ -119,4 +119,4 @@ class ConEd(UtilityBase):
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         ) as resp:
-            return await resp.text()
+            return str(await resp.json())
