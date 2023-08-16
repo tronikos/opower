@@ -312,20 +312,15 @@ class Opower:
         aggregate_type: AggregateType,
         start_date: datetime | None = None,
         end_date: datetime | None = None,
+        usage_only: bool = False,
     ) -> list[CostRead]:
-        """Get cost data for the selected account in the given date range aggregated by bill/day/hour.
+        """Get usage and cost data for the selected account in the given date range aggregated by bill/day/hour.
 
         The resolution for gas is typically 'day' while for electricity it's hour or quarter hour.
         Opower typically keeps historical cost data for 3 years.
         """
-        url = (
-            "https://"
-            f"{self.utility.subdomain()}"
-            ".opower.com/ei/edge/apis/DataBrowser-v1/cws/cost/utilityAccount/"
-            f"{account.uuid}"
-        )
         reads = await self._async_get_dated_data(
-            account, url, aggregate_type, start_date, end_date
+            account, aggregate_type, start_date, end_date, usage_only
         )
         result = []
         for read in reads:
@@ -333,8 +328,8 @@ class Opower:
                 CostRead(
                     start_time=datetime.fromisoformat(read["startTime"]),
                     end_time=datetime.fromisoformat(read["endTime"]),
-                    consumption=read["value"],
-                    provided_cost=read["providedCost"] or 0,
+                    consumption=read["value"] if "value" in read else read["consumption"]["value"],
+                    provided_cost=read.get("providedCost", 0) or 0,
                 )
             )
         # Remove last entries with 0 values
@@ -343,6 +338,13 @@ class Opower:
             if last.provided_cost != 0 or last.consumption != 0:
                 result.append(last)
                 break
+        # Some utilities provide usage at hourly/daily resolution but only provide cost at bill resolution.
+        # They don't return any data when hitting the cost endpoint so try again with the usage only endpoint.
+        if aggregate_type != AggregateType.BILL and not result and not usage_only:
+            _LOGGER.debug("Got no usage/cost data. Falling back to just usage data.")
+            return await self.async_get_cost_reads(
+                account, aggregate_type, start_date, end_date, usage_only=True
+            )
         return result
 
     async def async_get_usage_reads(
@@ -357,17 +359,8 @@ class Opower:
         The resolution for gas is typically 'day' while for electricity it's hour or quarter hour.
         Opower typically keeps historical usage data for a bit over 3 years.
         """
-        url = (
-            "https://"
-            f"{self.utility.subdomain()}"
-            ".opower.com/ei/edge/apis/DataBrowser-v1/cws/utilities/"
-            f"{self.utility.subdomain()}"
-            "/utilityAccounts/"
-            f"{account.uuid}"
-            "/reads"
-        )
         reads = await self._async_get_dated_data(
-            account, url, aggregate_type, start_date, end_date
+            account, aggregate_type, start_date, end_date, usage_only=True
         )
         result = []
         for read in reads:
@@ -383,10 +376,10 @@ class Opower:
     async def _async_get_dated_data(
         self,
         account: Account,
-        url: str,
         aggregate_type: AggregateType,
         start_date: datetime | None = None,
         end_date: datetime | None = None,
+        usage_only: bool = False,
     ) -> list[Any]:
         """Wrap _async_fetch by breaking requests for big date ranges to smaller ones to satisfy opower imposed limits."""
         # TODO: remove not None check after a Home Assistant release
@@ -402,7 +395,7 @@ class Opower:
         if start_date is None:
             if aggregate_type == AggregateType.BILL:
                 return await self._async_fetch(
-                    account.customer, url, aggregate_type, start_date, end_date
+                    account, aggregate_type, start_date, end_date, usage_only
                 )
             raise ValueError("start_date is required unless aggregate_type=BILL")
         if end_date is None:
@@ -429,7 +422,7 @@ class Opower:
             if req_start >= req_end:
                 return result
             reads = await self._async_fetch(
-                account.customer, url, aggregate_type, req_start, req_end
+                account, aggregate_type, req_start, req_end, usage_only
             )
             if not reads:
                 return result
@@ -438,18 +431,35 @@ class Opower:
 
     async def _async_fetch(
         self,
-        customer: Customer,
-        url: str,
+        account: Account,
         aggregate_type: AggregateType,
         start_date: datetime | arrow.Arrow | None = None,
         end_date: datetime | arrow.Arrow | None = None,
+        usage_only: bool = False,
     ) -> list[Any]:
-        convert_to_date = "/cws/utilities/" in url
+        if usage_only:
+            url = (
+                "https://"
+                f"{self.utility.subdomain()}"
+                ".opower.com/ei/edge/apis/DataBrowser-v1/cws/utilities/"
+                f"{self.utility.subdomain()}"
+                "/utilityAccounts/"
+                f"{account.uuid}"
+                "/reads"
+            )
+        else:
+            url = (
+                "https://"
+                f"{self.utility.subdomain()}"
+                ".opower.com/ei/edge/apis/DataBrowser-v1/cws/cost/utilityAccount/"
+                f"{account.uuid}"
+            )
+        convert_to_date = usage_only
         params = {"aggregateType": aggregate_type.value}
         headers = self._get_headers()
         headers[
             "Opower-Selected-Entities"
-        ] = f'["urn:opower:customer:uuid:{customer.uuid}"]'
+        ] = f'["urn:opower:customer:uuid:{account.customer.uuid}"]'
         if start_date:
             params["startDate"] = (
                 start_date.date() if convert_to_date else start_date
