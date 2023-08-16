@@ -2,6 +2,7 @@
 
 import re
 from typing import Optional
+import urllib.parse
 
 import aiohttp
 
@@ -107,16 +108,12 @@ class PGE(UtilityBase):
         #     if energyManagementInfo["vendorType"] == "OPOWER":
         #         emToolUrl = energyManagementInfo["emToolUrl"]
         #         break
-        # assert emToolUrl == (
-        #     "https://itiamping.cloud.pge.com/idp/startSSO.ping?"
-        #     "PartnerSpId=sso.opower.com&TargetResource="
-        #     "https%3A%2F%2Fpge.opower.com%2Fei%2Fapp%2Fr%2Fenergy-usage-details"
-        # )
 
         url = (
             "https://itiamping.cloud.pge.com/idp/startSSO.ping?"
             "PartnerSpId=sso.opower.com&TargetResource="
-            "https%3A%2F%2Fpge.opower.com%2Fei%2Fapp%2Fr%2Fenergy-usage-details"
+        ) + urllib.parse.quote_plus(
+            "https://pge.opower.com/ei/app/r/energy-usage-details"
         )
 
         # Fetch the URL on the utility website to get RelayState and SAMLResponse.
