@@ -50,21 +50,8 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install .
 
-# Run formatter
-python -m pip install isort black
-isort .
-black .
-
-# Run lint
-python -m pip install flake8 ruff
-flake8 .
-ruff . --fix
-
-# Run type checking
-python -m pip install mypy pydantic
-mypy .
-
 # Run formatter, lint, and type checking
+python -m pip install isort black flake8 ruff mypy pydantic
 isort . ; black . ; flake8 . ; ruff . --fix ; mypy .
 
 # Run tests
