@@ -16,7 +16,7 @@ _LOGGER = logging.getLogger(__file__)
 class Exelon:
     """Base class for Exelon subsidiaries."""
 
-    _subdomain = None
+    _subdomain: Optional[str] = None
 
     # Can find the opower.com subdomain using the GetConfiguration endpoint
     # e.g. https://secure.bge.com/api/Services/MyAccountService.svc/GetConfiguration
@@ -35,7 +35,18 @@ class Exelon:
     @classmethod
     def subdomain(cls) -> str:
         """Return the opower.com subdomain for this utility."""
+        assert Exelon._subdomain, "async_login not called"
         return Exelon._subdomain
+
+    @staticmethod
+    def primary_subdomain() -> str:
+        """Return the opower.com subdomain for this utility."""
+        raise NotImplementedError
+
+    @staticmethod
+    def secondary_subdomain() -> str:
+        """Return the opower.com secondary subdomain for this utility."""
+        raise NotImplementedError
 
     @classmethod
     async def async_account(
@@ -104,8 +115,11 @@ class Exelon:
             # policy = "B2C_1A_SignIn"
             # tenant = "/euazurebge.onmicrosoft.com/B2C_1A_SignIn"
             # api = "CombinedSigninAndSignup"
-            settings = json.loads(re.search(r"var SETTINGS = ({.*});", result).group(1))
+            settings_match = re.search(r"var SETTINGS = ({.*});", result)
+            assert settings_match
+            settings = json.loads(settings_match.group(1))
             login_post_domain = resp.real_url.host
+            assert login_post_domain
 
             async with session.post(
                 "https://"
@@ -127,10 +141,10 @@ class Exelon:
                 },
                 raise_for_status=True,
             ) as resp:
-                result = json.loads(await resp.text(encoding="utf-8"))
+                result_json = json.loads(await resp.text(encoding="utf-8"))
 
-            if result["status"] != "200":
-                raise InvalidAuth(result["message"])
+            if result_json["status"] != "200":
+                raise InvalidAuth(result_json["message"])
 
             async with session.get(
                 "https://"
@@ -166,11 +180,11 @@ class Exelon:
                     headers={"User-Agent": USER_AGENT},
                     raise_for_status=True,
                 ) as resp:
-                    result = await resp.json()
+                    result_json = await resp.json()
 
                 # confirm no account number is set
-                if result["accountNumber"] is None:
-                    bearer_token = result["token"]
+                if result_json["accountNumber"] is None:
+                    bearer_token = result_json["token"]
                     # if we don't yet have an account, look one up and set it
                     if account is None:
                         account = await cls.async_account(session, bearer_token)
@@ -198,13 +212,13 @@ class Exelon:
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         ) as resp:
-            result = await resp.json()
+            result_json = await resp.json()
 
         # If pepco or delmarva, determine if we should use secondary subdomain
         if cls.login_domain() in ["secure.pepco.com", "secure.delmarva.com"]:
             # Get the account type & state
             if account is None:
-                account = await cls.async_account(session, result["access_token"])
+                account = await cls.async_account(session, result_json["access_token"])
 
             isResidential = account["isResidential"]
             state = account["PremiseInfo"][0]["mainAddress"]["townDetail"][
@@ -220,4 +234,4 @@ class Exelon:
 
             _LOGGER.debug("detected exelon subdomain to be: %s", Exelon._subdomain)
 
-        return result["access_token"]
+        return str(result_json["access_token"])

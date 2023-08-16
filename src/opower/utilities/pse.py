@@ -17,9 +17,9 @@ class PSELoginParser(HTMLParser):
     def __init__(self) -> None:
         """Initialize."""
         super().__init__()
-        self.verification_token = None
+        self.verification_token: Optional[str] = None
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
         """Try to extract the verification token from the login input."""
         if tag == "input" and ("name", "__RequestVerificationToken") in attrs:
             _, token = next(filter(lambda attr: attr[0] == "value", attrs))
@@ -34,10 +34,10 @@ class PSEUsageParser(HTMLParser):
     def __init__(self) -> None:
         """Initialize."""
         super().__init__()
-        self.opower_access_token = None
+        self.opower_access_token: Optional[str] = None
         self._in_inline_script = False
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
         """Recognizes inline scripts."""
         if (
             tag == "script"
@@ -83,7 +83,7 @@ class PSE(UtilityBase):
         password: str,
         optional_mfa_secret: Optional[str],
     ) -> str:
-        """Login to the utility website and authorize opower."""
+        """Login to the utility website."""
         login_parser = PSELoginParser()
 
         async with session.get(

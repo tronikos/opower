@@ -10,11 +10,11 @@ from ..exceptions import InvalidAuth
 from .base import UtilityBase
 
 
-def _get_form_action_url_and_hidden_inputs(html: str):
+def _get_form_action_url_and_hidden_inputs(html: str) -> tuple[str, dict[str, str]]:
     """Return the URL and hidden inputs from the single form in a page."""
     match = re.search(r'action="([^"]*)"', html)
     if not match:
-        return None, None
+        return "", {}
     action_url = match.group(1)
     inputs = {}
     for match in re.finditer(

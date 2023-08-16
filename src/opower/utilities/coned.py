@@ -36,7 +36,7 @@ class ConEd(UtilityBase):
         return "America/New_York"
 
     @staticmethod
-    def accepts_mfa() -> str:
+    def accepts_mfa() -> bool:
         """Check if Utility implementations supports MFA."""
         return True
 
@@ -46,7 +46,7 @@ class ConEd(UtilityBase):
         username: str,
         password: str,
         optional_mfa_secret: Optional[str],
-    ) -> None:
+    ) -> str:
         """Login to the utility website."""
         # Double-logins are somewhat broken if cookies stay around.
         # Let's clear everything except device tokens (which allow skipping 2FA)
@@ -76,10 +76,12 @@ class ConEd(UtilityBase):
                 redirectUrl = result["authRedirectUrl"]
             else:
                 if result["newDevice"]:
-                    if not result["noMfa"] and not optional_mfa_secret:
-                        raise InvalidAuth("TOTP secret is required for MFA accounts")
-
                     if not result["noMfa"]:
+                        if not optional_mfa_secret:
+                            raise InvalidAuth(
+                                "TOTP secret is required for MFA accounts"
+                            )
+
                         mfaCode = TOTP(optional_mfa_secret).now()
 
                         async with session.post(
@@ -101,6 +103,7 @@ class ConEd(UtilityBase):
                 else:
                     raise InvalidAuth("Login Failed")
 
+            assert redirectUrl
             async with session.get(
                 redirectUrl,
                 headers={
@@ -116,4 +119,4 @@ class ConEd(UtilityBase):
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         ) as resp:
-            return await resp.json()
+            return await resp.text()

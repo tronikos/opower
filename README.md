@@ -60,8 +60,12 @@ python -m pip install flake8 ruff
 flake8 .
 ruff . --fix
 
-# Run formatter and lint
-isort . ; black . ; flake8 . ; ruff . --fix
+# Run type checking
+python -m pip install mypy pydantic
+mypy .
+
+# Run formatter, lint, and type checking
+isort . ; black . ; flake8 . ; ruff . --fix ; mypy .
 
 # Run tests
 python -m pip install pytest

@@ -5,13 +5,14 @@ import asyncio
 from datetime import datetime, timedelta
 from getpass import getpass
 import logging
+from typing import Optional
 
 import aiohttp
 
 from opower import AggregateType, Opower, ReadResolution, get_supported_utilities
 
 
-async def _main():
+async def _main() -> None:
     supported_utilities = [
         utility.__name__.lower()
         for utility in get_supported_utilities(supports_mfa=True)
@@ -101,6 +102,7 @@ async def _main():
                 "end_date=",
                 args.end_date,
             )
+            prev_end: Optional[datetime] = None
             if args.usage_only:
                 usage_data = await opower.async_get_usage_reads(
                     account,
@@ -108,7 +110,6 @@ async def _main():
                     args.start_date,
                     args.end_date,
                 )
-                prev_end = None
                 print(
                     "start_time\tend_time\tconsumption"
                     "\tstart_minus_prev_end\tend_minus_prev_end"
@@ -135,7 +136,6 @@ async def _main():
                     args.start_date,
                     args.end_date,
                 )
-                prev_end = None
                 print(
                     "start_time\tend_time\tconsumption\tprovided_cost"
                     "\tstart_minus_prev_end\tend_minus_prev_end"

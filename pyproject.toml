@@ -7,7 +7,7 @@ authors = [
 ]
 description = "A Python library for getting historical and forecasted usage/cost from utilities that use opower.com such as PG&E"
 readme = "README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.9"
 dependencies = [
     "aiohttp>=3.8",
     "arrow>=1.2",

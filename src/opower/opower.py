@@ -5,7 +5,7 @@ from datetime import date, datetime
 from enum import Enum
 import json
 import logging
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from urllib.parse import urlencode
 
 import aiohttp
@@ -26,7 +26,7 @@ class MeterType(Enum):
     ELEC = "ELEC"
     GAS = "GAS"
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Return the value of the enum."""
         return self.value
 
@@ -38,7 +38,7 @@ class UnitOfMeasure(Enum):
     THERM = "THERM"
     CCF = "CCF"
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Return the value of the enum."""
         return self.value
 
@@ -53,7 +53,7 @@ class AggregateType(Enum):
     # Home Assistant only has hourly data in the energy dashboard and
     # some utilities (e.g. PG&E) claim QUARTER_HOUR but they only provide HOUR.
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Return the value of the enum."""
         return self.value
 
@@ -67,7 +67,7 @@ class ReadResolution(Enum):
     HALF_HOUR = "HALF_HOUR"
     QUARTER_HOUR = "QUARTER_HOUR"
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Return the value of the enum."""
         return self.value
 
@@ -144,14 +144,14 @@ class UsageRead:
 
 
 # TODO: remove supports_mfa and accepts_mfa from all files after ConEd is released to Home Assistant
-def get_supported_utilities(supports_mfa=False) -> list[type["UtilityBase"]]:
+def get_supported_utilities(supports_mfa: bool = False) -> list[type["UtilityBase"]]:
     """Return a list of all supported utilities."""
     return [
         cls for cls in UtilityBase.subclasses if supports_mfa or not cls.accepts_mfa()
     ]
 
 
-def get_supported_utility_names(supports_mfa=False) -> list[str]:
+def get_supported_utility_names(supports_mfa: bool = False) -> list[str]:
     """Return a sorted list of names of all supported utilities."""
     return sorted(
         [
@@ -184,13 +184,13 @@ class Opower:
         """Initialize."""
         # Note: Do not modify default headers since Home Assistant that uses this library needs to use
         # a default session for all integrations. Instead specify the headers for each request.
-        self.session = session
+        self.session: aiohttp.ClientSession = session
         self.utility: type[UtilityBase] = _select_utility(utility)
-        self.username = username
-        self.password = password
-        self.optional_mfa_secret = optional_mfa_secret
-        self.access_token = None
-        self.customers = []
+        self.username: str = username
+        self.password: str = password
+        self.optional_mfa_secret: Optional[str] = optional_mfa_secret
+        self.access_token: Optional[str] = None
+        self.customers: list[Any] = []
 
     async def async_login(self) -> None:
         """Login to the utility website and authorize opower.com for access.
@@ -310,8 +310,8 @@ class Opower:
         self,
         account: Account,
         aggregate_type: AggregateType,
-        start_date: datetime | None = None,
-        end_date: datetime | None = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
         usage_only: bool = False,
     ) -> list[CostRead]:
         """Get usage and cost data for the selected account in the given date range aggregated by bill/day/hour.
@@ -328,7 +328,9 @@ class Opower:
                 CostRead(
                     start_time=datetime.fromisoformat(read["startTime"]),
                     end_time=datetime.fromisoformat(read["endTime"]),
-                    consumption=read["value"] if "value" in read else read["consumption"]["value"],
+                    consumption=read["value"]
+                    if "value" in read
+                    else read["consumption"]["value"],
                     provided_cost=read.get("providedCost", 0) or 0,
                 )
             )
@@ -351,8 +353,8 @@ class Opower:
         self,
         account: Account,
         aggregate_type: AggregateType,
-        start_date: datetime | None = None,
-        end_date: datetime | None = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
     ) -> list[UsageRead]:
         """Get usage data for the selected account in the given date range aggregated by bill/day/hour.
 
@@ -377,16 +379,15 @@ class Opower:
         self,
         account: Account,
         aggregate_type: AggregateType,
-        start_date: datetime | None = None,
-        end_date: datetime | None = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
         usage_only: bool = False,
     ) -> list[Any]:
         """Wrap _async_fetch by breaking requests for big date ranges to smaller ones to satisfy opower imposed limits."""
         # TODO: remove not None check after a Home Assistant release
         if (
             account.read_resolution is not None
-            and aggregate_type
-            not in SUPPORTED_AGGREGATE_TYPES.get(account.read_resolution)
+            and aggregate_type not in SUPPORTED_AGGREGATE_TYPES[account.read_resolution]
         ):
             raise ValueError(
                 f"Requested aggregate_type: {aggregate_type} "
@@ -433,8 +434,8 @@ class Opower:
         self,
         account: Account,
         aggregate_type: AggregateType,
-        start_date: datetime | arrow.Arrow | None = None,
-        end_date: datetime | arrow.Arrow | None = None,
+        start_date: Union[datetime, arrow.Arrow, None] = None,
+        end_date: Union[datetime, arrow.Arrow, None] = None,
         usage_only: bool = False,
     ) -> list[Any]:
         if usage_only:
@@ -476,7 +477,7 @@ class Opower:
                 result = await resp.json()
                 if DEBUG_LOG_RESPONSE:
                     _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
-                return result["reads"]
+                return list(result["reads"])
         except ClientResponseError as err:
             # Ignore server errors for BILL requests
             # that can happen if end_date is before account activation
@@ -484,7 +485,7 @@ class Opower:
                 return []
             raise err
 
-    def _get_headers(self):
+    def _get_headers(self) -> dict[str, str]:
         headers = {"User-Agent": USER_AGENT}
         if self.access_token:
             headers["authorization"] = f"Bearer {self.access_token}"

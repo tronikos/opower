@@ -19,9 +19,9 @@ class EvergyLoginParser(HTMLParser):
     def __init__(self) -> None:
         """Initialize."""
         super().__init__()
-        self.verification_token = None
+        self.verification_token: Optional[str] = None
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
         """Try to extract the verification token from the login input."""
         if tag == "input" and ("name", "evrgaf") in attrs:
             _, token = next(filter(lambda attr: attr[0] == "value", attrs))
@@ -31,7 +31,7 @@ class EvergyLoginParser(HTMLParser):
 class Evergy(UtilityBase):
     """Evergy."""
 
-    _subdomain = None
+    _subdomain: Optional[str] = None
 
     @staticmethod
     def name() -> str:
@@ -56,7 +56,7 @@ class Evergy(UtilityBase):
         password: str,
         optional_mfa_secret: Optional[str],
     ) -> str:
-        """Login to the utility website and authorize opower."""
+        """Login to the utility website."""
         login_parser = EvergyLoginParser()
 
         async with session.get(
@@ -91,7 +91,7 @@ class Evergy(UtilityBase):
             if resp.status == 200:
                 raise InvalidAuth("Username and password failed")
 
-        opower_access_token = None
+        opower_access_token: Optional[str] = None
 
         async with session.get(
             "https://www.evergy.com/api/sso/jwt",

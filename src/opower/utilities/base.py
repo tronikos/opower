@@ -1,7 +1,7 @@
 """Base class that each utility needs to extend."""
 
 
-from typing import Optional
+from typing import Any, Optional
 
 import aiohttp
 
@@ -11,7 +11,7 @@ class UtilityBase:
 
     subclasses: list[type["UtilityBase"]] = []
 
-    def __init_subclass__(cls, **kwargs) -> None:
+    def __init_subclass__(cls, **kwargs: Any) -> None:
         """Keep track of all subclass implementations."""
         super().__init_subclass__(**kwargs)
         cls.subclasses.append(cls)
@@ -35,7 +35,7 @@ class UtilityBase:
         raise NotImplementedError
 
     @staticmethod
-    def accepts_mfa() -> str:
+    def accepts_mfa() -> bool:
         """Check if Utility implementations supports MFA."""
         return False
 
@@ -45,8 +45,10 @@ class UtilityBase:
         username: str,
         password: str,
         optional_mfa_secret: Optional[str],
-    ) -> str | None:
-        """Login to the utility website and authorize opower.
+    ) -> Optional[str]:
+        """Login to the utility website.
+
+        Return the Opower access token or None if this function authorizes with Opower in other ways.
 
         :raises InvalidAuth: if login information is incorrect
         """
