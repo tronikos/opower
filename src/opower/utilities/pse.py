@@ -84,6 +84,9 @@ class PSE(UtilityBase):
         optional_mfa_secret: Optional[str],
     ) -> str:
         """Login to the utility website."""
+        # Double-logins are somewhat broken if cookies stay around.
+        session.cookie_jar.clear(lambda cookie: cookie["domain"] == "www.pse.com")
+
         login_parser = PSELoginParser()
 
         async with session.get(
