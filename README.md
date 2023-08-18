@@ -16,6 +16,7 @@ Supported utilities:
   - Potomac Electric Power Company (Pepco)
 - Pacific Gas & Electric (PG&E)
 - Puget Sound Energy (PSE)
+- Portland General Electric (PGE)
 
 ## Support a new utility
 
