@@ -52,7 +52,7 @@ python -m pip install .
 
 # Run formatter, lint, and type checking
 python -m pip install isort black flake8 ruff mypy pydantic
-isort . ; black . ; flake8 . ; ruff . --fix ; mypy .
+isort . ; black . ; flake8 . ; ruff . --fix ; mypy --install-types .
 
 # Run tests
 python -m pip install pytest

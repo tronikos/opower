@@ -42,7 +42,7 @@ jobs:
         ruff .
     - name: Static typing with mypy
       run: |
-        mypy --install-types --non-interactive --no-warn-unused-ignores .
+        mypy --install-types --non-interactive .
     - name: Test with pytest
       run: |
         pytest
