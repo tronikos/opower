@@ -23,13 +23,17 @@ class SMUDLoginParser(HTMLParser):
         """Try to extract the verification token from the login input."""
         if tag == "input" and ("name", "__RequestVerificationToken") in attrs:
             _, token = next(filter(lambda attr: attr[0] == "value", attrs))
+            print(token)
             self.verification_token = token
 
 
 class SMUDUsageParser(HTMLParser):
     """HTML parser to extract OPower bearer token from SMUD Usage page."""
+    """<input name="SAMLResponse" type="hidden" value="PD94bW"""
 
-    _regexp = re.compile(r'var accessToken\s+=\s+["\'](?P<token>.+)["\']')
+    #_regexp = re.compile(r'var accessToken\s+=\s+["\'](?P<token>.+)["\']')
+    #_regexp = re.compile(r'"SAMLResponse" type="hidden" value=["\'](?P<token>.+)["\']')
+    _regexp = re.compile(r'https:\/\/smud\.okta\.com\/login\/sessionCookieRedirect\?token=(?P<token>.+)&redirect.*')
 
     def __init__(self) -> None:
         """Initialize."""
@@ -98,11 +102,11 @@ class SMUD(UtilityBase):
             ), "Failed to parse __RequestVerificationToken"
 
         await session.post(
-            #"https://www.pse.com/api/pseauthentication/AsyncSignIn",
             "https://myaccount.smud.org",
             data={
                 "__RequestVerificationToken": login_parser.verification_token,
-                "GenericMessage": "Incorrect username or password",
+                #"GenericMessage": "Incorrect username or password",
+                "GenericMessage": "Sorry, you could not be authenticated with the information provided. Please try again.",
                 "LockedMessage": "Account is locked",
                 "ReturnUrl": "",
                 #"OtherPageUrl": "False",
@@ -114,26 +118,39 @@ class SMUD(UtilityBase):
             raise_for_status=True,
         )
 
+        usage_parser = SMUDUsageParser()
         async with session.get(
             #"https://www.pse.com/api/AccountSelector/GetContractAccountJson",
-            "https://myaccount.smud.org",
-            headers={"User-Agent": USER_AGENT},
-            raise_for_status=True,
-        ) as resp:
-            if len(await resp.text()) == 0:
-                raise InvalidAuth("Login failed")
-
-        usage_parser = SMUDUsageParser()
-
-        async with session.get(
             "https://myaccount.smud.org/manage/opowerresidential/energyusage",
+            allow_redirects=True,
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         ) as resp:
-            usage_parser.feed(await resp.text())
+            #if len(await resp.text()) == 0:
+            #    raise InvalidAuth("Login failed")
+            usage_parser.feed(await resp.history[1])
+            #print('text: ', resp.text)
+            #print('url: ', resp.url)
+            #print('status: ', resp.status)
+            print('history: ', resp.history[1])  ### The token is in here
 
             assert (
                 usage_parser.opower_access_token
             ), "Failed to parse OPower bearer token"
-
+        print(usage_parser.opower_access_token)
         return usage_parser.opower_access_token
+
+       # async with session.get(
+        #    "https://smud.okta.com/app/sacramentomunicipalutilitydistrict_opower_1/exk2iie3ttVlW7icF0x7/sso/saml?RelayState=https://smud.opower.com/ei/app/myEnergyUse",
+            #"https://myaccount.smud.org/manage/opowerresidential/energyusage",
+
+         #   headers={"User-Agent": USER_AGENT},
+        #    raise_for_status=True,
+       # ) as resp:
+            #usage_parser.feed(await resp.text())
+
+           # assert (
+          #      usage_parser.opower_access_token
+         #   ), "Failed to parse OPower bearer token"
+
+        #return usage_parser.opower_access_token
