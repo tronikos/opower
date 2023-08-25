@@ -9,10 +9,11 @@ from ..const import USER_AGENT
 from ..exceptions import InvalidAuth
 from .base import UtilityBase
 
-LOGIN_BASE = "https://www.coned.com/sitecore/api/ssc/ConEdWeb-Foundation-Login-Areas-LoginAPI/User/0"
+HOSTNAME = "coned.com"
+LOGIN_BASE = "https://www." + HOSTNAME + "/sitecore/api/ssc/ConEdWeb-Foundation-Login-Areas-LoginAPI/User/0"
 LOGIN_HEADERS = {
     "User-Agent": USER_AGENT,
-    "Referer": "https://www.coned.com/",
+    "Referer": "https://www." + HOSTNAME + "/",
 }
 RETURN_URL = "/en/accounts-billing/my-account/energy-use"
 
@@ -51,7 +52,7 @@ class ConEd(UtilityBase):
         # Double-logins are somewhat broken if cookies stay around.
         # Let's clear everything except device tokens (which allow skipping 2FA)
         session.cookie_jar.clear(
-            lambda cookie: cookie["domain"] == "www.coned.com"
+            lambda cookie: cookie["domain"] == "www." + HOSTNAME
             and cookie.key != "CE_DEVICE_ID"
         )
 
@@ -115,7 +116,7 @@ class ConEd(UtilityBase):
                 pass
 
         async with session.get(
-            "https://www.coned.com/sitecore/api/ssc/ConEd-Cms-Services-Controllers-Opower/OpowerService/0/GetOPowerToken",
+            "https://www." + HOSTNAME + "/sitecore/api/ssc/ConEd-Cms-Services-Controllers-Opower/OpowerService/0/GetOPowerToken",
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         ) as resp:
