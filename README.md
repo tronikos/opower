@@ -5,6 +5,7 @@ A Python library for getting historical and forecasted usage/cost from utilities
 Supported utilities:
 
 - Consolidated Edison (ConEd)
+  - Orange & Rockland Utilities (ORU)
 - Evergy
 - Exelon subsidiaries
   - Atlantic City Electric
