@@ -257,6 +257,15 @@ class Opower:
                 # For some customers utilities don't provide forecast
                 _LOGGER.debug("Ignoring combined-forecast error: %s", err.status)
                 continue
+            if all(
+                x in result["totalMetadata"]
+                for x in ["NO_FORECASTED_COST", "NO_FORECASTED_USAGE"]
+            ):
+                _LOGGER.debug(
+                    "Ignoring combined-forecast since there is no usage or cost. metadata: %s",
+                    result["totalMetadata"],
+                )
+                continue
             for forecast in result["accountForecasts"]:
                 forecasts.append(
                     Forecast(
