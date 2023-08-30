@@ -13,6 +13,7 @@ from .opower import (
     UsageRead,
     get_supported_utilities,
     get_supported_utility_names,
+    select_utility,
 )
 
 __all__ = [
@@ -29,4 +30,5 @@ __all__ = [
     "UsageRead",
     "get_supported_utilities",
     "get_supported_utility_names",
+    "select_utility",
 ]

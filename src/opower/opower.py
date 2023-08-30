@@ -143,26 +143,17 @@ class UsageRead:
     consumption: float  # taken from consumption.value field, in KWH or THERM/CCF
 
 
-# TODO: remove supports_mfa and accepts_mfa from all files after ConEd is released to Home Assistant
-def get_supported_utilities(supports_mfa: bool = False) -> list[type["UtilityBase"]]:
+def get_supported_utilities() -> list[type["UtilityBase"]]:
     """Return a list of all supported utilities."""
-    return [
-        cls for cls in UtilityBase.subclasses if supports_mfa or not cls.accepts_mfa()
-    ]
+    return UtilityBase.subclasses
 
 
-def get_supported_utility_names(supports_mfa: bool = False) -> list[str]:
+def get_supported_utility_names() -> list[str]:
     """Return a sorted list of names of all supported utilities."""
-    return sorted(
-        [
-            utility.name()
-            for utility in UtilityBase.subclasses
-            if supports_mfa or not utility.accepts_mfa()
-        ]
-    )
+    return sorted([utility.name() for utility in UtilityBase.subclasses])
 
 
-def _select_utility(name: str) -> type[UtilityBase]:
+def select_utility(name: str) -> type[UtilityBase]:
     """Return the utility with the given name."""
     for utility in UtilityBase.subclasses:
         if name.lower() in [utility.name().lower(), utility.__name__.lower()]:
@@ -185,7 +176,7 @@ class Opower:
         # Note: Do not modify default headers since Home Assistant that uses this library needs to use
         # a default session for all integrations. Instead specify the headers for each request.
         self.session: aiohttp.ClientSession = session
-        self.utility: type[UtilityBase] = _select_utility(utility)
+        self.utility: type[UtilityBase] = select_utility(utility)
         self.username: str = username
         self.password: str = password
         self.optional_mfa_secret: Optional[str] = optional_mfa_secret
@@ -393,7 +384,6 @@ class Opower:
         usage_only: bool = False,
     ) -> list[Any]:
         """Wrap _async_fetch by breaking requests for big date ranges to smaller ones to satisfy opower imposed limits."""
-        # TODO: remove not None check after a Home Assistant release
         if (
             account.read_resolution is not None
             and aggregate_type not in SUPPORTED_AGGREGATE_TYPES[account.read_resolution]

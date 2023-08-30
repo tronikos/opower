@@ -9,13 +9,18 @@ from typing import Optional
 
 import aiohttp
 
-from opower import AggregateType, Opower, ReadResolution, get_supported_utilities
+from opower import (
+    AggregateType,
+    Opower,
+    ReadResolution,
+    get_supported_utilities,
+    select_utility,
+)
 
 
 async def _main() -> None:
     supported_utilities = [
-        utility.__name__.lower()
-        for utility in get_supported_utilities(supports_mfa=True)
+        utility.__name__.lower() for utility in get_supported_utilities()
     ]
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -72,9 +77,12 @@ async def _main() -> None:
     utility = args.utility or input(f"Utility, one of {supported_utilities}: ")
     username = args.username or input("Username: ")
     password = args.password or getpass("Password: ")
+    mfa_secret = args.mfa_secret or (
+        input("2FA secret: ") if select_utility(utility).accepts_mfa() else None
+    )
 
     async with aiohttp.ClientSession() as session:
-        opower = Opower(session, utility, username, password, args.mfa_secret)
+        opower = Opower(session, utility, username, password, mfa_secret)
         await opower.async_login()
         # Re-login to make sure code handles already logged in sessions.
         await opower.async_login()
