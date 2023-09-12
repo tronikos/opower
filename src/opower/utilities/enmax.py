@@ -44,7 +44,7 @@ class Enmax(UtilityBase):
         optional_mfa_secret: Optional[str],
     ) -> None:
 
-        """Get request digest"""
+        #Get request digest (required for authentication to Enmax)
         async with session.post(
             "https://www.enmax.com/SignInSite/_vti_bin/sites.asmx",
             headers={
@@ -60,8 +60,10 @@ class Enmax(UtilityBase):
         for i in xml.iter():
             if(i.tag == "{http://schemas.microsoft.com/sharepoint/soap/}GetUpdatedFormDigestResult"):
                 requestdigest = i.text
+        if(not requestdigest):
+            raise InvalidAuth("Request digest was not found.")
 
-        """Login to the utility website."""
+        #Login to the utility website
         async with session.post(
             "https://www.enmax.com/SignInSite/_vti_bin/Enmax.Internet.Auth/AuthService.svc/AuthenticateUser",
             json={
@@ -81,7 +83,7 @@ class Enmax(UtilityBase):
             if result['ErrorMessage']:
                 raise InvalidAuth(result['ErrorMessage'])
 
-        """Authorization code for opower"""
+        #Authorization code for opower
         async with session.post(
             "https://www.enmax.com/YourAccountSite/_vti_bin/Enmax.Internet.Opower/MyEnergyIQService.svc/IssueAccessToken",
             headers={"User-Agent": USER_AGENT},
