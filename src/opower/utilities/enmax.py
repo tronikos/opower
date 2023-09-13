@@ -1,8 +1,4 @@
 """Enmax"""
-import debugpy
-debugpy.listen(5678)
-debugpy.wait_for_client()
-
 import logging
 import aiohttp
 from typing import Optional
@@ -11,9 +7,6 @@ import xml.etree.ElementTree as ET
 from ..const import USER_AGENT
 from ..exceptions import InvalidAuth
 from .base import UtilityBase
-
-
-_LOGGER = logging.getLogger(__file__)
 
 class Enmax(UtilityBase):
     @staticmethod
@@ -83,12 +76,11 @@ class Enmax(UtilityBase):
             if result['ErrorMessage']:
                 raise InvalidAuth(result['ErrorMessage'])
 
-        #Authorization code for opower
+        #Get authorization token for opower
         async with session.post(
             "https://www.enmax.com/YourAccountSite/_vti_bin/Enmax.Internet.Opower/MyEnergyIQService.svc/IssueAccessToken",
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         ) as resp:
             token = await resp.text()
-            _LOGGER.info(token)
             return str(token).replace('"', '')
