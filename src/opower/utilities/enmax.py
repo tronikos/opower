@@ -1,5 +1,4 @@
 """Enmax"""
-import logging
 import aiohttp
 from typing import Optional
 import xml.etree.ElementTree as ET
