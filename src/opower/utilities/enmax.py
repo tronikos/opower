@@ -1,7 +1,9 @@
+
 """Enmax."""
-import aiohttp
 from typing import Optional
 import xml.etree.ElementTree as ET
+
+import aiohttp
 
 from ..const import USER_AGENT
 from ..exceptions import InvalidAuth
