@@ -1,4 +1,4 @@
-"""Enmax"""
+"""Enmax."""
 import aiohttp
 from typing import Optional
 import xml.etree.ElementTree as ET
@@ -7,7 +7,10 @@ from ..const import USER_AGENT
 from ..exceptions import InvalidAuth
 from .base import UtilityBase
 
+
 class Enmax(UtilityBase):
+    """Enmax."""
+
     @staticmethod
     def name() -> str:
         """Distinct recognizable name of the utility."""
@@ -34,28 +37,32 @@ class Enmax(UtilityBase):
         username: str,
         password: str,
         optional_mfa_secret: Optional[str],
-    ) -> None:
-
-        #Get request digest (required for authentication to Enmax)
+    ) -> str:
+        """Login to the utility website."""
+        # Get request digest (required for authentication to Enmax)
         async with session.post(
             "https://www.enmax.com/SignInSite/_vti_bin/sites.asmx",
             headers={
                 "User-Agent": USER_AGENT,
-                "Content-Type": 'text/xml',
-                },
+                "Content-Type": "text/xml",
+            },
             data=b'<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">  <soap:Body>    <GetUpdatedFormDigest xmlns="http://schemas.microsoft.com/sharepoint/soap/" />  </soap:Body></soap:Envelope>',
             raise_for_status=True,
         ) as resp:
-            xml = await resp.text()
+            xml_response = await resp.text()
 
-        xml = ET.fromstring(xml)
+        xml = ET.fromstring(xml_response)
         for i in xml.iter():
-            if(i.tag == "{http://schemas.microsoft.com/sharepoint/soap/}GetUpdatedFormDigestResult"):
+            if (
+                i.tag
+                == "{http://schemas.microsoft.com/sharepoint/soap/}GetUpdatedFormDigestResult"
+            ):
                 requestdigest = i.text
-        if(not requestdigest):
+                break
+        if not requestdigest:
             raise InvalidAuth("Request digest was not found.")
 
-        #Login to the utility website
+        # Login to the utility website
         async with session.post(
             "https://www.enmax.com/SignInSite/_vti_bin/Enmax.Internet.Auth/AuthService.svc/AuthenticateUser",
             json={
@@ -67,19 +74,20 @@ class Enmax(UtilityBase):
             headers={
                 "User-Agent": USER_AGENT,
                 "X-RequestDigest": requestdigest,
-                "referer": 'https://www.enmax.com/sign-in',
+                "referer": "https://www.enmax.com/sign-in",
             },
             raise_for_status=True,
         ) as resp:
             result = await resp.json()
-            if result['ErrorMessage']:
-                raise InvalidAuth(result['ErrorMessage'])
+            if result["ErrorMessage"]:
+                raise InvalidAuth(result["ErrorMessage"])
 
-        #Get authorization token for opower
+        # Get authorization token for opower
         async with session.post(
             "https://www.enmax.com/YourAccountSite/_vti_bin/Enmax.Internet.Opower/MyEnergyIQService.svc/IssueAccessToken",
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         ) as resp:
             token = await resp.text()
-            return str(token).replace('"', '')
+
+        return token.replace('"', "")
