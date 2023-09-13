@@ -46,7 +46,13 @@ class Enmax(UtilityBase):
                 "User-Agent": USER_AGENT,
                 "Content-Type": "text/xml",
             },
-            data=b'<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">  <soap:Body>    <GetUpdatedFormDigest xmlns="http://schemas.microsoft.com/sharepoint/soap/" />  </soap:Body></soap:Envelope>',
+            data=(
+                b'<?xml version="1.0" encoding="utf-8"?>'
+                b'<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"'
+                b'xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">'
+                b'<soap:Body><GetUpdatedFormDigest xmlns="http://schemas.microsoft.com/sharepoint/soap/" />'
+                b"</soap:Body></soap:Envelope>"
+            ),
             raise_for_status=True,
         ) as resp:
             xml_response = await resp.text()
