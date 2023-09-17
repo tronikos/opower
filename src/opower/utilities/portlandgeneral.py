@@ -33,7 +33,7 @@ class PortlandGeneral(UtilityBase):
         username: str,
         password: str,
         optional_mfa_secret: Optional[str],
-    ) -> None:
+    ) -> str:
         """Login to the utility website."""
         async with session.post(
             "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword",
@@ -86,4 +86,4 @@ class PortlandGeneral(UtilityBase):
                     "Username and Passord Succeeded, but api responded with "
                     + str(result["errorResponse"])
                 )
-            return result.get("access_token")
+            return str(result.get("access_token"))
