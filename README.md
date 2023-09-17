@@ -15,8 +15,8 @@ Supported utilities:
   - PECO Energy Company (PECO)
   - Potomac Electric Power Company (Pepco)
 - Pacific Gas & Electric (PG&E)
-- Puget Sound Energy (PSE)
 - Portland General Electric (PGE)
+- Puget Sound Energy (PSE)
 
 ## Support a new utility
 
