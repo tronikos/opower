@@ -1,8 +1,6 @@
 """Portland General Electric (PGE)."""
 
-import re
 from typing import Optional
-import urllib.parse
 
 import aiohttp
 
@@ -10,7 +8,8 @@ from ..const import USER_AGENT
 from ..exceptions import InvalidAuth
 from .base import UtilityBase
 
-class PGN(UtilityBase):
+
+class PortlandGeneral(UtilityBase):
     """Portland General Electric (PGE)."""
 
     @staticmethod
@@ -38,7 +37,7 @@ class PGN(UtilityBase):
         """Login to the utility website."""
         async with session.post(
             "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword",
-            headers = {
+            headers={
                 "authority": "identitytoolkit.googleapis.com",
                 "User-Agent": USER_AGENT,
                 "accept": "*/*",
@@ -46,36 +45,45 @@ class PGN(UtilityBase):
                 "origin": "https://portlandgeneral.com",
                 "referer": "https://portlandgeneral.com/",
             },
-            json = {
+            json={
                 "email": username,
                 "password": password,
                 "returnSecureToken": True,
             },
-            params = {
-                "key": "AIzaSyDGQGl4SfFoD_KJTo87PboxfNmq89pifqU", #learned from https://github.com/piekstra/portlandgeneral-api
+            params={
+                "key": "AIzaSyDGQGl4SfFoD_KJTo87PboxfNmq89pifqU",  # learned from https://github.com/piekstra/portlandgeneral-api
+                # If this is incorrect, the resp is 400 and indistinguishable from incorrect username or password
             },
             raise_for_status=False,
         ) as resp:
             if resp.status == 400:
                 raise InvalidAuth("Username and password failed")
             result = await resp.json()
-        
+
         async with session.post(
             "https://api.portlandgeneral.com/pg-token-implicit/token",
-            params = {
-                "client_id": "VrrKnd0tw2O4zIM6vqHLYn0PxM3ZW2hY",
+            params={
+                "client_id": "VrrKnd0tw2O4zIM6vqHLYn0PxM3ZW2hY",  # learned from https://github.com/piekstra/portlandgeneral-api
                 "response_type": "token",
-                "redirect_uri": ""  # Not sure why this is present with an empty value
+                "redirect_uri": "",  # Not sure why this is present with an empty value
             },
-            headers = {
+            headers={
                 "content-length": "0",
                 "User-Agent": USER_AGENT,
-                "idp_access_token": result.get('idToken'),
+                "idp_access_token": result.get("idToken"),
             },
-            raise_for_status=True,
+            raise_for_status=False,
         ) as resp:
-            result = await resp.json() 
-            if "errorMsg" in result:
-                raise InvalidAuth(result["errorMsg"])
-            return result.get('access_token') 
-        
+            result = await resp.json()
+            if resp.status == 500:
+                raise InvalidAuth(
+                    "Username and Passord Succeeded, but api responded with "
+                    + str(result["errorResponse"])
+                    + ". Code 500 could mean the client_id const is incorrect."
+                )
+            if "errorResponse" in result:
+                raise InvalidAuth(
+                    "Username and Passord Succeeded, but api responded with "
+                    + str(result["errorResponse"])
+                )
+            return result.get("access_token")
