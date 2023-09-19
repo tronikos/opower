@@ -1,4 +1,3 @@
-
 """Enmax."""
 from typing import Optional
 import xml.etree.ElementTree as ET
@@ -27,11 +26,6 @@ class Enmax(UtilityBase):
     def timezone() -> str:
         """Return the timezone."""
         return "America/Edmonton"
-
-    @staticmethod
-    def accepts_mfa() -> bool:
-        """Check if Utility implementations supports MFA."""
-        return False
 
     @staticmethod
     async def async_login(
