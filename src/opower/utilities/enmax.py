@@ -37,16 +37,16 @@ class Enmax(UtilityBase):
         """Login to the utility website."""
         # Get request digest (required for authentication to Enmax)
         async with session.post(
-            "https://www.enmax.com/SignInSite/_vti_bin/sites.asmx",
+            "https://www.enmax.com/ForYourHomeSite/_vti_bin/sites.asmx",
             headers={
                 "User-Agent": USER_AGENT,
                 "Content-Type": "text/xml",
             },
             data=(
                 b'<?xml version="1.0" encoding="utf-8"?>'
-                b'<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"'
-                b'xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">'
-                b'<soap:Body><GetUpdatedFormDigest xmlns="http://schemas.microsoft.com/sharepoint/soap/" />'
+                b'<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+                b'xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">  '
+                b'<soap:Body>     <GetUpdatedFormDigest xmlns="http://schemas.microsoft.com/sharepoint/soap/" />  '
                 b"</soap:Body></soap:Envelope>"
             ),
             raise_for_status=True,
@@ -66,7 +66,7 @@ class Enmax(UtilityBase):
 
         # Login to the utility website
         async with session.post(
-            "https://www.enmax.com/SignInSite/_vti_bin/Enmax.Internet.Auth/AuthService.svc/AuthenticateUser",
+            "https://www.enmax.com/ForYourHomeSite/_vti_bin/Enmax.Internet.Auth/AuthService.svc/AuthenticateUser",
             json={
                 "email": username,
                 "password": password,
