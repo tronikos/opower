@@ -171,7 +171,9 @@ class Exelon:
             ) as resp:
                 result = await resp.text(encoding="utf-8")
 
-            if resp.request_info.url.path.endswith("/accounts/login/select-account"):
+            if resp.request_info.url.path.endswith(
+                "/accounts/login/select-account"
+            ) or resp.request_info.url.path.endswith("Pages/ChangeAccount.aspx"):
                 # we probably need to select an account as we didn't automatically go to the dashboard
                 async with session.get(
                     "https://"
