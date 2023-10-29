@@ -94,7 +94,7 @@ class ConEd(UtilityBase):
                                 "TOTP secret is required for MFA accounts"
                             )
 
-                        mfaCode = TOTP(optional_mfa_secret).now()
+                        mfaCode = TOTP(optional_mfa_secret.strip()).now()
 
                         async with session.post(
                             login_base + "/VerifyFactor",
