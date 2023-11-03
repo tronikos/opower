@@ -251,7 +251,7 @@ class Opower:
             if all(
                 x in result["totalMetadata"]
                 for x in ["NO_FORECASTED_COST", "NO_FORECASTED_USAGE"]
-            ):
+            ) and "DATA_COVERAGE_QUALITY_CHECK_FAILED" not in result["totalMetadata"]:
                 _LOGGER.debug(
                     "Ignoring combined-forecast since there is no usage or cost. metadata: %s",
                     result["totalMetadata"],
