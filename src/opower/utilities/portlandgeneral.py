@@ -77,13 +77,13 @@ class PortlandGeneral(UtilityBase):
             result = await resp.json()
             if resp.status == 500:
                 raise InvalidAuth(
-                    "Username and Passord Succeeded, but api responded with "
+                    "Username and Password Succeeded, but api responded with "
                     + str(result["errorResponse"])
                     + ". Code 500 could mean the client_id const is incorrect."
                 )
             if "errorResponse" in result:
                 raise InvalidAuth(
-                    "Username and Passord Succeeded, but api responded with "
+                    "Username and Password Succeeded, but api responded with "
                     + str(result["errorResponse"])
                 )
             return str(result.get("access_token"))

@@ -92,4 +92,4 @@ class Enmax(UtilityBase):
         ) as resp:
             token = await resp.text()
 
-        return token.replace('"', "")
+        return str(token.replace('"', ""))

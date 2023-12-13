@@ -54,7 +54,12 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install .
 
-# Run formatter, lint, and type checking
+# Run pre-commit
+python -m pip install pre-commit
+pre-commit install
+pre-commit run --all-files
+
+# Alternative: run formatter, lint, and type checking
 python -m pip install isort black flake8 ruff mypy pydantic
 isort . ; black . ; flake8 . ; ruff . --fix ; mypy --install-types .
 
