@@ -2,7 +2,9 @@
 
 from .aep import AEP
 from .base import UtilityBase
-class AEPO(AEP, UtilityBase):
+
+
+class AEPOHio(AEP, UtilityBase):
     """American Electric Power Ohio."""
 
     @staticmethod
@@ -14,16 +16,11 @@ class AEPO(AEP, UtilityBase):
     def subdomain() -> str:
         """Return the opower.com subdomain for this utility."""
         return "aepo"
-    
+
     @staticmethod
     def timezone() -> str:
         """Return the timezone."""
         return "America/New_York"
-
-    @staticmethod
-    def accepts_mfa() -> bool:
-        """Check if Utility implementations supports MFA."""
-        return False
 
     @staticmethod
     def hostname() -> str:
