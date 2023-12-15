@@ -4,6 +4,8 @@ A Python library for getting historical and forecasted usage/cost from utilities
 
 Supported utilities:
 
+- American Electric Power (AEP) subsidiaries
+  - AEP Ohio
 - Consolidated Edison (ConEd)
   - Orange & Rockland Utilities (ORU)
 - Enmax Energy
@@ -19,8 +21,6 @@ Supported utilities:
 - Portland General Electric (PGE)
 - Puget Sound Energy (PSE)
 - Seattle City Light (SCL)
-- AEP
-  - AEPOhio
 
 ## Support a new utility
 

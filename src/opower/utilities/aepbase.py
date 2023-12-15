@@ -1,4 +1,5 @@
 """Base Abstract class for American Electric Power."""
+
 from abc import ABC
 from html.parser import HTMLParser
 import re
@@ -7,9 +8,8 @@ import urllib.parse
 
 import aiohttp
 
-from opower import InvalidAuth
-
 from ..const import USER_AGENT
+from ..exceptions import InvalidAuth
 from .helpers import async_auth_saml
 
 
@@ -84,24 +84,14 @@ class AEPBase(ABC):
     """Base class for American Electric Power Companies."""
 
     @staticmethod
-    def name() -> str:
-        """Distinct recognizable name of the utility."""
-        return ""
-
-    @staticmethod
     def subdomain() -> str:
         """Return the opower.com subdomain for this utility."""
-        return ""
-
-    @staticmethod
-    def timezone() -> str:
-        """Return the timezone."""
-        return ""
+        raise NotImplementedError
 
     @staticmethod
     def hostname() -> str:
         """Return the hostname for login."""
-        return ""
+        raise NotImplementedError
 
     @classmethod
     async def async_login(
@@ -132,34 +122,34 @@ class AEPBase(ABC):
         ) as resp:
             token_parser.feed(await resp.text())
 
-        if token_parser.token_url is not None:
-            client_url_callback = urllib.parse.quote_plus(
-                "https:" + token_parser.token_url + "&ou-session-initiated=true",
-                safe="",
-            )
-            client_url = urllib.parse.quote_plus(
-                f"/x/embedded-api/redirect?client-url={client_url_callback}", safe=""
-            )
-            failure_url_callback = urllib.parse.quote_plus(
-                "https:"
-                + token_parser.token_url
-                + "&ou-session-initiated=true&ou-auth-error=auth-failed",
-                safe="",
-            )
-            failure_url = urllib.parse.quote_plus(
-                f"/x/embedded-api/redirect?client-url={failure_url_callback}", safe=""
-            )
-            target = (
-                f"https://{cls.subdomain()}.opower.com/ei/app/api/authenticate"
-                + urllib.parse.quote_plus(
-                    f"?redirectUrl={client_url}&failureUrl={failure_url}"
-                )
-            )
-
-            url = (
-                "https://sso.opower.com/sp/startSSO.ping?"
-                f"PartnerIdpId=AEPCustomer&TargetResource={target}"
-            )
-            await async_auth_saml(session, url)
-        else:
+        if token_parser.token_url is None:
             raise InvalidAuth("Username/Password are invalid")
+
+        client_url_callback = urllib.parse.quote_plus(
+            "https:" + token_parser.token_url + "&ou-session-initiated=true",
+            safe="",
+        )
+        client_url = urllib.parse.quote_plus(
+            f"/x/embedded-api/redirect?client-url={client_url_callback}", safe=""
+        )
+        failure_url_callback = urllib.parse.quote_plus(
+            "https:"
+            + token_parser.token_url
+            + "&ou-session-initiated=true&ou-auth-error=auth-failed",
+            safe="",
+        )
+        failure_url = urllib.parse.quote_plus(
+            f"/x/embedded-api/redirect?client-url={failure_url_callback}", safe=""
+        )
+        target = (
+            f"https://{cls.subdomain()}.opower.com/ei/app/api/authenticate"
+            + urllib.parse.quote_plus(
+                f"?redirectUrl={client_url}&failureUrl={failure_url}"
+            )
+        )
+
+        url = (
+            "https://sso.opower.com/sp/startSSO.ping?"
+            f"PartnerIdpId=AEPCustomer&TargetResource={target}"
+        )
+        await async_auth_saml(session, url)
