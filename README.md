@@ -4,6 +4,8 @@ A Python library for getting historical and forecasted usage/cost from utilities
 
 Supported utilities:
 
+- American Electric Power (AEP) subsidiaries
+  - AEP Ohio
 - Consolidated Edison (ConEd)
   - Orange & Rockland Utilities (ORU)
 - Enmax Energy
