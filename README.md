@@ -19,6 +19,8 @@ Supported utilities:
 - Portland General Electric (PGE)
 - Puget Sound Energy (PSE)
 - Seattle City Light (SCL)
+- AEP
+  - AEPOhio
 
 ## Support a new utility
 

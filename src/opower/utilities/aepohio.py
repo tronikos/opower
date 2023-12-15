@@ -1,10 +1,10 @@
 """American Electric Power Ohio."""
 
-from .aep import AEP
+from .aepbase import AEPBase
 from .base import UtilityBase
 
 
-class AEPOHio(AEP, UtilityBase):
+class AEPOHio(AEPBase, UtilityBase):
     """American Electric Power Ohio."""
 
     @staticmethod
