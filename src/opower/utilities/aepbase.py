@@ -14,7 +14,7 @@ from .helpers import async_auth_saml
 
 
 class AEPLoginParser(HTMLParser):
-    """HTML parser to extract login verification token from PSE Login page."""
+    """HTML parser to extract login input fields."""
 
     def __init__(self, username: str, password: str) -> None:
         """Initialize."""
@@ -22,9 +22,10 @@ class AEPLoginParser(HTMLParser):
         self.inputs: dict[str, str] = {}
         self.username = username
         self.password = password
+        self.password_field_found = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
-        """Try to extract the verification token from the login input."""
+        """Try to extract the login input fields."""
         if tag == "input":
             name = ""
             value = ""
@@ -37,11 +38,12 @@ class AEPLoginParser(HTMLParser):
                 value = self.username
             if "Password" in name:
                 value = self.password
+                self.password_field_found = True
             self.inputs[name] = value
 
 
 class AEPTokenParser(HTMLParser):
-    """HTML parser to extract token and cookies."""
+    """HTML parser to extract token url and cookie."""
 
     _regexp = re.compile(r"var cookieKey = '(?P<cookieKey>\w+)'")
 
@@ -53,7 +55,7 @@ class AEPTokenParser(HTMLParser):
         self.token_url: Optional[str] = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
-        """Try to extract the verification token from the login input."""
+        """Try to extract the token url."""
         if tag == "iframe":
             # Look for <iframe src=\"//www.aepohio.com/widgets/sso/opower?token=...&domain=www.aepohio.com\"
             for a in attrs:
@@ -68,7 +70,7 @@ class AEPTokenParser(HTMLParser):
             self._in_inline_script = True
 
     def handle_data(self, data: str) -> None:
-        """Try to extract the access token from the inline script."""
+        """Try to extract the cookie from the inline script."""
         if self._in_inline_script:
             result = self._regexp.search(data)
             if result and result.group("cookieKey"):
@@ -81,12 +83,20 @@ class AEPTokenParser(HTMLParser):
 
 
 class AEPBase(ABC):
-    """Base class for American Electric Power Companies."""
+    """Base Abstract class for American Electric Power."""
+
+    _subdomain: Optional[str] = None
+
+    @classmethod
+    def subdomain(cls) -> str:
+        """Return the opower.com subdomain for this utility."""
+        assert cls._subdomain, "async_login not called"
+        return cls._subdomain
 
     @staticmethod
-    def subdomain() -> str:
-        """Return the opower.com subdomain for this utility."""
-        raise NotImplementedError
+    def timezone() -> str:
+        """Return the timezone."""
+        return "America/New_York"
 
     @staticmethod
     def hostname() -> str:
@@ -113,6 +123,10 @@ class AEPBase(ABC):
         ) as resp:
             login_parser.feed(await resp.text())
 
+        if not login_parser.password_field_found:
+            # Assume we are already logged in
+            return
+
         # Post the login page with the user credentials and get the cookieKey
         async with session.post(
             f"https://www.{cls.hostname()}/account/usage/",
@@ -120,36 +134,25 @@ class AEPBase(ABC):
             raise_for_status=True,
             data=login_parser.inputs,
         ) as resp:
-            token_parser.feed(await resp.text())
+            html = await resp.text()
+            token_parser.feed(html)
 
-        if token_parser.token_url is None:
+        if token_parser.token_url is None or token_parser.cookieKey is None:
             raise InvalidAuth("Username/Password are invalid")
 
-        client_url_callback = urllib.parse.quote_plus(
-            "https:" + token_parser.token_url + "&ou-session-initiated=true",
-            safe="",
-        )
-        client_url = urllib.parse.quote_plus(
-            f"/x/embedded-api/redirect?client-url={client_url_callback}", safe=""
-        )
-        failure_url_callback = urllib.parse.quote_plus(
-            "https:"
-            + token_parser.token_url
-            + "&ou-session-initiated=true&ou-auth-error=auth-failed",
-            safe="",
-        )
-        failure_url = urllib.parse.quote_plus(
-            f"/x/embedded-api/redirect?client-url={failure_url_callback}", safe=""
-        )
-        target = (
-            f"https://{cls.subdomain()}.opower.com/ei/app/api/authenticate"
-            + urllib.parse.quote_plus(
-                f"?redirectUrl={client_url}&failureUrl={failure_url}"
+        match = re.search(r"https://([^.]*).opower.com", html)
+        assert match
+        cls._subdomain = match.group(1)
+
+        url = (
+            f"https://{cls.subdomain()}.opower.com/ei/x/embedded-api/authenticate?"
+            + urllib.parse.urlencode(
+                {
+                    "client-url": f"https:{token_parser.token_url}&ou-session-initiated=true",
+                    "error-param": "ou-auth-error",
+                    "ou-entity-id": token_parser.cookieKey,
+                }
             )
         )
 
-        url = (
-            "https://sso.opower.com/sp/startSSO.ping?"
-            f"PartnerIdpId=AEPCustomer&TargetResource={target}"
-        )
         await async_auth_saml(session, url)

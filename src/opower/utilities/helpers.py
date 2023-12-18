@@ -39,6 +39,8 @@ async def async_auth_saml(session: aiohttp.ClientSession, url: str) -> None:
     ) as resp:
         result = await resp.text()
     action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(result)
+    if action_url == "":
+        return
     assert set(hidden_inputs.keys()) == {"opentoken"}
 
     # Pass it back to the utility website.

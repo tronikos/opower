@@ -2,10 +2,16 @@
 
 A Python library for getting historical and forecasted usage/cost from utilities that use opower.com such as PG&amp;E.
 
-Supported utilities:
+Supported utilities (in alphabetical order):
 
 - American Electric Power (AEP) subsidiaries
   - AEP Ohio
+  - AEP Texas
+  - Appalachian Power
+  - Indiana Michigan Power
+  - Kentucky Power
+  - Public Service Company of Oklahoma (PSO)
+  - Southwestern Electric Power Company (SWEPCO)
 - Consolidated Edison (ConEd)
   - Orange & Rockland Utilities (ORU)
 - Enmax Energy

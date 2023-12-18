@@ -1,18 +1,18 @@
-"""AEP Ohio."""
+"""Appalachian Power."""
 
 from .aepbase import AEPBase
 from .base import UtilityBase
 
 
-class AEPOHio(AEPBase, UtilityBase):
-    """AEP Ohio."""
+class AppalachianPower(AEPBase, UtilityBase):
+    """Appalachian Power."""
 
     @staticmethod
     def name() -> str:
         """Distinct recognizable name of the utility."""
-        return "AEP Ohio"
+        return "Appalachian Power"
 
     @staticmethod
     def hostname() -> str:
         """Return the hostname for login."""
-        return "aepohio.com"
+        return "appalachianpower.com"
