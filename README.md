@@ -36,7 +36,7 @@ Since this library is used by Home Assistant, see <https://www.home-assistant.io
 
 > An exception is made for the authentication phase. An integration is allowed to extract fields from forms. To make it more robust, data should not be gathered by scraping individual fields but instead scrape all fields at once.
 
-So follow that advice and try to scrape all fields at once, similar to the `_get_form_action_url_and_hidden_inputs` in pge.py.
+So follow that advice and try to scrape all fields at once, similar to the `get_form_action_url_and_hidden_inputs` in helpers.py.
 
 ## Example
 
