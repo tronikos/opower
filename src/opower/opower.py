@@ -182,6 +182,7 @@ class Opower:
         self.optional_mfa_secret: Optional[str] = optional_mfa_secret
         self.access_token: Optional[str] = None
         self.customers: list[Any] = []
+        self.accounts: list[Any] = []
 
     async def async_login(self) -> None:
         """Login to the utility website and authorize opower.com for access.
@@ -228,9 +229,9 @@ class Opower:
         for customer in await self._async_get_customers():
             customer_uuid = customer["uuid"]
             url = (
-                "https://"
+                "https://dss-"
                 f"{self.utility.subdomain()}"
-                ".opower.com/ei/edge/apis/bill-forecast-cws-v1/cws/"
+                ".opower.com/webcenter/edge/apis/bill-forecast-cws-v1/cws/"
                 f"{self.utility.subdomain()}"
                 "/customers/"
                 f"{customer_uuid}"
@@ -290,10 +291,12 @@ class Opower:
         """Get customers associated to the user."""
         # Cache the customers
         if not self.customers:
+            await self._async_get_accounts()
+
             url = (
-                "https://"
+                "https://dss-"
                 f"{self.utility.subdomain()}"
-                ".opower.com/ei/edge/apis/multi-account-v1/cws/"
+                ".opower.com/webcenter/edge/apis/multi-account-v1/cws/"
                 f"{self.utility.subdomain()}"
                 "/customers?offset=0&batchSize=100&addressFilter="
             )
@@ -308,6 +311,29 @@ class Opower:
                 self.customers.append(customer)
         assert self.customers
         return self.customers
+
+    async def _async_get_accounts(self) -> list[Account]:
+        """Get accounts associated to the user."""
+        # Cache the accounts
+        if not self.accounts:
+            url = (
+                "https://dss-"
+                f"{self.utility.subdomain()}"
+                ".opower.com/webcenter/edge/apis/dss-invite-v1/cws/v1/utilities/connectedaccounts?"
+                "pageOffset=0&pageLimit=100"
+            )
+            _LOGGER.debug("Fetching: %s", url)
+            async with self.session.get(
+                url, headers=self._get_headers(), raise_for_status=True
+            ) as resp:
+                result = await resp.json()
+                if DEBUG_LOG_RESPONSE:
+                    _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
+                for account in result["accounts"]:
+                    self.accounts.append(account)
+
+        assert self.accounts
+        return self.accounts
 
     async def async_get_cost_reads(
         self,
@@ -442,9 +468,9 @@ class Opower:
     ) -> list[Any]:
         if usage_only:
             url = (
-                "https://"
+                "https://dss-"
                 f"{self.utility.subdomain()}"
-                ".opower.com/ei/edge/apis/DataBrowser-v1/cws/utilities/"
+                ".opower.com/webcenter/edge/apis/DataBrowser-v1/cws/utilities/"
                 f"{self.utility.subdomain()}"
                 "/utilityAccounts/"
                 f"{account.uuid}"
@@ -452,9 +478,9 @@ class Opower:
             )
         else:
             url = (
-                "https://"
+                "https://dss-"
                 f"{self.utility.subdomain()}"
-                ".opower.com/ei/edge/apis/DataBrowser-v1/cws/cost/utilityAccount/"
+                ".opower.com/webcenter/edge/apis/DataBrowser-v1/cws/cost/utilityAccount/"
                 f"{account.uuid}"
             )
         convert_to_date = usage_only
@@ -462,7 +488,7 @@ class Opower:
         headers = self._get_headers()
         headers[
             "Opower-Selected-Entities"
-        ] = f'["urn:opower:customer:uuid:{account.customer.uuid}"]'
+        ] = f'["urn:opower:customer:uuid:{account.customer.uuid}", "urn:session:account:{self.accounts[0]["accountId"]}"]'
         if start_date:
             params["startDate"] = (
                 start_date.date() if convert_to_date else start_date
@@ -491,4 +517,8 @@ class Opower:
         headers = {"User-Agent": USER_AGENT}
         if self.access_token:
             headers["authorization"] = f"Bearer {self.access_token}"
+        if self.accounts:
+            headers[
+                "opower-selected-entities"
+            ] = f'["urn:session:account:{self.accounts[0]["accountId"]}"]'
         return headers

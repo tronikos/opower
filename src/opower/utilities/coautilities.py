@@ -17,7 +17,7 @@ class COAUtilities(UtilityBase):
 
     @staticmethod
     def subdomain() -> str:
-        return "dss-coa"
+        return "coa"
 
     @staticmethod
     def timezone() -> str:
