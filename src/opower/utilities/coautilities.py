@@ -24,6 +24,10 @@ class COAUtilities(UtilityBase):
         return "America/Chicago"
 
     @staticmethod
+    def is_dss() -> bool:
+        return True
+
+    @staticmethod
     async def async_login(
         session: aiohttp.ClientSession,
         username: str,
@@ -38,8 +42,11 @@ class COAUtilities(UtilityBase):
 
         # Auth using username and password on coautilities
         url = (
-            "https://coautilities.com/pkmslogin.form?/isam/sps/OPowerIDP_DSS/saml20/logininitial?RequestBinding=HTTPPost"
-            "&NameIdFormat=email&PartnerId=opower-coa-dss-webUser&Target=https://dss-coa.opower.com"
+            "https://coautilities.com/pkmslogin.form?/isam/sps/OPowerIDP_DSS/saml20/logininitial?"
+            "RequestBinding=HTTPPost&"
+            "NameIdFormat=email&"
+            "PartnerId=opower-coa-dss-webUser&"
+            "Target=https://dss-coa.opower.com"
         )
 
         await session.post(
@@ -54,8 +61,9 @@ class COAUtilities(UtilityBase):
 
         # Getting SAML Request from opower
         url = (
-            "https://sso.opower.com/sp/startSSO.ping?PartnerIdpId=https://coautilities.com/isam/sps/OPowerIDP_DSS/saml20"
-            "&TargetResource=https%3A%2F%2Fdss-coa.opower.com%2Fwebcenter%2Fedge%2Fapis%2Fidentity-management-v1%2Fcws"
+            "https://sso.opower.com/sp/startSSO.ping?"
+            "PartnerIdpId=https://coautilities.com/isam/sps/OPowerIDP_DSS/saml20&"
+            "TargetResource=https%3A%2F%2Fdss-coa.opower.com%2Fwebcenter%2Fedge%2Fapis%2Fidentity-management-v1%2Fcws"
             "%2Fv1%2Fauth%2Fcoa%2Fsaml%2Flogin%2Fcallback%3FsuccessUrl%3Dhttps%253A%252F%252Fdss-coa.opower.com%252Fdss"
             "%252Flogin-success%253Ftoken%253D%2525s%2526nextPathname%253DL2Rzcy8%253D%26failureUrl%3Dhttps%253A%252F"
             "%252Fdss-coa.opower.com%252Fdss%252Flogin-error%253Freason%253D%2525s"
@@ -102,9 +110,11 @@ class COAUtilities(UtilityBase):
 
         # Finally exchange this token to Auth token
         async with session.post(
-            "https://dss-coa.opower.com/webcenter/edge/apis/identity-management-v1/cws/v1/auth/coa/saml/ott/confirm",
+            "https://dss-coa.opower.com"
+            "/webcenter/edge/apis/identity-management-v1/cws/v1/auth/coa/saml/ott/confirm",
             headers={"User-Agent": USER_AGENT},
             data={"token": token}
         ) as response:
             content = await response.json()
+            print(content["sessionToken"])
             return content["sessionToken"]

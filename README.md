@@ -27,6 +27,7 @@ Supported utilities (in alphabetical order):
 - Portland General Electric (PGE)
 - Puget Sound Energy (PSE)
 - Seattle City Light (SCL)
+- City of Austin Utilities
 
 ## Support a new utility
 
