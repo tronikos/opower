@@ -1,30 +1,38 @@
+"""City of Austin Utilities."""
 import re
 from typing import Optional
 
 import aiohttp
 
+from ..const import USER_AGENT
 from .base import UtilityBase
 from .helpers import get_form_action_url_and_hidden_inputs
-from ..const import USER_AGENT
 
 
 class COAUtilities(UtilityBase):
-    """City of Austin Utilities"""
+    """City of Austin Utilities."""
 
     @staticmethod
     def name() -> str:
+        """Distinct recognizable name of the utility."""
         return "City of Austin Utilities"
 
     @staticmethod
     def subdomain() -> str:
+        """Return the opower.com subdomain for this utility."""
         return "coa"
 
     @staticmethod
     def timezone() -> str:
+        """Return the timezone.
+
+        Should match the siteTimeZoneId of the API responses.
+        """
         return "America/Chicago"
 
     @staticmethod
     def is_dss() -> bool:
+        """Check if Utility using DSS version of the portal."""
         return True
 
     @staticmethod
@@ -34,6 +42,7 @@ class COAUtilities(UtilityBase):
         password: str,
         optional_mfa_secret: Optional[str],
     ) -> Optional[str]:
+        """Login to the utility website."""
         # Get cookies
         await session.get(
             "https://coautilities.com/wps/wcm/connect/occ/coa/home",
@@ -106,15 +115,16 @@ class COAUtilities(UtilityBase):
             allow_redirects=False,
         ) as response:
             await response.text()
-            token = re.search(r"token=(.*?)&", response.headers["Location"]).group(1)
+            token_search = re.search(r"token=(.*?)&", response.headers["Location"])
+            assert token_search is not None
+            token = token_search.group(1)
 
         # Finally exchange this token to Auth token
         async with session.post(
             "https://dss-coa.opower.com"
             "/webcenter/edge/apis/identity-management-v1/cws/v1/auth/coa/saml/ott/confirm",
             headers={"User-Agent": USER_AGENT},
-            data={"token": token}
+            data={"token": token},
         ) as response:
             content = await response.json()
-            print(content["sessionToken"])
-            return content["sessionToken"]
+            return str(content["sessionToken"])

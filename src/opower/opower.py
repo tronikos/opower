@@ -521,7 +521,7 @@ class Opower:
                 return []
             raise err
 
-    def _get_headers(self, customer_uuid: str = None) -> dict[str, str]:
+    def _get_headers(self, customer_uuid: Optional[str] = None) -> dict[str, str]:
         headers = {"User-Agent": USER_AGENT}
         if self.access_token:
             headers["authorization"] = f"Bearer {self.access_token}"
@@ -529,13 +529,13 @@ class Opower:
         opower_selected_entities = []
         if self.user_accounts:
             # require for dss endpoints
-            opower_selected_entities.append(f'urn:session:account:{self.user_accounts[0]["accountId"]}')
+            opower_selected_entities.append(
+                f'urn:session:account:{self.user_accounts[0]["accountId"]}'
+            )
         if customer_uuid:
             opower_selected_entities.append(f"urn:opower:customer:uuid:{customer_uuid}")
         if opower_selected_entities:
-            headers[
-                "Opower-Selected-Entities"
-            ] = json.dumps(opower_selected_entities)
+            headers["Opower-Selected-Entities"] = json.dumps(opower_selected_entities)
         return headers
 
     def _get_subdomain(self) -> str:

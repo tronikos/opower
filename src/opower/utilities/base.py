@@ -41,7 +41,7 @@ class UtilityBase:
 
     @staticmethod
     def is_dss() -> bool:
-        # check if Utility using DSS version of the portal
+        """Check if Utility using DSS version of the portal."""
         return False
 
     @staticmethod
