@@ -293,7 +293,7 @@ class Opower:
         """Get customers associated to the user."""
         # Cache the customers
         if not self.customers:
-            if not self.user_accounts:
+            if self.utility.is_dss() and not self.user_accounts:
                 await self._async_get_user_accounts()
 
             url = (
@@ -527,7 +527,7 @@ class Opower:
             headers["authorization"] = f"Bearer {self.access_token}"
 
         opower_selected_entities = []
-        if self.user_accounts:
+        if self.utility.is_dss() and self.user_accounts:
             # require for dss endpoints
             opower_selected_entities.append(
                 f'urn:session:account:{self.user_accounts[0]["accountId"]}'

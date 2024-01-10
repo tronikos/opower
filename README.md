@@ -12,6 +12,7 @@ Supported utilities (in alphabetical order):
   - Kentucky Power
   - Public Service Company of Oklahoma (PSO)
   - Southwestern Electric Power Company (SWEPCO)
+- City of Austin Utilities
 - Consolidated Edison (ConEd)
   - Orange & Rockland Utilities (ORU)
 - Enmax Energy
@@ -27,7 +28,6 @@ Supported utilities (in alphabetical order):
 - Portland General Electric (PGE)
 - Puget Sound Energy (PSE)
 - Seattle City Light (SCL)
-- City of Austin Utilities
 
 ## Support a new utility
 

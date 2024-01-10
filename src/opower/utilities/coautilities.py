@@ -3,8 +3,10 @@ import re
 from typing import Optional
 
 import aiohttp
+from yarl import URL
 
 from ..const import USER_AGENT
+from ..exceptions import InvalidAuth
 from .base import UtilityBase
 from .helpers import get_form_action_url_and_hidden_inputs
 
@@ -58,7 +60,7 @@ class COAUtilities(UtilityBase):
             "Target=https://dss-coa.opower.com"
         )
 
-        await session.post(
+        async with session.post(
             url,
             headers={"User-Agent": USER_AGENT},
             data={
@@ -66,7 +68,12 @@ class COAUtilities(UtilityBase):
                 "password": password,
                 "login-form-type": "pwd",
             },
-        )
+        ) as response:
+            await response.text()
+            if "PD-S-SESSION-ID-PCOAUT" not in session.cookie_jar.filter_cookies(
+                URL("https://coautilities.com")
+            ):
+                raise InvalidAuth("Username/Password are invalid")
 
         # Getting SAML Request from opower
         url = (
