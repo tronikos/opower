@@ -528,7 +528,7 @@ class Opower:
 
         opower_selected_entities = []
         if self.utility.is_dss() and self.user_accounts:
-            # require for dss endpoints
+            # Required for dss endpoints
             opower_selected_entities.append(
                 f'urn:session:account:{self.user_accounts[0]["accountId"]}'
             )

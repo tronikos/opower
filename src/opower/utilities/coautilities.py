@@ -1,6 +1,6 @@
 """City of Austin Utilities."""
-import re
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 import aiohttp
 from yarl import URL
@@ -49,6 +49,7 @@ class COAUtilities(UtilityBase):
         await session.get(
             "https://coautilities.com/wps/wcm/connect/occ/coa/home",
             headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
         )
 
         # Auth using username and password on coautilities
@@ -68,6 +69,7 @@ class COAUtilities(UtilityBase):
                 "password": password,
                 "login-form-type": "pwd",
             },
+            raise_for_status=True,
         ) as response:
             await response.text()
             if "PD-S-SESSION-ID-PCOAUT" not in session.cookie_jar.filter_cookies(
@@ -85,7 +87,7 @@ class COAUtilities(UtilityBase):
             "%252Fdss-coa.opower.com%252Fdss%252Flogin-error%253Freason%253D%2525s"
         )
 
-        async with session.post(url) as response:
+        async with session.post(url, raise_for_status=True) as response:
             html = await response.text()
             action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(html)
             assert set(hidden_inputs.keys()) == {"RelayState", "SAMLRequest"}
@@ -99,6 +101,7 @@ class COAUtilities(UtilityBase):
             action_url,
             headers=headers,
             data=hidden_inputs,
+            raise_for_status=True,
         ) as response:
             html = await response.text()
             action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(html)
@@ -109,6 +112,7 @@ class COAUtilities(UtilityBase):
             action_url,
             headers={"User-Agent": USER_AGENT},
             data=hidden_inputs,
+            raise_for_status=True,
         ) as response:
             html = await response.text()
             action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(html)
@@ -120,11 +124,13 @@ class COAUtilities(UtilityBase):
             headers={"User-Agent": USER_AGENT},
             data=hidden_inputs,
             allow_redirects=False,
+            raise_for_status=True,
         ) as response:
             await response.text()
-            token_search = re.search(r"token=(.*?)&", response.headers["Location"])
-            assert token_search is not None
-            token = token_search.group(1)
+            parsed_url = urlparse(response.headers["Location"])
+            parsed_query = parse_qs(parsed_url.query)
+            assert "token" in parsed_query
+            token = parsed_query["token"][0]
 
         # Finally exchange this token to Auth token
         async with session.post(
@@ -132,6 +138,7 @@ class COAUtilities(UtilityBase):
             "/webcenter/edge/apis/identity-management-v1/cws/v1/auth/coa/saml/ott/confirm",
             headers={"User-Agent": USER_AGENT},
             data={"token": token},
+            raise_for_status=True,
         ) as response:
             content = await response.json()
             return str(content["sessionToken"])
