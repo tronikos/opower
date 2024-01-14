@@ -40,6 +40,11 @@ class UtilityBase:
         return False
 
     @staticmethod
+    def is_dss() -> bool:
+        """Check if Utility using DSS version of the portal."""
+        return False
+
+    @staticmethod
     async def async_login(
         session: aiohttp.ClientSession,
         username: str,
