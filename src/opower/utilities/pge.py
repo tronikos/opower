@@ -37,7 +37,6 @@ class PGE(UtilityBase):
         optional_mfa_secret: Optional[str],
     ) -> None:
         """Login to the utility website."""
-        # 1st way of login
         async with session.post(
             "https://www.pge.com/eimpapi/auth/login",
             json={
@@ -51,49 +50,6 @@ class PGE(UtilityBase):
             result = await resp.json()
             if "errorMsg" in result:
                 raise InvalidAuth(result["errorMsg"])
-
-        # 2nd way of login
-        # async with session.get(
-        #     "https://apigprd.cloud.pge.com/myaccount/v1/login",
-        #     headers={
-        #         "Authorization": "Basic "
-        #         + base64.b64encode(f"{username}:{password}".encode()).decode(),
-        #         "User-Agent": USER_AGENT,
-        #     },
-        #     raise_for_status=True,
-        # ) as resp:
-        #     await resp.json()
-
-        # Skip the following 2 requests since emToolUrl is constant.
-        # If it ever changes consider uncommenting.
-        # These only work with the 2nd way of login.
-
-        # async with session.get(
-        #     "https://apigprd.cloud.pge.com/myaccount/v1/cocaccount/secure/account/retrieveMyEnergyAccounts",
-        #     params=(("userId", username),),
-        #     headers={"User-Agent": USER_AGENT},
-        #     raise_for_status=True,
-        # ) as resp:
-        #     energy_accounts = await resp.json()
-
-        # for energy_account in energy_accounts["accounts"]:
-        #     accountNumber = energy_account["accountNumber"]
-        #     addressAsString = energy_account["accountAddress"]["addressAsString"]
-        #     print(accountNumber)
-        #     print(addressAsString)
-        #     break
-
-        # async with session.get(
-        #     f"https://apigprd.cloud.pge.com/myaccount/v1/cocaccount/secure/retrieveEnergyManagementInfo/{accountNumber}/myusage",
-        #     headers={"User-Agent": USER_AGENT},
-        #     raise_for_status=True,
-        # ) as resp:
-        #     result = await resp.json()
-
-        # for energyManagementInfo in result["energyManagementInfoList"]:
-        #     if energyManagementInfo["vendorType"] == "OPOWER":
-        #         emToolUrl = energyManagementInfo["emToolUrl"]
-        #         break
 
         url = (
             "https://itiamping.cloud.pge.com/idp/startSSO.ping?"
