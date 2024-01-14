@@ -24,7 +24,11 @@ def get_form_action_url_and_hidden_inputs(html: str) -> tuple[str, dict[str, str
 async def async_auth_saml(session: aiohttp.ClientSession, url: str) -> None:
     """Authenticate with Opower using SAML."""
     # Fetch the URL on the utility website to get RelayState and SAMLResponse.
-    async with session.get(url) as resp:
+    async with session.get(
+        url,
+        headers={"User-Agent": USER_AGENT},
+        raise_for_status=True,
+    ) as resp:
         result = await resp.text()
     action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(result)
     assert action_url.endswith(".opower.com/sp/ACS.saml2")
