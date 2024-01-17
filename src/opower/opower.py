@@ -103,6 +103,7 @@ class Account:
     customer: Customer
     uuid: str
     utility_account_id: str
+    service_point_id: int
     meter_type: MeterType
     read_resolution: Optional[ReadResolution]
 
@@ -214,6 +215,7 @@ class Opower:
                         customer=Customer(uuid=customer["uuid"]),
                         uuid=account["uuid"],
                         utility_account_id=account["preferredUtilityAccountId"],
+                        service_point_id=account["servicePointId"],
                         meter_type=MeterType(account["meterType"]),
                         read_resolution=ReadResolution(account["readResolution"]),
                     )
@@ -272,6 +274,7 @@ class Opower:
                             utility_account_id=str(
                                 forecast["preferredUtilityAccountId"]
                             ),
+                            service_point_id=forecast["servicePointId"],
                             meter_type=MeterType(forecast["meterType"]),
                             read_resolution=None,
                         ),
