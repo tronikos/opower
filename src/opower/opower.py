@@ -103,9 +103,9 @@ class Account:
     customer: Customer
     uuid: str
     utility_account_id: str
-    service_point_id: int
     meter_type: MeterType
     read_resolution: Optional[ReadResolution]
+    service_point_id: Optional[int] = 0
 
 
 @dataclasses.dataclass
@@ -274,7 +274,6 @@ class Opower:
                             utility_account_id=str(
                                 forecast["preferredUtilityAccountId"]
                             ),
-                            service_point_id=forecast["servicePointId"],
                             meter_type=MeterType(forecast["meterType"]),
                             read_resolution=None,
                         ),
