@@ -28,6 +28,7 @@ Supported utilities (in alphabetical order):
 - Pacific Gas & Electric (PG&E)
 - Portland General Electric (PGE)
 - Puget Sound Energy (PSE)
+- Sacramento Municipal Utility District ([SMUD](https://www.smud.org/))
 - Seattle City Light (SCL)
 
 ## Support a new utility

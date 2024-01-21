@@ -2,6 +2,7 @@
 
 from .exceptions import CannotConnect, InvalidAuth
 from .opower import (
+    DEBUG_LOG_RESPONSE,
     Account,
     AggregateType,
     CostRead,
