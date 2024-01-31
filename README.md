@@ -15,6 +15,7 @@ Supported utilities (in alphabetical order):
 - City of Austin Utilities
 - Consolidated Edison (ConEd)
   - Orange & Rockland Utilities (ORU)
+- Duquesne Light Company (DQE)
 - Enmax Energy
 - Evergy
 - Exelon subsidiaries
