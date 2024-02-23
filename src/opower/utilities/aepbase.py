@@ -121,9 +121,15 @@ class AEPBase(ABC):
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         ) as resp:
-            login_parser.feed(await resp.text())
+            text = await resp.text()
+            login_parser.feed(text)
+
 
         if not login_parser.password_field_found:
+            match = re.search(r"https://([^.]*).opower.com", text)
+            assert match
+            cls._subdomain = match.group(1)
+
             # Assume we are already logged in
             return
 
