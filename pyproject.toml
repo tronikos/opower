@@ -77,3 +77,9 @@ fixture-parentheses = false
 
 [tool.ruff.mccabe]
 max-complexity = 25
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7,<8",
+    "python-dotenv>=1,<2",
+]
