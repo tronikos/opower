@@ -89,7 +89,7 @@ class SMUD(UtilityBase):
     ) -> None:
         """Login to the utility website and authorize opower."""
         if (
-            session.cookie_jar.filter_cookies("https://smud.opower.com/ei").__len__()
+            len(session.cookie_jar.filter_cookies("https://smud.opower.com/ei"))
             > 0
         ):
             return
@@ -172,7 +172,7 @@ class SMUD(UtilityBase):
             "Parsed SAMLResponse: %s...%s (%d characters)",
             saml_response[0:5],
             saml_response[-5:],
-            saml_response.__len__(),
+            len(saml_response),
         )
 
         # This step is done in the web browser but doesn't seem to matter here.
@@ -236,7 +236,7 @@ class SMUD(UtilityBase):
             for redirect in redirects[1:]:
                 _LOGGER.debug("-> %s", redirect.__str__())
 
-        if session.cookie_jar.filter_cookies(response.url).__len__() > 0:
+        if len(session.cookie_jar.filter_cookies(response.url)) > 0:
             response_cookie_names = list(
                 session.cookie_jar.filter_cookies(response.url).keys()
             )
@@ -245,7 +245,7 @@ class SMUD(UtilityBase):
                 last_cookie_names
             )
 
-            if response_new_cookie_names.__len__() > 0:
+            if len(response_new_cookie_names) > 0:
                 _LOGGER.debug(
                     "Set new cookies: `%s`", "`, `".join(response_new_cookie_names)
                 )
