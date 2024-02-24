@@ -231,9 +231,9 @@ class SMUD(UtilityBase):
         host = response.host  # Is this the request URL or the final redirected url?
 
         redirects = [r.url for r in response.history]
-        if len(redirects) > 0:
-            _LOGGER.debug("Performed %d redirects", len(redirects))
-            for redirect in redirects:
+        if len(redirects) > 1:
+            _LOGGER.debug("Performed %d redirects", len(redirects) - 1)
+            for redirect in redirects[1:]:
                 _LOGGER.debug("-> %s", redirect.__str__())
 
         if session.cookie_jar.filter_cookies(response.url).__len__() > 0:
