@@ -43,11 +43,6 @@ class TestSMUD(unittest.IsolatedAsyncioTestCase):
 
     async def test_real_login(self):
         """Perform a live test against the SMUD, OKTA and Opower websites."""
-        if os.path.exists(ENV_SECRET_PATH) is False:
-            self.skipTest(
-                "Add `SMUD_USERNAME=` and `SMUD_PASSWORD=` to `.env.secret` to run live SMUD test."
-            )
-
         load_dotenv(dotenv_path=ENV_SECRET_PATH)
 
         username = os.getenv("SMUD_USERNAME")
@@ -60,6 +55,7 @@ class TestSMUD(unittest.IsolatedAsyncioTestCase):
 
         smud = SMUD()
         session = aiohttp.ClientSession()
+        self.addCleanup(session.close)
 
         await smud.async_login(session, username, password, None)
 

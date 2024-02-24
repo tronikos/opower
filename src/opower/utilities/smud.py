@@ -104,7 +104,7 @@ class SMUD(UtilityBase):
             raise_for_status=True,
         )
 
-        SMUD.log_response(myaccount_response, session)
+        await SMUD.log_response(myaccount_response, session)
 
         # Parse the verification token which will be used during login.
         # NB: Although the response cookies contain a `__RequestVerificationToken`, it does not match
@@ -128,9 +128,11 @@ class SMUD(UtilityBase):
             raise_for_status=True,
         )
 
-        SMUD.log_response(login_response, session)
+        await SMUD.log_response(login_response, session)
 
-        # TODO: assert logged in here... test with bad username and password.
+        login_response_body = await login_response.text()
+        if "could not be authenticated" in login_response_body:
+            raise opower.InvalidAuth
 
         smud_energyusage_page_url = (
             "https://myaccount.smud.org/manage/opowerresidential/energyusage"
@@ -145,7 +147,7 @@ class SMUD(UtilityBase):
             raise_for_status=True,
         )
 
-        SMUD.log_response(energyusage_response, session)
+        await SMUD.log_response(energyusage_response, session)
 
         okta_login_2_url = SMUD.get_okta_url_from_response_redirect(
             energyusage_response
@@ -159,7 +161,7 @@ class SMUD(UtilityBase):
             raise_for_status=True,
         )
 
-        SMUD.log_response(smud_okta_response, session)
+        await SMUD.log_response(smud_okta_response, session)
 
         parser = SMUDOktaResponseSamlResponseValueParser()
         parser.feed(await smud_okta_response.text())
@@ -200,7 +202,7 @@ class SMUD(UtilityBase):
             raise_for_status=True,
         )
 
-        SMUD.log_response(opower_sso_response, session)
+        await SMUD.log_response(opower_sso_response, session)
 
         return
 
@@ -219,17 +221,18 @@ class SMUD(UtilityBase):
 
         return query_parts["redirectUrl"][0]
 
+
     # Store cookies so we can log what is new after each request.
     cookies = {}
 
     @staticmethod
-    def log_response(response: ClientResponse, session):
+    async def log_response(response: ClientResponse, session):
         """Log any redirects and new cookies. Log full HTML when DEBUG_LOG_RESPONSE is set."""
         host = response.host  # Is this the request URL or the final redirected url?
 
         redirects = [r.url for r in response.history]
-        if redirects.__len__() > 0:
-            _LOGGER.debug("Performed %d redirects", redirects.__len__())
+        if len(redirects) > 0:
+            _LOGGER.debug("Performed %d redirects", len(redirects))
             for redirect in redirects:
                 _LOGGER.debug("-> %s", redirect.__str__())
 
@@ -250,6 +253,6 @@ class SMUD(UtilityBase):
                 SMUD.cookies[host] = last_cookie_names + response_cookie_names
 
         if hasattr("opower", "DEBUG_LOG_RESPONSE") and opower.DEBUG_LOG_RESPONSE:
-            response_html = response.text()
+            response_html = await response.text()
             _LOGGER.debug("Response %s:", response.url)
             _LOGGER.debug(response_html)
