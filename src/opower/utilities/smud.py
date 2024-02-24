@@ -25,6 +25,7 @@ from typing import Optional
 from urllib.parse import parse_qs
 
 from aiohttp import ClientResponse, ClientSession
+from aiohttp.client_exceptions import ClientResponseError
 
 import opower
 
@@ -88,11 +89,17 @@ class SMUD(UtilityBase):
         optional_mfa_secret: Optional[str],  # Not used by SMUD.
     ) -> None:
         """Login to the utility website and authorize opower."""
-        if (
-            len(session.cookie_jar.filter_cookies("https://smud.opower.com/ei"))
-            > 0
-        ):
-            return
+        # If we already have a cookie, return early if it is valid.
+        if len(session.cookie_jar.filter_cookies("https://smud.opower.com/ei")) > 0:
+            try:
+                async with session.get(
+                    "https://smud.opower.com/ei/edge/apis/multi-account-v1/cws/smud/customers",
+                    headers={"User-Agent": USER_AGENT},
+                    raise_for_status=True,
+                ):
+                    return
+            except ClientResponseError:
+                pass
 
         smud_login_page_url = "https://myaccount.smud.org/"
 
@@ -220,7 +227,6 @@ class SMUD(UtilityBase):
         query_parts = parse_qs(energyUsageResponseRedirectedFinalUrl.query_string)
 
         return query_parts["redirectUrl"][0]
-
 
     # Store cookies so we can log what is new after each request.
     cookies = {}
