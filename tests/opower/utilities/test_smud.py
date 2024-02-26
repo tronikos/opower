@@ -5,7 +5,7 @@ import unittest
 import aiohttp
 from dotenv import load_dotenv
 
-from src.opower.utilities.smud import (
+from opower.utilities.smud import (
     SMUD,
     SMUDLoginParser,
     SMUDOktaResponseSamlResponseValueParser,
