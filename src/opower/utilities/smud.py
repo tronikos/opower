@@ -26,6 +26,7 @@ from urllib.parse import parse_qs
 
 from aiohttp import ClientResponse, ClientSession
 from aiohttp.client_exceptions import ClientResponseError
+from yarl import URL
 
 import opower
 
@@ -41,7 +42,7 @@ class SMUDLoginParser(HTMLParser):
     def __init__(self) -> None:
         """Initialize."""
         super().__init__()
-        self.verification_token = None
+        self.verification_token: str | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Try to extract the verification token from the login input."""
@@ -55,7 +56,7 @@ class SMUDOktaResponseSamlResponseValueParser(HTMLParser):
     """HTML parser to extract SAMLResponse token from OKTA response for Opower SSO."""
 
     # <input name="SAMLResponse" type="hidden" value="..."/>
-    def handle_starttag(self, tag, attrs):
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
         """Try to extract the SAMLResponse value."""
         if tag == "input":
             for name, value in attrs:
@@ -90,7 +91,10 @@ class SMUD(UtilityBase):
     ) -> None:
         """Login to the utility website and authorize opower."""
         # If we already have a cookie, return early if it is valid.
-        if len(session.cookie_jar.filter_cookies("https://smud.opower.com/ei")) > 0:
+        if (
+            len(session.cookie_jar.filter_cookies(URL("https://smud.opower.com/ei")))
+            > 0
+        ):
             try:
                 async with session.get(
                     "https://smud.opower.com/ei/edge/apis/multi-account-v1/cws/smud/customers",
@@ -229,10 +233,10 @@ class SMUD(UtilityBase):
         return query_parts["redirectUrl"][0]
 
     # Store cookies so we can log what is new after each request.
-    cookies = {}
+    cookies: dict[str, list[str]] = {}
 
     @staticmethod
-    async def log_response(response: ClientResponse, session):
+    async def log_response(response: ClientResponse, session: ClientSession) -> None:
         """Log any redirects and new cookies. Log full HTML when DEBUG_LOG_RESPONSE is set."""
         host = response.host  # Is this the request URL or the final redirected url?
 
@@ -258,7 +262,9 @@ class SMUD(UtilityBase):
 
                 SMUD.cookies[host] = last_cookie_names + response_cookie_names
 
-        if hasattr("opower", "DEBUG_LOG_RESPONSE") and opower.DEBUG_LOG_RESPONSE:
+        if hasattr("opower", "DEBUG_LOG_RESPONSE") and getattr(
+            "opower", "DEBUG_LOG_RESPONSE"
+        ):
             response_html = await response.text()
             _LOGGER.debug("Response %s:", response.url)
             _LOGGER.debug(response_html)

@@ -4,6 +4,7 @@ import unittest
 
 import aiohttp
 from dotenv import load_dotenv
+from yarl import URL
 
 from opower.utilities.smud import (
     SMUD,
@@ -23,25 +24,25 @@ ENV_SECRET_PATH = os.path.join(os.path.dirname(__file__), "../../../.env.secret"
 class TestSMUD(unittest.IsolatedAsyncioTestCase):
     """Test public methods inherited from UtilityBase."""
 
-    def test_name(self):
+    def test_name(self) -> None:
         """Test name."""
         smud = SMUD()
 
         self.assertEqual("Sacramento Municipal Utility District (SMUD)", smud.name())
 
-    def test_subdomain(self):
+    def test_subdomain(self) -> None:
         """Test subdomain."""
         smud = SMUD()
 
         self.assertEqual("smud", smud.subdomain())
 
-    def test_timezone(self):
+    def test_timezone(self) -> None:
         """Test timezone."""
         smud = SMUD()
 
         self.assertEqual("America/Los_Angeles", smud.timezone())
 
-    async def test_real_login(self):
+    async def test_real_login(self) -> None:
         """Perform a live test against the SMUD, OKTA and Opower websites."""
         load_dotenv(dotenv_path=ENV_SECRET_PATH)
 
@@ -61,7 +62,7 @@ class TestSMUD(unittest.IsolatedAsyncioTestCase):
 
         # Confirm opower cookies have been set.
         self.assertTrue(
-            session.cookie_jar.filter_cookies("https://smud.opower.com/ei").__len__()
+            len(session.cookie_jar.filter_cookies(URL("https://smud.opower.com/ei")))
             > 0
         )
 
@@ -69,12 +70,13 @@ class TestSMUD(unittest.IsolatedAsyncioTestCase):
 class TestSMUDLoginParser(unittest.TestCase):
     """Test parsing the Request Verification Token from the SMUD login page."""
 
-    def test_parse(self):
+    def test_parse(self) -> None:
         """Test finding the input __RequestVerificationToken value."""
         loginParser = SMUDLoginParser()
         html = open(REQUEST_VERIFICATION_TOKEN_HTML_FILENAME).read()
         loginParser.feed(html)
         result = loginParser.verification_token
+        assert result is not None
         self.assertEqual("O04jy", result[0:5])
         self.assertEqual("5fWQ1", result[-5:])
 
@@ -82,11 +84,12 @@ class TestSMUDLoginParser(unittest.TestCase):
 class TestSMUDOktaResponseSamlResponseValueParser(unittest.TestCase):
     """Test parsing the SamlResponse input value from the OKTA HTML."""
 
-    def test_parse(self):
+    def test_parse(self) -> None:
         """Test parsing the input SamlResponse value."""
         samlResponseParser = SMUDOktaResponseSamlResponseValueParser()
         html = open(OKTA_SAML_RESPONSE_HTML_FILENAME).read()
         samlResponseParser.feed(html)
         result = samlResponseParser.saml_response
+        assert result is not None
         self.assertEqual("PD94b", result[0:5])
         self.assertEqual("uc2U+", result[-5:])
