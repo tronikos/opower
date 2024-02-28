@@ -74,7 +74,7 @@ python -m pip install isort black flake8 ruff mypy
 isort . ; black . ; flake8 . ; ruff . --fix ; mypy --install-types .
 
 # Run tests
-python -m pip install pytest
+python -m pip install pytest python-dotenv
 pytest
 
 # Run demo
