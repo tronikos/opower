@@ -124,7 +124,6 @@ class AEPBase(ABC):
             text = await resp.text()
             login_parser.feed(text)
 
-
         if not login_parser.password_field_found:
             match = re.search(r"https://([^.]*).opower.com", text)
             assert match
