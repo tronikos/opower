@@ -112,6 +112,9 @@ class AEPBase(ABC):
         optional_mfa_secret: Optional[str],
     ) -> None:
         """Login in AEP using user/pass and then do the SAML call to opower."""
+        # Clear cookies before logging in again, in case old ones are still around
+        session.cookie_jar.clear(lambda c: c["domain"].endswith("opower.com"))
+
         login_parser = AEPLoginParser(username, password)
         token_parser = AEPTokenParser()
 
@@ -123,14 +126,6 @@ class AEPBase(ABC):
         ) as resp:
             text = await resp.text()
             login_parser.feed(text)
-
-        if not login_parser.password_field_found:
-            match = re.search(r"https://([^.]*).opower.com", text)
-            assert match
-            cls._subdomain = match.group(1)
-
-            # Assume we are already logged in
-            return
 
         # Post the login page with the user credentials and get the cookieKey
         async with session.post(
