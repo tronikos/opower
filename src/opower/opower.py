@@ -17,7 +17,7 @@ from .exceptions import CannotConnect, InvalidAuth
 from .utilities import UtilityBase
 
 _LOGGER = logging.getLogger(__file__)
-DEBUG_LOG_RESPONSE = False
+DEBUG_LOG_RESPONSE = True
 
 
 class MeterType(Enum):
@@ -364,9 +364,11 @@ class Opower:
                 CostRead(
                     start_time=datetime.fromisoformat(read["startTime"]),
                     end_time=datetime.fromisoformat(read["endTime"]),
-                    consumption=read["value"]
-                    if "value" in read
-                    else read["consumption"]["value"],
+                    consumption=(
+                        read["value"]
+                        if "value" in read
+                        else read["consumption"]["value"]
+                    ),
                     provided_cost=read.get("providedCost", 0) or 0,
                 )
             )
@@ -521,6 +523,15 @@ class Opower:
                 return []
             raise err
 
+    def _get_account_id(self) -> Optional[str]:
+        for user_account in self.user_accounts:
+            if len(user_account["premises"]) > 0:
+                # Select first account with assigned premises
+                # Avoid issue with accounts without premises. They could be moved to other accounts,
+                # see https://github.com/tronikos/opower/issues/73 for details
+                return str(user_account["accountId"])
+        return None
+
     def _get_headers(self, customer_uuid: Optional[str] = None) -> dict[str, str]:
         headers = {"User-Agent": USER_AGENT}
         if self.access_token:
@@ -529,9 +540,12 @@ class Opower:
         opower_selected_entities = []
         if self.utility.is_dss() and self.user_accounts:
             # Required for dss endpoints
-            opower_selected_entities.append(
-                f'urn:session:account:{self.user_accounts[0]["accountId"]}'
-            )
+            account_id = self._get_account_id()
+            if account_id:
+                opower_selected_entities.append(f"urn:session:account:{account_id}")
+            else:
+                raise ValueError("Can't find any accounts with premises")
+
         if customer_uuid:
             opower_selected_entities.append(f"urn:opower:customer:uuid:{customer_uuid}")
         if opower_selected_entities:
