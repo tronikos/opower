@@ -17,7 +17,7 @@ from .exceptions import CannotConnect, InvalidAuth
 from .utilities import UtilityBase
 
 _LOGGER = logging.getLogger(__file__)
-DEBUG_LOG_RESPONSE = True
+DEBUG_LOG_RESPONSE = False
 
 
 class MeterType(Enum):
@@ -539,12 +539,15 @@ class Opower:
 
         opower_selected_entities = []
         if self.utility.is_dss() and self.user_accounts:
-            # Required for dss endpoints
+            # Required for DSS endpoints
             account_id = self._get_account_id()
             if account_id:
                 opower_selected_entities.append(f"urn:session:account:{account_id}")
             else:
-                raise ValueError("Can't find any accounts with premises")
+                # It is likely to consistently fail as there are no accounts associated with premises
+                opower_selected_entities.append(
+                    f'urn:session:account:{self.user_accounts[0]["accountId"]}'
+                )
 
         if customer_uuid:
             opower_selected_entities.append(f"urn:opower:customer:uuid:{customer_uuid}")
