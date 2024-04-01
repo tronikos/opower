@@ -523,14 +523,14 @@ class Opower:
                 return []
             raise err
 
-    def _get_account_id(self) -> Optional[str]:
+    def _get_account_id(self) -> str:
         for user_account in self.user_accounts:
             if len(user_account["premises"]) > 0:
                 # Select first account with assigned premises
                 # Avoid issue with accounts without premises. They could be moved to other accounts,
                 # see https://github.com/tronikos/opower/issues/73 for details
                 return str(user_account["accountId"])
-        return None
+        return str(self.user_accounts[0]["accountId"])
 
     def _get_headers(self, customer_uuid: Optional[str] = None) -> dict[str, str]:
         headers = {"User-Agent": USER_AGENT}
@@ -540,14 +540,9 @@ class Opower:
         opower_selected_entities = []
         if self.utility.is_dss() and self.user_accounts:
             # Required for DSS endpoints
-            account_id = self._get_account_id()
-            if account_id:
-                opower_selected_entities.append(f"urn:session:account:{account_id}")
-            else:
-                # It is likely to consistently fail as there are no accounts associated with premises
-                opower_selected_entities.append(
-                    f'urn:session:account:{self.user_accounts[0]["accountId"]}'
-                )
+            opower_selected_entities.append(
+                f"urn:session:account:{self._get_account_id()}"
+            )
 
         if customer_uuid:
             opower_selected_entities.append(f"urn:opower:customer:uuid:{customer_uuid}")
