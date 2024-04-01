@@ -17,7 +17,6 @@ from .exceptions import CannotConnect, InvalidAuth
 from .utilities import UtilityBase
 
 _LOGGER = logging.getLogger(__file__)
-DEBUG_LOG_RESPONSE = False
 
 
 class MeterType(Enum):
@@ -245,8 +244,9 @@ class Opower:
                     url, headers=self._get_headers(), raise_for_status=True
                 ) as resp:
                     result = await resp.json()
-                    if DEBUG_LOG_RESPONSE:
-                        _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
+                    _LOGGER.log(
+                        logging.DEBUG - 1, "Fetched: %s", json.dumps(result, indent=2)
+                    )
             except ClientResponseError as err:
                 # For some customers utilities don't provide forecast
                 _LOGGER.debug("Ignoring combined-forecast error: %s", err.status)
@@ -310,8 +310,9 @@ class Opower:
                 url, headers=self._get_headers(), raise_for_status=True
             ) as resp:
                 result = await resp.json()
-                if DEBUG_LOG_RESPONSE:
-                    _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
+                _LOGGER.log(
+                    logging.DEBUG - 1, "Fetched: %s", json.dumps(result, indent=2)
+                )
             for customer in result["customers"]:
                 self.customers.append(customer)
         assert self.customers
@@ -334,8 +335,9 @@ class Opower:
                 url, headers=self._get_headers(), raise_for_status=True
             ) as resp:
                 result = await resp.json()
-                if DEBUG_LOG_RESPONSE:
-                    _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
+                _LOGGER.log(
+                    logging.DEBUG - 1, "Fetched: %s", json.dumps(result, indent=2)
+                )
                 for account in result["accounts"]:
                     self.user_accounts.append(account)
 
@@ -511,8 +513,9 @@ class Opower:
                 url, params=params, headers=headers, raise_for_status=True
             ) as resp:
                 result = await resp.json()
-                if DEBUG_LOG_RESPONSE:
-                    _LOGGER.debug("Fetched: %s", json.dumps(result, indent=2))
+                _LOGGER.log(
+                    logging.DEBUG - 1, "Fetched: %s", json.dumps(result, indent=2)
+                )
                 return list(result["reads"])
         except ClientResponseError as err:
             # Ignore server errors for BILL requests

@@ -68,11 +68,13 @@ async def _main() -> None:
         action="store_true",
     )
     parser.add_argument(
-        "-v", "--verbose", help="enable verbose logging", action="store_true"
+        "-v", "--verbose", help="enable verbose logging", action="count", default=0
     )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
+    logging.basicConfig(
+        level=logging.DEBUG - args.verbose + 1 if args.verbose > 0 else logging.INFO
+    )
 
     utility = args.utility or input(f"Utility, one of {supported_utilities}: ")
     username = args.username or input("Username: ")
