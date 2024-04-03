@@ -1,4 +1,5 @@
 """Sacramento Municipal Utility District (SMUD)."""
+
 #
 # SMUD is a community owned, local monopoly power company in Sacramento, California.
 #

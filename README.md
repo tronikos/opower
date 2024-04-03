@@ -75,13 +75,13 @@ python -m pip install isort black flake8 ruff mypy
 isort . ; black . ; flake8 . ; ruff . --fix ; mypy --install-types .
 
 # Run tests
-python -m pip install pytest
+python -m pip install pytest python-dotenv
 pytest
 
 # Run demo
 python src/demo.py --help
-# To output debug logs to a file, change DEBUG_LOG_RESPONSE to True in opower.py and run:
-python src/demo.py --verbose 2> out.txt
+# To output debug logs and API responses to a file run:
+python src/demo.py -vv 2> out.txt
 
 # Build package
 python -m pip install build
