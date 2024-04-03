@@ -42,14 +42,47 @@ class SMUDLoginParser(HTMLParser):
     def __init__(self) -> None:
         """Initialize."""
         super().__init__()
-        self.verification_token: str | None = None
+        self.verification_token: Optional[str] = None
+        self.ocis_req_sp: Optional[str] = None
+        self.relay_state: Optional[str] = None
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
         """Try to extract the verification token from the login input."""
         if tag == "input" and ("name", "__RequestVerificationToken") in attrs:
             _, token = next(filter(lambda attr: attr[0] == "value", attrs))
-            _LOGGER.debug("SMUD self verify token: %s", token)
+            if token is None:
+                return
+            _LOGGER.debug(
+                "SMUD self verify token: %s...%s (%d characters)",
+                token[0:5],
+                token[-5:],
+                len(token),
+            )
             self.verification_token = token
+        """Try to extract the OCIS_REQ_SP input value from the identity.oraclecloud.com sso HTML"""
+        if tag == "input" and ("name", "OCIS_REQ_SP") in attrs:
+            _, token = next(filter(lambda attr: attr[0] == "value", attrs))
+            if token is None:
+                return
+            _LOGGER.debug(
+                "OCIS_REQ_SP self verify token: %s...%s (%d characters)",
+                token[0:5],
+                token[-5:],
+                len(token),
+            )
+            self.ocis_req_sp = token
+        """Try to extract the RelayState input value from the smud.okta.com HTML"""
+        if tag == "input" and ("name", "RelayState") in attrs:
+            _, token = next(filter(lambda attr: attr[0] == "value", attrs))
+            if token is None:
+                return
+            _LOGGER.debug(
+                "RelayState value: %s...%s (%d characters)",
+                token[0:5],
+                token[-5:],
+                len(token),
+            )
+            self.relay_state = token
 
 
 class SMUDOktaResponseSamlResponseValueParser(HTMLParser):
@@ -103,6 +136,7 @@ class SMUD(UtilityBase):
                 ):
                     return
             except ClientResponseError:
+                _LOGGER.debug("Failed to login to SMUD with existing cookies")
                 pass
 
         smud_login_page_url = "https://myaccount.smud.org/"
@@ -188,18 +222,19 @@ class SMUD(UtilityBase):
 
         # This step is done in the web browser but doesn't seem to matter here.
         #
-        # smud_ssotransition_url = "https://myaccount.smud.org/signin/ssotransition"
-        #
-        # _LOGGER.debug("Fetching SMUD ssotransition page: %s", smud_ssotransition_url)
-        # smud_ssotransition_response = await session.get(
-        #     smud_ssotransition_url,
-        #     headers={"User-Agent": USER_AGENT},
-        #     raise_for_status=True,
-        # )
-        #
-        # SMUD.print_redirects_cookies_response(smud_ssotransition_response, session)
+        smud_ssotransition_url = "https://myaccount.smud.org/signin/ssotransition"
 
-        opower_sso_url = "https://sso.opower.com/sp/ACS.saml2"
+        _LOGGER.debug("Fetching SMUD ssotransition page: %s", smud_ssotransition_url)
+        smud_ssotransition_response = await session.get(
+            smud_ssotransition_url,
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+        )
+
+        await SMUD.log_response(smud_ssotransition_response, session)
+
+        # opower_sso_url = "https://sso.opower.com/sp/ACS.saml2"
+        opower_sso_url = "https://idcs-8d184356671642c58ea38b42e6420ed2.identity.oraclecloud.com/fed/v1/sp/sso"
 
         _LOGGER.debug("POSTing opower sso page with SAMLResponse: %s", opower_sso_url)
 
@@ -211,9 +246,76 @@ class SMUD(UtilityBase):
             },
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
+            allow_redirects=True,
+        )
+        await SMUD.log_response(opower_sso_response, session)
+
+        login_parser.feed(await opower_sso_response.text())
+        ocis_req_sp = login_parser.ocis_req_sp
+
+        identity_oraclecloud_login_url = "https://idcs-8d184356671642c58ea38b42e6420ed2.identity.oraclecloud.com/sso/v1/user/login"
+
+        _LOGGER.debug(
+            "POSTing opower sso login page with OCIS_REQ_SP: %s",
+            identity_oraclecloud_login_url,
         )
 
-        await SMUD.log_response(opower_sso_response, session)
+        identity_oraclecloud_login_response = await session.post(
+            identity_oraclecloud_login_url,
+            data={
+                "OCIS_REQ_SP": ocis_req_sp,
+            },
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+            allow_redirects=True,
+            max_redirects=10,
+        )
+
+        await SMUD.log_response(identity_oraclecloud_login_response, session)
+
+        okta_saml_request_url = identity_oraclecloud_login_response.real_url
+
+        _LOGGER.debug(
+            "Fetching okta saml page with SAMLRequest, RelayState: %s",
+            okta_saml_request_url,
+        )
+
+        okta_saml_request_response = await session.get(
+            okta_saml_request_url,
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+        )
+
+        await SMUD.log_response(okta_saml_request_response, session)
+
+        parser2 = SMUDOktaResponseSamlResponseValueParser()
+        parser2.feed(await okta_saml_request_response.text())
+        saml_response = parser2.saml_response
+        assert saml_response
+
+        login_parser.feed(await okta_saml_request_response.text())
+        relay_state = login_parser.relay_state
+
+        opower_sso_acs_url = "https://sso.opower.com/sp/ACS.saml2"
+
+        _LOGGER.debug(
+            "POSTing opower ACS sso page with SAMLResponse: %s", opower_sso_acs_url
+        )
+
+        opower_sso_acs_response = await session.post(
+            opower_sso_acs_url,
+            data={
+                "SAMLResponse": saml_response,
+                "RelayState": relay_state,
+            },
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+            allow_redirects=True,
+        )
+
+        await SMUD.log_response(opower_sso_acs_response, session)
+
+        _LOGGER.debug("End of SMUD login process")
 
         return
 
