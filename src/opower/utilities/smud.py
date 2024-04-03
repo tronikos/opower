@@ -340,7 +340,7 @@ class SMUD(UtilityBase):
 
     @staticmethod
     async def log_response(response: ClientResponse, session: ClientSession) -> None:
-        """Log any redirects and new cookies. Log full HTML when DEBUG_LOG_RESPONSE is set."""
+        """Log any redirects and new cookies. Log full HTML when -vv is set."""
         host = response.host  # Is this the request URL or the final redirected url?
 
         redirects = [r.url for r in response.history]
@@ -365,9 +365,6 @@ class SMUD(UtilityBase):
 
                 SMUD.cookies[host] = last_cookie_names + response_cookie_names
 
-        if hasattr("opower", "DEBUG_LOG_RESPONSE") and getattr(
-            "opower", "DEBUG_LOG_RESPONSE"
-        ):
-            response_html = await response.text()
-            _LOGGER.debug("Response %s:", response.url)
-            _LOGGER.debug(response_html)
+        response_html = await response.text()
+        _LOGGER.debug("Response %s:", response.url)
+        _LOGGER.debug(response_html)
