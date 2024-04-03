@@ -138,6 +138,7 @@ class SMUD(UtilityBase):
                     return
             except ClientResponseError:
                 _LOGGER.debug("Failed to login to SMUD with existing cookies")
+                session.cookie_jar.clear()
                 pass
 
         smud_login_page_url = "https://myaccount.smud.org/"
