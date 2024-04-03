@@ -366,5 +366,5 @@ class SMUD(UtilityBase):
                 SMUD.cookies[host] = last_cookie_names + response_cookie_names
 
         response_html = await response.text()
-        _LOGGER.debug("Response %s:", response.url)
-        _LOGGER.debug(response_html)
+        _LOGGER.log(logging.DEBUG - 1, "Response %s:", response.url)
+        _LOGGER.log(logging.DEBUG - 1, response_html)
