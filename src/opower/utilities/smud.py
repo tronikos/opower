@@ -223,7 +223,6 @@ class SMUD(UtilityBase):
         )
 
         # This step is done in the web browser but doesn't seem to matter here.
-        #
         smud_ssotransition_url = "https://myaccount.smud.org/signin/ssotransition"
 
         _LOGGER.debug("Fetching SMUD ssotransition page: %s", smud_ssotransition_url)
@@ -235,7 +234,7 @@ class SMUD(UtilityBase):
 
         await SMUD.log_response(smud_ssotransition_response, session)
 
-        # opower_sso_url = "https://sso.opower.com/sp/ACS.saml2"
+        # This is the action of the #appForm form in the smud_okta_response HTML.
         opower_sso_url = "https://idcs-8d184356671642c58ea38b42e6420ed2.identity.oraclecloud.com/fed/v1/sp/sso"
 
         _LOGGER.debug("POSTing opower sso page with SAMLResponse: %s", opower_sso_url)
