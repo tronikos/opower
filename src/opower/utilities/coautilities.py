@@ -118,6 +118,8 @@ class COAUtilities(UtilityBase):
             action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(html)
             assert set(hidden_inputs.keys()) == {"opentoken"}
 
+        session.cookie_jar.update_cookies({"dssPortalCW": "1"})
+
         # Getting success token
         async with session.post(
             action_url,
