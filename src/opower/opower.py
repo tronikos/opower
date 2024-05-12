@@ -102,6 +102,9 @@ class Account:
     customer: Customer
     uuid: str
     utility_account_id: str
+    # utility_account_id if unique or uuid
+    # https://github.com/home-assistant/core/issues/108260
+    id: str
     meter_type: MeterType
     read_resolution: Optional[ReadResolution]
 
@@ -205,18 +208,32 @@ class Opower:
 
         Typically one account for electricity and one for gas.
         """
-        accounts = []
+        utility_accounts = []
+        utility_account_ids = []
         for customer in await self._async_get_customers():
             for account in customer["utilityAccounts"]:
-                accounts.append(
-                    Account(
-                        customer=Customer(uuid=customer["uuid"]),
-                        uuid=account["uuid"],
-                        utility_account_id=account["preferredUtilityAccountId"],
-                        meter_type=MeterType(account["meterType"]),
-                        read_resolution=ReadResolution(account["readResolution"]),
-                    )
+                utility_accounts.append(account)
+                utility_account_ids.append(account["preferredUtilityAccountId"])
+
+        accounts = []
+        for account in utility_accounts:
+            utility_account_id = account["preferredUtilityAccountId"]
+            account_uuid = account["uuid"]
+            id = (
+                utility_account_id
+                if utility_account_ids.count(utility_account_id) == 1
+                else account_uuid
+            )
+            accounts.append(
+                Account(
+                    customer=Customer(uuid=customer["uuid"]),
+                    uuid=account_uuid,
+                    utility_account_id=utility_account_id,
+                    id=id,
+                    meter_type=MeterType(account["meterType"]),
+                    read_resolution=ReadResolution(account["readResolution"]),
                 )
+            )
         return accounts
 
     async def async_get_forecast(self) -> list[Forecast]:
@@ -224,7 +241,8 @@ class Opower:
 
         One forecast for each account, typically one for electricity, one for gas.
         """
-        forecasts = []
+        account_forecasts = []
+        utility_account_ids = []
         for customer in await self._async_get_customers():
             customer_uuid = customer["uuid"]
             url = (
@@ -264,29 +282,40 @@ class Opower:
                 )
                 continue
             for forecast in result["accountForecasts"]:
-                forecasts.append(
-                    Forecast(
-                        account=Account(
-                            customer=Customer(uuid=customer["uuid"]),
-                            uuid=forecast["accountUuids"][0],
-                            utility_account_id=str(
-                                forecast["preferredUtilityAccountId"]
-                            ),
-                            meter_type=MeterType(forecast["meterType"]),
-                            read_resolution=None,
-                        ),
-                        start_date=date.fromisoformat(forecast["startDate"]),
-                        end_date=date.fromisoformat(forecast["endDate"]),
-                        current_date=date.fromisoformat(forecast["currentDate"]),
-                        unit_of_measure=UnitOfMeasure(forecast["unitOfMeasure"]),
-                        usage_to_date=float(forecast.get("usageToDate", 0)),
-                        cost_to_date=float(forecast.get("costToDate", 0)),
-                        forecasted_usage=float(forecast.get("forecastedUsage", 0)),
-                        forecasted_cost=float(forecast.get("forecastedCost", 0)),
-                        typical_usage=float(forecast.get("typicalUsage", 0)),
-                        typical_cost=float(forecast.get("typicalCost", 0)),
-                    )
+                account_forecasts.append(forecast)
+                utility_account_ids.append(str(forecast["preferredUtilityAccountId"]))
+
+        forecasts = []
+        for forecast in account_forecasts:
+            utility_account_id = str(forecast["preferredUtilityAccountId"])
+            account_uuid = forecast["accountUuids"][0]
+            id = (
+                utility_account_id
+                if utility_account_ids.count(utility_account_id) == 1
+                else account_uuid
+            )
+            forecasts.append(
+                Forecast(
+                    account=Account(
+                        customer=Customer(uuid=customer["uuid"]),
+                        uuid=account_uuid,
+                        utility_account_id=utility_account_id,
+                        id=id,
+                        meter_type=MeterType(forecast["meterType"]),
+                        read_resolution=None,
+                    ),
+                    start_date=date.fromisoformat(forecast["startDate"]),
+                    end_date=date.fromisoformat(forecast["endDate"]),
+                    current_date=date.fromisoformat(forecast["currentDate"]),
+                    unit_of_measure=UnitOfMeasure(forecast["unitOfMeasure"]),
+                    usage_to_date=float(forecast.get("usageToDate", 0)),
+                    cost_to_date=float(forecast.get("costToDate", 0)),
+                    forecasted_usage=float(forecast.get("forecastedUsage", 0)),
+                    forecasted_cost=float(forecast.get("forecastedCost", 0)),
+                    typical_usage=float(forecast.get("typicalUsage", 0)),
+                    typical_cost=float(forecast.get("typicalCost", 0)),
                 )
+            )
         return forecasts
 
     async def _async_get_customers(self) -> list[Any]:
