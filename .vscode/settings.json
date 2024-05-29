@@ -1,10 +1,12 @@
 {
     "cSpell.words": [
         "aiohttp",
+        "aiozoneinfo",
         "atlanticcityelectric",
         "bgec",
         "cned",
         "comed",
+        "connectedaccounts",
         "dpld",
         "ELEC",
         "euapi",
@@ -26,6 +28,7 @@
         "Referer",
         "Signin",
         "TOTP",
-        "venv"
+        "venv",
+        "webcenter"
     ]
 }

@@ -1,6 +1,6 @@
 [project]
 name = "opower"
-version = "0.4.5"
+version = "0.4.6"
 license = {text = "Apache-2.0"}
 authors = [
     { name="tronikos", email="tronikos@gmail.com" },
@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "aiohttp>=3.8",
+    "aiozoneinfo>=0.1",
     "arrow>=1.2",
     "pyotp>=2.0",
 ]

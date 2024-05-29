@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 
 import aiohttp
 from aiohttp.client_exceptions import ClientResponseError
+import aiozoneinfo
 import arrow
 
 from .const import USER_AGENT
@@ -470,8 +471,9 @@ class Opower:
         if end_date is None:
             raise ValueError("end_date is required unless aggregate_type=BILL")
 
-        start = arrow.get(start_date.date(), self.utility.timezone())
-        end = arrow.get(end_date.date(), self.utility.timezone()).shift(days=1)
+        tzinfo = await aiozoneinfo.async_get_time_zone(self.utility.timezone())
+        start = arrow.get(start_date.date(), tzinfo)
+        end = arrow.get(end_date.date(), tzinfo).shift(days=1)
 
         max_request_days = None
         if aggregate_type == AggregateType.DAY:
