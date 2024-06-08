@@ -289,6 +289,8 @@ class Opower:
         forecasts = []
         for forecast in account_forecasts:
             utility_account_id = str(forecast["preferredUtilityAccountId"])
+            if not forecast["accountUuids"]:
+                continue
             account_uuid = forecast["accountUuids"][0]
             id = (
                 utility_account_id
