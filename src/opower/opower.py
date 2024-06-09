@@ -49,9 +49,8 @@ class AggregateType(Enum):
     BILL = "bill"
     DAY = "day"
     HOUR = "hour"
-    # HALF_HOUR and QUARTER_HOUR are intentionally omitted.
-    # Home Assistant only has hourly data in the energy dashboard and
-    # some utilities (e.g. PG&E) claim QUARTER_HOUR but they only provide HOUR.
+    HALF_HOUR = "half_hour"
+    QUARTER_HOUR = "quarter_hour"
 
     def __str__(self) -> str:
         """Return the value of the enum."""
@@ -80,11 +79,14 @@ SUPPORTED_AGGREGATE_TYPES = {
         AggregateType.BILL,
         AggregateType.DAY,
         AggregateType.HOUR,
+        AggregateType.HALF_HOUR,
     ],
     ReadResolution.QUARTER_HOUR: [
         AggregateType.BILL,
         AggregateType.DAY,
         AggregateType.HOUR,
+        AggregateType.HALF_HOUR,
+        AggregateType.QUARTER_HOUR,
     ],
 }
 
@@ -482,6 +484,10 @@ class Opower:
             max_request_days = 363
         elif aggregate_type == AggregateType.HOUR:
             max_request_days = 26
+        elif aggregate_type == AggregateType.HALF_HOUR:
+            max_request_days = 6
+        elif aggregate_type == AggregateType.QUARTER_HOUR:
+            max_request_days = 6
 
         # Fetch data in batches in reverse chronological order
         # until we reach start or there is no fetched data
