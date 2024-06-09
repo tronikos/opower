@@ -210,4 +210,5 @@ async def _main() -> None:
                     print()
 
 
-asyncio.run(_main())
+if __name__ == "__main__":
+    asyncio.run(_main())
