@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import csv
 from datetime import datetime, timedelta
 from getpass import getpass
 import logging
@@ -68,6 +69,10 @@ async def _main() -> None:
         action="store_true",
     )
     parser.add_argument(
+        "--csv",
+        help="csv file to store data",
+    )
+    parser.add_argument(
         "-v", "--verbose", help="enable verbose logging", action="count", default=0
     )
     args = parser.parse_args()
@@ -86,10 +91,11 @@ async def _main() -> None:
     async with aiohttp.ClientSession() as session:
         opower = Opower(session, utility, username, password, mfa_secret)
         await opower.async_login()
-        # Re-login to make sure code handles already logged in sessions.
-        await opower.async_login()
-        for forecast in await opower.async_get_forecast():
-            print("\nCurrent bill forecast:", forecast)
+        if not args.csv:
+            # Re-login to make sure code handles already logged in sessions.
+            await opower.async_login()
+            for forecast in await opower.async_get_forecast():
+                print("\nCurrent bill forecast:", forecast)
         for account in await opower.async_get_accounts():
             aggregate_type = args.aggregate_type
             if (
@@ -102,16 +108,17 @@ async def _main() -> None:
                 and account.read_resolution == ReadResolution.BILLING
             ):
                 aggregate_type = AggregateType.BILL
-            print(
-                "\nGetting historical data: account=",
-                account,
-                "aggregate_type=",
-                aggregate_type,
-                "start_date=",
-                args.start_date,
-                "end_date=",
-                args.end_date,
-            )
+            if not args.csv:
+                print(
+                    "\nGetting historical data: account=",
+                    account,
+                    "aggregate_type=",
+                    aggregate_type,
+                    "start_date=",
+                    args.start_date,
+                    "end_date=",
+                    args.end_date,
+                )
             prev_end: Optional[datetime] = None
             if args.usage_only:
                 usage_data = await opower.async_get_usage_reads(
@@ -120,25 +127,41 @@ async def _main() -> None:
                     args.start_date,
                     args.end_date,
                 )
-                print(
-                    "start_time\tend_time\tconsumption"
-                    "\tstart_minus_prev_end\tend_minus_prev_end"
-                )
-                for usage_read in usage_data:
-                    start_minus_prev_end = (
-                        None if prev_end is None else usage_read.start_time - prev_end
-                    )
-                    end_minus_prev_end = (
-                        None if prev_end is None else usage_read.end_time - prev_end
-                    )
-                    prev_end = usage_read.end_time
+                if args.csv:
+                    with open(args.csv, "w", newline="") as csv_file:
+                        writer = csv.writer(csv_file)
+                        writer.writerow(["start_time", "end_time", "consumption"])
+                        for usage_read in usage_data:
+                            writer.writerow(
+                                [
+                                    usage_read.start_time,
+                                    usage_read.end_time,
+                                    usage_read.consumption,
+                                ]
+                            )
+                else:
                     print(
-                        f"{usage_read.start_time}"
-                        f"\t{usage_read.end_time}"
-                        f"\t{usage_read.consumption}"
-                        f"\t{start_minus_prev_end}"
-                        f"\t{end_minus_prev_end}"
+                        "start_time\tend_time\tconsumption"
+                        "\tstart_minus_prev_end\tend_minus_prev_end"
                     )
+                    for usage_read in usage_data:
+                        start_minus_prev_end = (
+                            None
+                            if prev_end is None
+                            else usage_read.start_time - prev_end
+                        )
+                        end_minus_prev_end = (
+                            None if prev_end is None else usage_read.end_time - prev_end
+                        )
+                        prev_end = usage_read.end_time
+                        print(
+                            f"{usage_read.start_time}"
+                            f"\t{usage_read.end_time}"
+                            f"\t{usage_read.consumption}"
+                            f"\t{start_minus_prev_end}"
+                            f"\t{end_minus_prev_end}"
+                        )
+                    print()
             else:
                 cost_data = await opower.async_get_cost_reads(
                     account,
@@ -146,27 +169,45 @@ async def _main() -> None:
                     args.start_date,
                     args.end_date,
                 )
-                print(
-                    "start_time\tend_time\tconsumption\tprovided_cost"
-                    "\tstart_minus_prev_end\tend_minus_prev_end"
-                )
-                for cost_read in cost_data:
-                    start_minus_prev_end = (
-                        None if prev_end is None else cost_read.start_time - prev_end
-                    )
-                    end_minus_prev_end = (
-                        None if prev_end is None else cost_read.end_time - prev_end
-                    )
-                    prev_end = cost_read.end_time
+                if args.csv:
+                    with open(args.csv, "w", newline="") as csv_file:
+                        writer = csv.writer(csv_file)
+                        writer.writerow(
+                            ["start_time", "end_time", "consumption", "provided_cost"]
+                        )
+                        for cost_read in cost_data:
+                            writer.writerow(
+                                [
+                                    cost_read.start_time,
+                                    cost_read.end_time,
+                                    cost_read.consumption,
+                                    cost_read.provided_cost,
+                                ]
+                            )
+                else:
                     print(
-                        f"{cost_read.start_time}"
-                        f"\t{cost_read.end_time}"
-                        f"\t{cost_read.consumption}"
-                        f"\t{cost_read.provided_cost}"
-                        f"\t{start_minus_prev_end}"
-                        f"\t{end_minus_prev_end}"
+                        "start_time\tend_time\tconsumption\tprovided_cost"
+                        "\tstart_minus_prev_end\tend_minus_prev_end"
                     )
-            print()
+                    for cost_read in cost_data:
+                        start_minus_prev_end = (
+                            None
+                            if prev_end is None
+                            else cost_read.start_time - prev_end
+                        )
+                        end_minus_prev_end = (
+                            None if prev_end is None else cost_read.end_time - prev_end
+                        )
+                        prev_end = cost_read.end_time
+                        print(
+                            f"{cost_read.start_time}"
+                            f"\t{cost_read.end_time}"
+                            f"\t{cost_read.consumption}"
+                            f"\t{cost_read.provided_cost}"
+                            f"\t{start_minus_prev_end}"
+                            f"\t{end_minus_prev_end}"
+                        )
+                    print()
 
 
 asyncio.run(_main())
