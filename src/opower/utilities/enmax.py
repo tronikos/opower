@@ -1,4 +1,5 @@
 """Enmax."""
+
 from typing import Optional
 import xml.etree.ElementTree as ET
 

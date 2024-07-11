@@ -1,6 +1,5 @@
 """Base class that each utility needs to extend."""
 
-
 from typing import Any, Optional
 
 import aiohttp

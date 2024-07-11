@@ -1,4 +1,5 @@
 """City of Austin Utilities."""
+
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 

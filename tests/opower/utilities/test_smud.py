@@ -1,4 +1,5 @@
 """Tests for SMUD."""
+
 import os
 import unittest
 
