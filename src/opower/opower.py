@@ -549,7 +549,7 @@ class Opower:
         _LOGGER.debug("Fetching: %s?%s", url, urlencode(params))
         try:
             async with self.session.get(
-                url, params=params, headers=headers, raise_for_status=False
+                url, params=params, headers=headers, raise_for_status=True
             ) as resp:
                 result = await resp.json()
                 _LOGGER.log(
