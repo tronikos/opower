@@ -65,7 +65,7 @@ class MNZL(UtilityBase):
 
     @staticmethod
     def utilitycode() -> str:
-        """Return the short identifier for the utility."""
+        """Return the utilitycode identifier for the utility."""
         return "meen"
 
     @staticmethod

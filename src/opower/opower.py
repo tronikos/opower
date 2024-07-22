@@ -190,7 +190,7 @@ class Opower:
         self.user_accounts: list[Any] = []
 
     def _get_utilitycode(self) -> str:
-        """Get short from the utility or default to subdomain."""
+        """Get utilitycode from the utility or default to subdomain."""
         try:
             if hasattr(self.utility, "utilitycode"):
                 utilitycode = self.utility.utilitycode()
@@ -198,7 +198,7 @@ class Opower:
                     return utilitycode
             return self.utility.subdomain()
         except NotImplementedError:
-            # If both short() and subdomain() raise NotImplementedError,
+            # If both utilitycode() and subdomain() raise NotImplementedError,
             # fall back to the class name as a last resort
             return self.utility.__name__.lower()
 

@@ -17,7 +17,7 @@ class UtilityBase:
 
     @staticmethod
     def utilitycode() -> str:
-        """Return the code identifier for this utility, defaults to subdomain."""
+        """Return the utilitycode identifier for this utility, defaults to subdomain."""
         try:
             return UtilityBase.subdomain()
         except NotImplementedError:
