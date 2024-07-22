@@ -1,4 +1,4 @@
-"""Mercury New Zealand Limited utility implementation.
+"""Mercury NZ Limited utility implementation.
 
 This module handles the authentication and API interactions for Mercury NZ.
 It uses OAuth 2.0 with PKCE for secure authentication.
@@ -36,7 +36,7 @@ class TokenDict(TypedDict):
 
 
 class MNZL(UtilityBase):
-    """Mercury New Zealand Limited utility implementation.
+    """Mercury NZ Limited utility implementation.
 
     This class handles the authentication and API interactions for Mercury NZ.
     It uses OAuth 2.0 with PKCE for secure authentication.
@@ -56,7 +56,7 @@ class MNZL(UtilityBase):
     @staticmethod
     def name() -> str:
         """Return the name of the utility."""
-        return "Mercury New Zealand Limited"
+        return "Mercury NZ Limited"
 
     @staticmethod
     def subdomain() -> str:
