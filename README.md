@@ -25,7 +25,7 @@ Supported utilities (in alphabetical order):
   - Delmarva Power
   - PECO Energy Company (PECO)
   - Potomac Electric Power Company (Pepco)
-- Mercury NZ Limited (MNZL)
+- Mercury NZ Limited
 - Pacific Gas & Electric (PG&E)
 - Portland General Electric (PGE)
 - Puget Sound Energy (PSE)

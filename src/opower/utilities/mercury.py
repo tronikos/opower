@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlparse
 
 import aiohttp
 
-from ..exceptions import InvalidAuth
+from ..exceptions import CannotConnect, InvalidAuth
 from .base import UtilityBase
 
 _LOGGER = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ class TokenDict(TypedDict):
     access_token: str
 
 
-class MNZL(UtilityBase):
+class Mercury(UtilityBase):
     """Mercury NZ Limited utility implementation.
 
     This class handles the authentication and API interactions for Mercury NZ.
@@ -99,39 +99,53 @@ class MNZL(UtilityBase):
         optional_mfa_secret: Optional[str],
     ) -> Optional[str]:
         """Perform the login process and return an access token."""
+        _LOGGER.debug("Starting login process for Mercury NZ Limited")
         ssl_context = ssl.create_default_context()
         connector = aiohttp.TCPConnector(ssl=ssl_context)
         secure_session = aiohttp.ClientSession(connector=connector)
 
         try:
-            code_verifier = MNZL.generate_code_verifier()
-            code_challenge = MNZL.generate_code_challenge(code_verifier)
+            code_verifier = Mercury.generate_code_verifier()
+            code_challenge = Mercury.generate_code_challenge(code_verifier)
+            _LOGGER.debug("Generated PKCE code verifier and challenge")
 
-            config = await MNZL._get_config(secure_session)
-            auth_code = await MNZL._get_auth(
+            config = await Mercury._get_config(secure_session)
+            _LOGGER.debug("Retrieved OAuth configuration")
+
+            auth_code = await Mercury._get_auth(
                 secure_session, config, code_challenge, username, password
             )
             if auth_code is None:
-                raise InvalidAuth("Failed to obtain authorization code")
-            tokens = await MNZL._get_access(
+                _LOGGER.error("Failed to obtain authorization code")
+                raise CannotConnect("Failed to obtain authorization code")
+            _LOGGER.debug("Obtained authorization code")
+
+            tokens = await Mercury._get_access(
                 secure_session, config, auth_code, code_verifier
             )
 
             if tokens and "access_token" in tokens:
+                _LOGGER.debug("Successfully obtained access token")
                 return tokens["access_token"]
             else:
-                raise InvalidAuth("Failed to obtain access token")
+                _LOGGER.error("Failed to obtain access token")
+                raise CannotConnect("Failed to obtain access token")
 
+        except aiohttp.ClientError as err:
+            _LOGGER.error("Connection error during login: %s", str(err))
+            raise CannotConnect(f"Connection error: {err}")
         finally:
             await secure_session.close()
 
     @staticmethod
     async def _get_config(session: aiohttp.ClientSession) -> ConfigDict:
         """Get the configuration from the server."""
-        config_url = f"{MNZL.BASE_URL}/{MNZL.TENANT_ID}/{MNZL.POLICY}/v2.0/.well-known/openid-configuration"
-        config_text, _, status = await MNZL._fetch(session, config_url)
+        config_url = f"{Mercury.BASE_URL}/{Mercury.TENANT_ID}/{Mercury.POLICY}/v2.0/.well-known/openid-configuration"
+        _LOGGER.debug("Fetching OAuth configuration from: %s", config_url)
+        config_text, _, status = await Mercury._fetch(session, config_url)
         if status != 200 or not config_text:
-            raise InvalidAuth("Failed to get configuration")
+            _LOGGER.error("Failed to get configuration. Status: %s", status)
+            raise CannotConnect("Failed to get configuration")
         config: ConfigDict = json.loads(config_text)
         return config
 
@@ -145,31 +159,38 @@ class MNZL(UtilityBase):
     ) -> Optional[str]:
         """Get the authorization code."""
         auth_params = {
-            "client_id": MNZL.CLIENT_ID,
+            "client_id": Mercury.CLIENT_ID,
             "response_type": "code",
-            "redirect_uri": MNZL.REDIRECT_URI,
-            "scope": MNZL.SCOPE_AUTH,
+            "redirect_uri": Mercury.REDIRECT_URI,
+            "scope": Mercury.SCOPE_AUTH,
             "code_challenge": code_challenge,
             "code_challenge_method": "S256",
         }
-        auth_content, final_url, status = await MNZL._fetch(
+        _LOGGER.debug("Requesting authorization code")
+        auth_content, final_url, status = await Mercury._fetch(
             session, config["authorization_endpoint"], params=auth_params
         )
         if status != 200 or not auth_content:
-            raise InvalidAuth("Failed to get authorization")
+            _LOGGER.error("Failed to get authorization. Status: %s", status)
+            raise CannotConnect("Failed to get authorization")
 
-        settings = MNZL._extract_settings(auth_content)
+        settings = Mercury._extract_settings(auth_content)
         if not settings:
-            if final_url and final_url.startswith(MNZL.REDIRECT_URI):
+            _LOGGER.debug(
+                "No settings extracted, checking for direct authorization code"
+            )
+            if final_url and final_url.startswith(Mercury.REDIRECT_URI):
                 query = urlparse(final_url).query
                 parsed_query = parse_qs(query)
                 return parsed_query.get("code", [None])[0]
             return None
 
-        await MNZL._post_credentials(
+        _LOGGER.debug("Posting credentials")
+        await Mercury._post_credentials(
             session, config["issuer"], settings, username, password
         )
-        return await MNZL._confirm_signin(session, config["issuer"], settings)
+        _LOGGER.debug("Confirming sign-in")
+        return await Mercury._confirm_signin(session, config["issuer"], settings)
 
     @staticmethod
     async def _get_access(
@@ -180,18 +201,20 @@ class MNZL(UtilityBase):
     ) -> Optional[TokenDict]:
         """Get the access token."""
         token_data = {
-            "client_id": MNZL.CLIENT_ID,
+            "client_id": Mercury.CLIENT_ID,
             "grant_type": "authorization_code",
             "code": auth_code,
-            "redirect_uri": MNZL.REDIRECT_URI,
+            "redirect_uri": Mercury.REDIRECT_URI,
             "code_verifier": code_verifier,
-            "scope": MNZL.SCOPE_ACCESS,
+            "scope": Mercury.SCOPE_ACCESS,
         }
-        token_content, _, status = await MNZL._fetch(
+        _LOGGER.debug("Requesting access token")
+        token_content, _, status = await Mercury._fetch(
             session, config["token_endpoint"], method="POST", data=token_data
         )
         if status != 200 or not token_content:
-            raise InvalidAuth("Failed to get access token")
+            _LOGGER.error("Failed to get access token. Status: %s", status)
+            raise CannotConnect("Failed to get access token")
         tokens: TokenDict = json.loads(token_content)
         return tokens
 
@@ -203,29 +226,36 @@ class MNZL(UtilityBase):
         method = kwargs.pop("method", "GET")
         timeout = aiohttp.ClientTimeout(total=30)
         try:
+            _LOGGER.debug("Fetching URL: %s, Method: %s", url, method)
             async with session.request(
                 method, url, timeout=timeout, **kwargs
             ) as response:
                 content = await response.text()
+                _LOGGER.debug("Fetch completed. Status: %s", response.status)
                 return content, str(response.url), response.status
         except aiohttp.ClientError as e:
-            _LOGGER.error(f"Network error occurred: {str(e)}")
+            _LOGGER.error("Network error occurred: %s", str(e))
             return None, None, 0
 
     @staticmethod
     def _extract_settings(auth_content: str) -> Optional[dict[str, Any]]:
         """Extract settings from the authorization content."""
+        _LOGGER.debug("Extracting settings from authorization content")
         settings_start = auth_content.find("var SETTINGS = ")
         if settings_start == -1:
+            _LOGGER.debug("Settings not found in authorization content")
             return None
         settings_end = auth_content.find(";", settings_start)
         if settings_end == -1:
+            _LOGGER.debug("End of settings not found in authorization content")
             return None
         settings_json = auth_content[settings_start + 15 : settings_end].strip()
         try:
             settings: dict[str, Any] = json.loads(settings_json)
+            _LOGGER.debug("Settings successfully extracted")
             return settings
         except json.JSONDecodeError:
+            _LOGGER.error("Failed to parse settings JSON")
             return None
 
     @staticmethod
@@ -238,13 +268,14 @@ class MNZL(UtilityBase):
     ) -> None:
         """Post credentials to the server."""
         base_url = issuer.rsplit("/", 2)[0]
-        _, _, status = await MNZL._fetch(
+        _LOGGER.debug("Posting credentials to %s", base_url)
+        _, _, status = await Mercury._fetch(
             session,
-            f"{base_url}/{MNZL.POLICY}/{MNZL.SELF_ASSERTED_ENDPOINT}",
+            f"{base_url}/{Mercury.POLICY}/{Mercury.SELF_ASSERTED_ENDPOINT}",
             method="POST",
             data={
                 "tx": settings["transId"],
-                "p": MNZL.POLICY,
+                "p": Mercury.POLICY,
                 "request_type": "RESPONSE",
                 "signInName": username,
                 "password": password,
@@ -252,7 +283,9 @@ class MNZL(UtilityBase):
             headers={"X-CSRF-TOKEN": settings["csrf"]},
         )
         if status != 200:
-            raise InvalidAuth("Failed to post credentials")
+            _LOGGER.error("Failed to post credentials. Status: %s", status)
+            raise InvalidAuth("Invalid username or password")
+        _LOGGER.debug("Credentials posted successfully")
 
     @staticmethod
     async def _confirm_signin(
@@ -260,21 +293,29 @@ class MNZL(UtilityBase):
     ) -> Optional[str]:
         """Confirm the sign-in process."""
         base_url = issuer.rsplit("/", 2)[0]
-        _, final_url, status = await MNZL._fetch(
+        _LOGGER.debug("Confirming sign-in at %s", base_url)
+        _, final_url, status = await Mercury._fetch(
             session,
-            f"{base_url}/{MNZL.POLICY}/{MNZL.POLICY_CONFIRM_ENDPOINT}",
+            f"{base_url}/{Mercury.POLICY}/{Mercury.POLICY_CONFIRM_ENDPOINT}",
             params={
                 "rememberMe": "false",
                 "csrf_token": settings["csrf"],
                 "tx": settings["transId"],
-                "p": MNZL.POLICY,
+                "p": Mercury.POLICY,
             },
             allow_redirects=True,
         )
         if status != 200:
-            raise InvalidAuth("Failed to confirm signin")
+            _LOGGER.error("Failed to confirm signin. Status: %s", status)
+            raise CannotConnect("Failed to confirm signin")
         if final_url:
             query = urlparse(final_url).query
             parsed_query = parse_qs(query)
-            return parsed_query.get("code", [None])[0]
+            auth_code = parsed_query.get("code", [None])[0]
+            if auth_code:
+                _LOGGER.debug("Sign-in confirmed, authorization code obtained")
+            else:
+                _LOGGER.warning("Sign-in confirmed, but no authorization code found")
+            return auth_code
+        _LOGGER.warning("Sign-in confirmation did not result in a final URL")
         return None

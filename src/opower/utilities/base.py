@@ -16,14 +16,6 @@ class UtilityBase:
         cls.subclasses.append(cls)
 
     @staticmethod
-    def utilitycode() -> str:
-        """Return the utilitycode identifier for this utility, defaults to subdomain."""
-        try:
-            return UtilityBase.subdomain()
-        except NotImplementedError:
-            return ""
-
-    @staticmethod
     def name() -> str:
         """Distinct recognizable name of the utility."""
         raise NotImplementedError
