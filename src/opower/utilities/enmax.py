@@ -1,13 +1,16 @@
 """Enmax."""
 
+import logging
 from typing import Optional
 import xml.etree.ElementTree as ET
 
 import aiohttp
 
 from ..const import USER_AGENT
-from ..exceptions import InvalidAuth
+from ..exceptions import CannotConnect, InvalidAuth
 from .base import UtilityBase
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class Enmax(UtilityBase):
@@ -36,6 +39,7 @@ class Enmax(UtilityBase):
         optional_mfa_secret: Optional[str],
     ) -> str:
         """Login to the utility website."""
+        _LOGGER.debug("Starting enmax login")
         # Get request digest (required for authentication to Enmax)
         async with session.post(
             "https://www.enmax.com/ForYourHomeSite/_vti_bin/sites.asmx",
@@ -54,7 +58,11 @@ class Enmax(UtilityBase):
         ) as resp:
             xml_response = await resp.text()
 
-        xml = ET.fromstring(xml_response)
+        try:
+            xml = ET.fromstring(xml_response)
+        except ET.ParseError as e:
+            raise CannotConnect(f"XML error. Failed to parse request digest: {e.text}")
+
         for i in xml.iter():
             if (
                 i.tag
@@ -63,7 +71,7 @@ class Enmax(UtilityBase):
                 requestdigest = i.text
                 break
         if not requestdigest:
-            raise InvalidAuth("Request digest was not found.")
+            raise CannotConnect("Request digest was not found.")
 
         # Login to the utility website
         async with session.post(
@@ -82,8 +90,13 @@ class Enmax(UtilityBase):
             raise_for_status=True,
         ) as resp:
             result = await resp.json()
-            if result["ErrorMessage"]:
-                raise InvalidAuth(result["ErrorMessage"])
+            error_message = result.get("ErrorMessage")
+            if error_message:
+                # The following text will likely be displayed during maintenance periods
+                if ("an error occurred retrieving or updating data") in error_message:
+                    raise CannotConnect(error_message)
+                else:
+                    raise InvalidAuth(error_message)
 
         # Get authorization token for opower
         async with session.post(
