@@ -43,6 +43,11 @@ class UtilityBase:
         """Check if Utility using DSS version of the portal."""
         return False
 
+    @classmethod
+    def utilitycode(cls) -> str:
+        """Return the utilitycode identifier for the utility."""
+        return cls.subdomain()
+
     @staticmethod
     async def async_login(
         session: aiohttp.ClientSession,
