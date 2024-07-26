@@ -247,15 +247,9 @@ class Opower:
         for customer in await self._async_get_customers():
             customer_uuid = customer["uuid"]
             url = (
-                "https://"
-                f"{self._get_subdomain()}"
-                ".opower.com/"
-                f"{self._get_api_root()}"
-                "/edge/apis/bill-forecast-cws-v1/cws/"
-                f"{self.utility.subdomain()}"
-                "/customers/"
-                f"{customer_uuid}"
-                "/combined-forecast"
+                f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}"
+                f"/edge/apis/bill-forecast-cws-v1/cws/{self.utility.utilitycode()}"
+                f"/customers/{customer_uuid}/combined-forecast"
             )
             _LOGGER.debug("Fetching: %s", url)
             try:
@@ -329,12 +323,8 @@ class Opower:
                 await self._async_get_user_accounts()
 
             url = (
-                "https://"
-                f"{self._get_subdomain()}"
-                ".opower.com/"
-                f"{self._get_api_root()}"
-                "/edge/apis/multi-account-v1/cws/"
-                f"{self.utility.subdomain()}"
+                f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}"
+                f"/edge/apis/multi-account-v1/cws/{self.utility.utilitycode()}"
                 "/customers?offset=0&batchSize=100&addressFilter="
             )
             _LOGGER.debug("Fetching: %s", url)
@@ -516,24 +506,14 @@ class Opower:
     ) -> list[Any]:
         if usage_only:
             url = (
-                "https://"
-                f"{self._get_subdomain()}"
-                ".opower.com/"
-                f"{self._get_api_root()}"
-                "/edge/apis/DataBrowser-v1/cws/utilities/"
-                f"{self.utility.subdomain()}"
-                "/utilityAccounts/"
-                f"{account.uuid}"
-                "/reads"
+                f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}"
+                f"/edge/apis/DataBrowser-v1/cws/utilities/{self.utility.utilitycode()}"
+                f"/utilityAccounts/{account.uuid}/reads"
             )
         else:
             url = (
-                "https://"
-                f"{self._get_subdomain()}"
-                ".opower.com/"
-                f"{self._get_api_root()}"
-                "/edge/apis/DataBrowser-v1/cws/cost/utilityAccount/"
-                f"{account.uuid}"
+                f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}"
+                f"/edge/apis/DataBrowser-v1/cws/cost/utilityAccount/{account.uuid}"
             )
         convert_to_date = usage_only
         params = {"aggregateType": aggregate_type.value}
