@@ -56,7 +56,7 @@ class NationalGrid(UtilityBase):
         optional_mfa_secret: Optional[str],
     ) -> Optional[str]:
         """Perform the login process and return an access token."""
-        _LOGGER.debug("Starting login process for Mercury NZ Limited")
+        _LOGGER.debug("Starting login process for National Grid")
         return await async_auth_oidc(
             username,
             password,
