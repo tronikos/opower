@@ -15,7 +15,7 @@ from .oidchelper import async_auth_oidc
 _LOGGER = logging.getLogger(__name__)
 
 
-class NationalGrid(UtilityBase):
+class NationalGridNYUpstate(UtilityBase):
     """National Grid Upstate NY utility implementation.
 
     This class handles the authentication and API interactions for National Grid UNY.
@@ -25,7 +25,7 @@ class NationalGrid(UtilityBase):
     @staticmethod
     def name() -> str:
         """Return the name of the utility."""
-        return "National Grid (NY)"
+        return "National Grid (NY Upstate)"
 
     @staticmethod
     def subdomain() -> str:
@@ -60,13 +60,13 @@ class NationalGrid(UtilityBase):
         return await async_auth_oidc(
             username,
             password,
-            NationalGrid.BASE_URL,
-            NationalGrid.TENANT_ID,
-            NationalGrid.POLICY,
-            NationalGrid.CLIENT_ID,
-            NationalGrid.REDIRECT_URI,
-            NationalGrid.SCOPE_AUTH,
-            NationalGrid.SCOPE_ACCESS,
-            NationalGrid.SELF_ASSERTED_ENDPOINT,
-            NationalGrid.POLICY_CONFIRM_ENDPOINT,
+            NationalGridNYUpstate.BASE_URL,
+            NationalGridNYUpstate.TENANT_ID,
+            NationalGridNYUpstate.POLICY,
+            NationalGridNYUpstate.CLIENT_ID,
+            NationalGridNYUpstate.REDIRECT_URI,
+            NationalGridNYUpstate.SCOPE_AUTH,
+            NationalGridNYUpstate.SCOPE_ACCESS,
+            NationalGridNYUpstate.SELF_ASSERTED_ENDPOINT,
+            NationalGridNYUpstate.POLICY_CONFIRM_ENDPOINT,
         )
