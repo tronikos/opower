@@ -13,6 +13,7 @@ dependencies = [
     "aiozoneinfo>=0.1",
     "arrow>=1.2",
     "pyotp>=2.0",
+    "cryptography>=43.0.0",
 ]
 
 [project.urls]
@@ -83,5 +84,4 @@ max-complexity = 25
 dev = [
     "pytest>=7,<8",
     "python-dotenv>=1,<2",
-    "cryptography>=43.0.0"
 ]

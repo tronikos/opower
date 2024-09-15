@@ -92,10 +92,10 @@ class Aps(UtilityBase):
                 "sAID"
             ]
 
-        ACCOUNT_SERVICE_ID = f"{account_id}_{service_address_id}"
+        account_service_id = f"{account_id}_{service_address_id}"
 
         # Start SAML authentication with APS and Opower
-        url = f"https://www.aps.com/en/Residential/Save-Money-and-Energy/Opower?CA_SA={ACCOUNT_SERVICE_ID}"
+        url = f"https://www.aps.com/en/Residential/Save-Money-and-Energy/Opower?CA_SA={account_service_id}"
         await async_auth_saml(session, url)
 
 
