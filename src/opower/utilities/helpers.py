@@ -1,8 +1,11 @@
 """Helper functions."""
 
+import base64
 import re
 
 import aiohttp
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from ..const import USER_AGENT
 
@@ -55,3 +58,20 @@ async def async_auth_saml(session: aiohttp.ClientSession, url: str) -> None:
         raise_for_status=True,
     ) as resp:
         pass
+
+
+def js_encrypt(pub_key: str, text: str) -> str:
+    """JSEncrypt-like encryption function using cryptography."""
+    # Load the public key
+    rsakey = serialization.load_pem_public_key(pub_key.encode())
+    # Check if the key is RSA before encrypting
+    if isinstance(rsakey, rsa.RSAPublicKey):
+        # Encrypt the text using RSA and PKCS1v15 padding
+        cipher_text = rsakey.encrypt(text.encode(), padding.PKCS1v15())
+
+        # Encode the encrypted text in base64
+        cipher_text_base64 = base64.b64encode(cipher_text)
+
+        return cipher_text_base64.decode()
+    else:
+        raise ConnectionError("Could not find public key to and encrypt password.")
