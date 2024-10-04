@@ -1,5 +1,6 @@
 """OIDC Login Helper and its constituent functions."""
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -30,7 +31,9 @@ async def async_auth_oidc(
     policy_confirm_endpoint: str,
 ) -> Optional[str]:
     """Perform the login process and return an access token."""
-    ssl_context = ssl.create_default_context()
+    ssl_context = await asyncio.get_running_loop().run_in_executor(
+        None, ssl.create_default_context
+    )
     connector = aiohttp.TCPConnector(ssl=ssl_context)
     secure_session = aiohttp.ClientSession(connector=connector)
     try:
