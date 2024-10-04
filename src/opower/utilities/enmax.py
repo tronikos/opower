@@ -2,7 +2,6 @@
 
 import logging
 from typing import Optional
-import xml.etree.ElementTree as ET
 
 import aiohttp
 
@@ -40,70 +39,60 @@ class Enmax(UtilityBase):
     ) -> str:
         """Login to the utility website."""
         _LOGGER.debug("Starting enmax login")
-        # Get request digest (required for authentication to Enmax)
-        async with session.post(
-            "https://www.enmax.com/ForYourHomeSite/_vti_bin/sites.asmx",
-            headers={
-                "User-Agent": USER_AGENT,
-                "Content-Type": "text/xml",
-            },
-            data=(
-                b'<?xml version="1.0" encoding="utf-8"?>'
-                b'<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
-                b'xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">  '
-                b'<soap:Body>     <GetUpdatedFormDigest xmlns="http://schemas.microsoft.com/sharepoint/soap/" />  '
-                b"</soap:Body></soap:Envelope>"
-            ),
-            raise_for_status=True,
-        ) as resp:
-            xml_response = await resp.text()
-
-        try:
-            xml = ET.fromstring(xml_response)
-        except ET.ParseError as e:
-            raise CannotConnect(f"XML error. Failed to parse request digest: {e.text}")
-
-        for i in xml.iter():
-            if (
-                i.tag
-                == "{http://schemas.microsoft.com/sharepoint/soap/}GetUpdatedFormDigestResult"
-            ):
-                requestdigest = i.text
-                break
-        if not requestdigest:
-            raise CannotConnect("Request digest was not found.")
-
         # Login to the utility website
         async with session.post(
-            "https://www.enmax.com/ForYourHomeSite/_vti_bin/Enmax.Internet.Auth/AuthService.svc/AuthenticateUser",
+            "https://myaccount.enmax.com/api/account/sign-in-auth",
             json={
-                "email": username,
+                "username": username,
                 "password": password,
-                "autoUnlockIntervalMinutes": 15,
-                "queryString": "",
             },
             headers={
                 "User-Agent": USER_AGENT,
-                "X-RequestDigest": requestdigest,
-                "referer": "https://www.enmax.com/sign-in",
+                "referer": "https://myaccount.enmax.com",
             },
-            raise_for_status=True,
+            raise_for_status=False,
         ) as resp:
             result = await resp.json()
-            error_message = result.get("ErrorMessage")
-            if error_message:
+            if "error" in result:
+                error_message = result["error"]["message"]
                 # The following text will likely be displayed during maintenance periods
                 if ("an error occurred retrieving or updating data") in error_message:
                     raise CannotConnect(error_message)
                 else:
                     raise InvalidAuth(error_message)
+            token = result["token"]
 
-        # Get authorization token for opower
         async with session.post(
-            "https://www.enmax.com/YourAccountSite/_vti_bin/Enmax.Internet.Opower/MyEnergyIQService.svc/IssueAccessToken",
+            "https://myaccount.enmax.com/api/account/access-token",
+            json={
+                "code": token,
+            },
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         ) as resp:
-            token = await resp.text()
+            result = await resp.json()
+            access_token = result["access_token"]
 
-        return str(token.replace('"', ""))
+        async with session.get(
+            f"https://myaccount.enmax.com/api/account/associated-accounts?token={access_token}",
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+        ) as resp:
+            result = await resp.json()
+            account_no = result["associated_account"]["accounts"][0]["account"][
+                "account_no"
+            ]
+
+        # Get authorization token for opower
+        async with session.post(
+            "https://myaccount.enmax.com/api/myenergyiq/auth",
+            json={
+                "account_no": account_no,
+                "token": access_token,
+            },
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+        ) as resp:
+            result = await resp.json()
+
+        return str(result["access_token"])
