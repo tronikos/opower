@@ -9,7 +9,7 @@ from typing import Any, Optional, Union
 from urllib.parse import urlencode
 
 import aiohttp
-from aiohttp.client_exceptions import ClientResponseError
+from aiohttp.client_exceptions import ClientError, ClientResponseError
 import aiozoneinfo
 import arrow
 
@@ -205,6 +205,8 @@ class Opower:
                 raise InvalidAuth(err)
             else:
                 raise CannotConnect(err)
+        except ClientError as err:
+            raise CannotConnect(err)
 
     async def async_get_accounts(self) -> list[Account]:
         """Get a list of accounts for the signed in user.
