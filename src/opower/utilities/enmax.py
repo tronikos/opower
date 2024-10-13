@@ -79,9 +79,11 @@ class Enmax(UtilityBase):
             raise_for_status=True,
         ) as resp:
             result = await resp.json()
-            #Only include active accounts, then take the first one in the list
+            # Only include active accounts, then take the first one in the list
             active_accounts = [
-                account for account in result["associated_account"]["accounts"] if account["account"]["status"] == "active"
+                account
+                for account in result["associated_account"]["accounts"]
+                if account["account"]["status"] == "active"
             ]
             if len(active_accounts) == 0:
                 raise InvalidAuth("No active accounts found")
