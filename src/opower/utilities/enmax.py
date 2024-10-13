@@ -79,9 +79,13 @@ class Enmax(UtilityBase):
             raise_for_status=True,
         ) as resp:
             result = await resp.json()
-            account_no = result["associated_account"]["accounts"][0]["account"][
-                "account_no"
+            #Only include active accounts, then take the first one in the list
+            active_accounts = [
+                account for account in result["associated_account"]["accounts"] if account["account"]["status"] == "active"
             ]
+            if len(active_accounts) == 0:
+                raise InvalidAuth("No active accounts found")
+            account_no = active_accounts[0]["account"]["account_no"]
 
         # Get authorization token for opower
         async with session.post(
