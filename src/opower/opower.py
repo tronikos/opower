@@ -127,6 +127,7 @@ class Forecast:
     forecasted_cost: float
     typical_usage: float
     typical_cost: float
+    metadata: list[str]
 
 
 @dataclasses.dataclass
@@ -313,6 +314,7 @@ class Opower:
                         forecasted_cost=float(forecast.get("forecastedCost", 0)),
                         typical_usage=float(forecast.get("typicalUsage", 0)),
                         typical_cost=float(forecast.get("typicalCost", 0)),
+                        metadata=result["totalMetadata"],
                     )
                 )
         return forecasts
