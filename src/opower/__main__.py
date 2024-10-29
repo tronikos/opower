@@ -75,6 +75,12 @@ async def _main() -> None:
     parser.add_argument(
         "-v", "--verbose", help="enable verbose logging", action="count", default=0
     )
+    parser.add_argument(
+        "--realtime",
+        help="If true, fetches usage-only data from the realtime API. "
+        "Not all utilities support the realtime API.",
+        action="store_true",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -120,13 +126,17 @@ async def _main() -> None:
                     args.end_date,
                 )
             prev_end: Optional[datetime] = None
-            if args.usage_only:
-                usage_data = await opower.async_get_usage_reads(
-                    account,
-                    aggregate_type,
-                    args.start_date,
-                    args.end_date,
-                )
+            # Realtime data does not include cost data, so effectively --realtime implies --usage_only.
+            if args.usage_only or args.realtime:
+                if args.realtime:
+                    usage_data = await opower.async_get_realtime_usage_reads(account)
+                else:
+                    usage_data = await opower.async_get_usage_reads(
+                        account,
+                        aggregate_type,
+                        args.start_date,
+                        args.end_date,
+                    )
                 if args.csv:
                     with open(args.csv, "w", newline="") as csv_file:
                         writer = csv.writer(csv_file)

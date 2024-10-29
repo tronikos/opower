@@ -188,6 +188,7 @@ class Opower:
         self.access_token: Optional[str] = None
         self.customers: list[Any] = []
         self.user_accounts: list[Any] = []
+        self.meters: list[str] = []
 
     async def async_login(self) -> None:
         """Login to the utility website and authorize opower.com for access.
@@ -438,6 +439,61 @@ class Opower:
                 )
             )
         return result
+
+    async def _async_get_meters(self, account: Account) -> list[str]:
+        """Get the list of meters for the selected account.
+
+        Each meter is a string key for fetching from the realtime data API.
+        """
+        if not self.meters:
+            url = (
+                f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}"
+                f"/edge/apis/cws-real-time-ami-v1/cws/{self.utility.utilitycode()}"
+                f"/accounts/{account.uuid}/meters"
+            )
+            headers = self._get_headers(account.customer.uuid)
+            async with self.session.get(
+                url, headers=headers, raise_for_status=True
+            ) as resp:
+                result = await resp.json()
+                self.meters = list(result["meters_ids"])
+        return self.meters
+
+    async def async_get_realtime_usage_reads(
+        self,
+        account: Account,
+    ) -> list[UsageRead]:
+        """Get recent usage data from the "Real Time Usage" API.
+
+        The realtime API returns data in approximately the last day in 15
+        minute increments. Based on requests from ConEd, the API does not
+        accept any parameters.
+
+        Even though each account may have multiple meters, for now this
+        function only queries data for the first meter on the account.
+        """
+        meters = await self._async_get_meters(account)
+        assert len(meters) > 0
+        meter = meters[0]
+
+        url = (
+            f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}"
+            f"/edge/apis/cws-real-time-ami-v1/cws/{self.utility.utilitycode()}"
+            f"/accounts/{account.uuid}/meters/{meter}/usage"
+        )
+        headers = self._get_headers(account.customer.uuid)
+        async with self.session.get(
+            url, headers=headers, raise_for_status=True
+        ) as resp:
+            result = await resp.json()
+            return [
+                UsageRead(
+                    start_time=datetime.fromisoformat(read["startTime"]),
+                    end_time=datetime.fromisoformat(read["endTime"]),
+                    consumption=read["value"],
+                )
+                for read in result["reads"]
+            ]
 
     async def _async_get_dated_data(
         self,

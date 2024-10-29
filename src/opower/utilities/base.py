@@ -49,6 +49,11 @@ class UtilityBase:
         return cls.subdomain()
 
     @staticmethod
+    def supports_realtime_usage() -> bool:
+        """Check if Utility supports realtime usage reads."""
+        return False
+
+    @staticmethod
     async def async_login(
         session: aiohttp.ClientSession,
         username: str,
