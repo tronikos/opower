@@ -2,7 +2,7 @@
 
 import logging
 import re
-from typing import Optional
+from typing import Any, Optional
 
 import aiohttp
 
@@ -76,27 +76,26 @@ class Aps(UtilityBase):
             raise_for_status=True,
         ) as resp:
             user_details = await resp.json(content_type="application /json")
-            account_id = user_details["Details"]["AccountDetails"][
+            account_details = user_details["Details"]["AccountDetails"][
                 "getAccountDetailsResponse"
-            ]["getAccountDetailsRes"]["getPersonDetails"]["accountID"]
-
-            service_address_id = user_details["Details"]["AccountDetails"][
-                "getAccountDetailsResponse"
-            ]["getAccountDetailsRes"]["getSASPListByAccountID"]["premiseDetailsList"][
-                0
-            ][
-                "sASPDetails"
-            ][
-                0
-            ][
-                "sAID"
-            ]
+            ]["getAccountDetailsRes"]
+            account_id = account_details["getPersonDetails"]["accountID"]
+            service_address_id = find_first_service_address_id(account_details)
+            if service_address_id is None:
+                raise CannotConnect("No APS Service Address ID found")
 
         account_service_id = f"{account_id}_{service_address_id}"
 
         # Start SAML authentication with APS and Opower
         url = f"https://www.aps.com/en/Residential/Save-Money-and-Energy/Opower?CA_SA={account_service_id}"
-        await async_auth_saml(session, url)
+        try:
+            await async_auth_saml(session, url)
+        except aiohttp.ClientResponseError as e:
+            if e.status == 403:
+                raise CannotConnect(
+                    "Forbidden error when authenticating with Opower. You might not have access to Opower."
+                ) from e
+            raise
 
 
 def extract_rsa_key(js_content: str) -> str:
@@ -118,3 +117,21 @@ def extract_rsa_key(js_content: str) -> str:
         return formatted_key
     else:
         raise CannotConnect("The RSA public key was not found.")
+
+
+def find_first_service_address_id(account_details: dict[str, Any]) -> Optional[str]:
+    """Find the first service address ID from the account details."""
+    try:
+        premise_details_list = account_details["getSASPListByAccountID"][
+            "premiseDetailsList"
+        ]
+        for premise in premise_details_list:
+            sasp_details = premise.get("sASPDetails", [])
+            for sasp in sasp_details:
+                if "sAID" in sasp:
+                    return str(sasp["sAID"])
+    except (KeyError, TypeError):
+        _LOGGER.warning(
+            "Could not find APS Service Address ID in the expected structure"
+        )
+    return None
