@@ -40,6 +40,11 @@ class ConEd(UtilityBase):
         """Return the hostname for login. Allows overriding it for oru.com."""
         return "coned.com"
 
+    @staticmethod
+    def supports_realtime_usage() -> bool:
+        """Check if Utility supports realtime usage reads."""
+        return True
+
     @classmethod
     async def async_login(
         cls,
