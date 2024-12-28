@@ -277,8 +277,8 @@ class SMUD(UtilityBase):
         okta_saml_request_url = identity_oraclecloud_login_response.real_url
 
         _LOGGER.debug(
-            "Fetching okta saml page with SAMLRequest, RelayState: %s",
-            okta_saml_request_url,
+             "We got this unneeded url, RelayState: %s",
+             okta_saml_request_url,
         )
 
         okta_saml_request_response = await session.get(
