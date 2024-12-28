@@ -281,42 +281,42 @@ class SMUD(UtilityBase):
              okta_saml_request_url,
         )
 
-        okta_saml_request_response = await session.get(
-            okta_saml_request_url,
-            headers={"User-Agent": USER_AGENT},
-            raise_for_status=True,
-        )
+        # okta_saml_request_response = await session.get(
+        #     okta_saml_request_url,
+        #     headers={"User-Agent": USER_AGENT},
+        #     raise_for_status=True,
+        # )
 
-        await SMUD.log_response(okta_saml_request_response, session)
+        # await SMUD.log_response(okta_saml_request_response, session)
 
-        parser2 = SMUDOktaResponseSamlResponseValueParser()
-        parser2.feed(await okta_saml_request_response.text())
-        saml_response = parser2.saml_response
-        assert saml_response
+        # parser2 = SMUDOktaResponseSamlResponseValueParser()
+        # parser2.feed(await okta_saml_request_response.text())
+        # saml_response = parser2.saml_response
+        # assert saml_response
 
-        login_parser.feed(await okta_saml_request_response.text())
-        relay_state = login_parser.relay_state
+        # login_parser.feed(await okta_saml_request_response.text())
+        # relay_state = login_parser.relay_state
 
-        opower_sso_acs_url = "https://sso.opower.com/sp/ACS.saml2"
+        # opower_sso_acs_url = "https://sso.opower.com/sp/ACS.saml2"
 
-        _LOGGER.debug(
-            "POSTing opower ACS sso page with SAMLResponse: %s", opower_sso_acs_url
-        )
+        # _LOGGER.debug(
+        #     "POSTing opower ACS sso page with SAMLResponse: %s", opower_sso_acs_url
+        # )
 
-        opower_sso_acs_response = await session.post(
-            opower_sso_acs_url,
-            data={
-                "SAMLResponse": saml_response,
-                "RelayState": relay_state,
-            },
-            headers={"User-Agent": USER_AGENT},
-            raise_for_status=True,
-            allow_redirects=True,
-        )
+        # opower_sso_acs_response = await session.post(
+        #     opower_sso_acs_url,
+        #     data={
+        #         "SAMLResponse": saml_response,
+        #         "RelayState": relay_state,
+        #     },
+        #     headers={"User-Agent": USER_AGENT},
+        #     raise_for_status=True,
+        #     allow_redirects=True,
+        # )
 
-        await SMUD.log_response(opower_sso_acs_response, session)
+        # await SMUD.log_response(opower_sso_acs_response, session)
 
-        _LOGGER.debug("End of SMUD login process")
+        # _LOGGER.debug("End of SMUD login process")
 
         return
 
