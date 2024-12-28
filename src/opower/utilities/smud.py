@@ -14,8 +14,7 @@
 # https://www.okta.com/
 #
 # To filter FireFox network inspector when logging in:
-# `-regexp:woff|beacon|appdynamics|fonts|css|hotjar|usabilla|chat|ico|analytics|promo|nextprofilequestion|trackEvent
-#    -mime-type:image`
+# `-regexp:woff|beacon|appdynamics|fonts|css|hotjar|usabilla|chat|ico|analytics|promo|nextprofilequestion|trackEvent -mime-type:image`
 #
 # Test with:
 # `python src/demo.py --utility smud --username mysmudloginemail@example.com --password "mypassword" -v`
