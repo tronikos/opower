@@ -254,15 +254,8 @@ class Opower:
                 f"/edge/apis/bill-forecast-cws-v1/cws/{self.utility.utilitycode()}"
                 f"/customers/{customer_uuid}/combined-forecast"
             )
-            _LOGGER.debug("Fetching: %s", url)
             try:
-                async with self.session.get(
-                    url, headers=self._get_headers(), raise_for_status=True
-                ) as resp:
-                    result = await resp.json()
-                    _LOGGER.log(
-                        logging.DEBUG - 1, "Fetched: %s", json.dumps(result, indent=2)
-                    )
+                result = await self._async_get_request(url, {}, self._get_headers())
             except ClientResponseError as err:
                 # For some customers utilities don't provide forecast
                 _LOGGER.debug("Ignoring combined-forecast error: %s", err.status)
@@ -330,14 +323,7 @@ class Opower:
                 f"/edge/apis/multi-account-v1/cws/{self.utility.utilitycode()}"
                 "/customers?offset=0&batchSize=100&addressFilter="
             )
-            _LOGGER.debug("Fetching: %s", url)
-            async with self.session.get(
-                url, headers=self._get_headers(), raise_for_status=True
-            ) as resp:
-                result = await resp.json()
-                _LOGGER.log(
-                    logging.DEBUG - 1, "Fetched: %s", json.dumps(result, indent=2)
-                )
+            result = await self._async_get_request(url, {}, self._get_headers())
             for customer in result["customers"]:
                 self.customers.append(customer)
         assert self.customers
@@ -355,16 +341,9 @@ class Opower:
                 "/edge/apis/dss-invite-v1/cws/v1/utilities/connectedaccounts?"
                 "pageOffset=0&pageLimit=100"
             )
-            _LOGGER.debug("Fetching: %s", url)
-            async with self.session.get(
-                url, headers=self._get_headers(), raise_for_status=True
-            ) as resp:
-                result = await resp.json()
-                _LOGGER.log(
-                    logging.DEBUG - 1, "Fetched: %s", json.dumps(result, indent=2)
-                )
-                for account in result["accounts"]:
-                    self.user_accounts.append(account)
+            result = await self._async_get_request(url, {}, self._get_headers())
+            for account in result["accounts"]:
+                self.user_accounts.append(account)
 
         assert self.user_accounts
         return self.user_accounts
@@ -452,11 +431,8 @@ class Opower:
                 f"/accounts/{account.uuid}/meters"
             )
             headers = self._get_headers(account.customer.uuid)
-            async with self.session.get(
-                url, headers=headers, raise_for_status=True
-            ) as resp:
-                result = await resp.json()
-                self.meters = list(result["meters_ids"])
+            result = await self._async_get_request(url, {}, headers)
+            self.meters = list(result["meters_ids"])
         return self.meters
 
     async def async_get_realtime_usage_reads(
@@ -482,18 +458,15 @@ class Opower:
             f"/accounts/{account.uuid}/meters/{meter}/usage"
         )
         headers = self._get_headers(account.customer.uuid)
-        async with self.session.get(
-            url, headers=headers, raise_for_status=True
-        ) as resp:
-            result = await resp.json()
-            return [
-                UsageRead(
-                    start_time=datetime.fromisoformat(read["startTime"]),
-                    end_time=datetime.fromisoformat(read["endTime"]),
-                    consumption=read["value"],
-                )
-                for read in result["reads"]
-            ]
+        result = await self._async_get_request(url, {}, headers)
+        return [
+            UsageRead(
+                start_time=datetime.fromisoformat(read["startTime"]),
+                end_time=datetime.fromisoformat(read["endTime"]),
+                consumption=read["value"],
+            )
+            for read in result["reads"]
+        ]
 
     async def _async_get_dated_data(
         self,
@@ -584,16 +557,9 @@ class Opower:
             params["endDate"] = (
                 end_date.date() if convert_to_date else end_date
             ).isoformat()
-        _LOGGER.debug("Fetching: %s?%s", url, urlencode(params))
         try:
-            async with self.session.get(
-                url, params=params, headers=headers, raise_for_status=True
-            ) as resp:
-                result = await resp.json()
-                _LOGGER.log(
-                    logging.DEBUG - 1, "Fetched: %s", json.dumps(result, indent=2)
-                )
-                return list(result["reads"])
+            result = await self._async_get_request(url, params, headers)
+            return list(result["reads"])
         except ClientResponseError as err:
             # Ignore server errors for BILL requests
             # that can happen if end_date is before account activation
@@ -638,3 +604,15 @@ class Opower:
         if self.utility.is_dss():
             return "webcenter"
         return "ei"
+
+    async def _async_get_request(
+        self, url: str, params: dict[str, str], headers: dict[str, str]
+    ) -> Any:
+        _LOGGER.debug("Fetching: %s?%s", url, urlencode(params))
+        async with self.session.get(url, params=params, headers=headers) as resp:
+            if not resp.ok:
+                _LOGGER.error("Error server response: %s", await resp.text())
+            resp.raise_for_status()
+            result = await resp.json()
+            _LOGGER.log(logging.DEBUG - 1, "Fetched: %s", json.dumps(result, indent=2))
+            return result
