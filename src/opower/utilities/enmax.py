@@ -83,7 +83,8 @@ class Enmax(UtilityBase):
             active_accounts = [
                 account
                 for account in result["associated_account"]["accounts"]
-                if account["account"]["status"] == "active" or account["account"]["is_plan_active"]
+                if account["account"]["status"] == "active"
+                or account["account"]["is_plan_active"]
             ]
             if len(active_accounts) == 0:
                 raise InvalidAuth("No active accounts found")
