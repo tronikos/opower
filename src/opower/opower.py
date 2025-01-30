@@ -14,7 +14,7 @@ import aiozoneinfo
 import arrow
 
 from .const import USER_AGENT
-from .exceptions import CannotConnect, InvalidAuth
+from .exceptions import ApiException, CannotConnect, InvalidAuth
 from .utilities import UtilityBase
 
 _LOGGER = logging.getLogger(__file__)
@@ -256,9 +256,9 @@ class Opower:
             )
             try:
                 result = await self._async_get_request(url, {}, self._get_headers())
-            except ClientResponseError as err:
+            except ApiException as err:
                 # For some customers utilities don't provide forecast
-                _LOGGER.debug("Ignoring combined-forecast error: %s", err.status)
+                _LOGGER.debug("Ignoring combined-forecast error: %s", err)
                 continue
             if (
                 all(
@@ -560,10 +560,11 @@ class Opower:
         try:
             result = await self._async_get_request(url, params, headers)
             return list(result["reads"])
-        except ClientResponseError as err:
+        except ApiException as err:
             # Ignore server errors for BILL requests
             # that can happen if end_date is before account activation
             if err.status == 500 and aggregate_type == AggregateType.BILL:
+                _LOGGER.debug("Ignoring error while fetching bill data: %s", err)
                 return []
             raise err
 
@@ -608,11 +609,21 @@ class Opower:
     async def _async_get_request(
         self, url: str, params: dict[str, str], headers: dict[str, str]
     ) -> Any:
-        _LOGGER.debug("Fetching: %s?%s", url, urlencode(params))
-        async with self.session.get(url, params=params, headers=headers) as resp:
-            if not resp.ok:
-                _LOGGER.error("Error server response: %s", await resp.text())
-            resp.raise_for_status()
-            result = await resp.json()
-            _LOGGER.log(logging.DEBUG - 1, "Fetched: %s", json.dumps(result, indent=2))
-            return result
+        full_url = f"{url}?{urlencode(params)}"
+        _LOGGER.debug("Fetching: %s", full_url)
+        try:
+            async with self.session.get(url, params=params, headers=headers) as resp:
+                if not resp.ok:
+                    raise ApiException(
+                        f"HTTP Error: {resp.status}",
+                        url=full_url,
+                        status=resp.status,
+                        response_text=await resp.text(),
+                    )
+                result = await resp.json()
+                _LOGGER.log(
+                    logging.DEBUG - 1, "Fetched: %s", json.dumps(result, indent=2)
+                )
+                return result
+        except ClientError as e:
+            raise ApiException(f"Client Error: {e}", url=full_url) from e
