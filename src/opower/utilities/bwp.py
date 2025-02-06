@@ -1,13 +1,13 @@
 """Burbank Water and Power (BWP)."""
 
 from typing import Optional
-import urllib.parse
 
 import aiohttp
 
 from ..const import USER_AGENT
 from ..exceptions import InvalidAuth
 from .base import UtilityBase
+
 # from .helpers import async_auth_saml
 
 
@@ -49,4 +49,3 @@ class BWP(UtilityBase):
             result = await resp.text()
             if "errorMsg" in result:
                 raise InvalidAuth(result["errorMsg"])
-
