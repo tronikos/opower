@@ -7,10 +7,8 @@ import aiohttp
 from ..const import USER_AGENT
 from .base import UtilityBase
 
-# from .helpers import async_auth_saml
 
-
-class BWP(UtilityBase):
+class BurbankWaterAndPower(UtilityBase):
     """Burbank Water and Power (BWP)."""
 
     @staticmethod
