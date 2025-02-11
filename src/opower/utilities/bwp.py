@@ -5,7 +5,6 @@ from typing import Optional
 import aiohttp
 
 from ..const import USER_AGENT
-from ..exceptions import InvalidAuth
 from .base import UtilityBase
 
 # from .helpers import async_auth_saml
@@ -44,8 +43,6 @@ class BWP(UtilityBase):
                 "password": password,
             },
             headers={"User-Agent": USER_AGENT},
-            raise_for_status=True,
-        ) as resp:
-            result = await resp.text()
-            if "errorMsg" in result:
-                raise InvalidAuth(result["errorMsg"])
+            raise_for_status=False,
+        ) as _:
+            pass
