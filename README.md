@@ -13,6 +13,7 @@ Supported utilities (in alphabetical order):
   - Public Service Company of Oklahoma (PSO)
   - Southwestern Electric Power Company (SWEPCO)
 - Arizona Public Service (APS)
+- Burbank Water and Power (BWP)
 - City of Austin Utilities
 - Consolidated Edison (ConEd)
   - Orange & Rockland Utilities (ORU)
