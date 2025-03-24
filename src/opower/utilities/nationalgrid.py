@@ -1,4 +1,8 @@
-"""Base class for National Grid subsidiaries."""
+"""Base class for National Grid subsidiaries.
+
+This module handles the authentication and API interactions for National Grid.
+It uses OAuth 2.0 with PKCE for secure authentication.
+"""
 
 import logging
 from typing import Optional
