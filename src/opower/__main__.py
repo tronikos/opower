@@ -20,9 +20,9 @@ from opower import (
 
 
 async def _main() -> None:
-    supported_utilities = sorted([
+    supported_utilities = [
         utility.__name__.lower() for utility in get_supported_utilities()
-    ])
+    ]
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--utility",
