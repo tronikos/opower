@@ -29,6 +29,7 @@ Supported utilities (in alphabetical order):
   - Potomac Electric Power Company (Pepco)
 - Mercury NZ Limited
 - National Grid subsidiaries
+  - National Grid NY Long Island
   - National Grid NY Metro
   - National Grid NY Upstate
 - Pacific Gas & Electric (PG&E)
