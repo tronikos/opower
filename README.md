@@ -28,7 +28,9 @@ Supported utilities (in alphabetical order):
   - PECO Energy Company (PECO)
   - Potomac Electric Power Company (Pepco)
 - Mercury NZ Limited
-- National Grid NY Upstate
+- National Grid subsidiaries
+  - National Grid NY Metro
+  - National Grid NY Upstate
 - Pacific Gas & Electric (PG&E)
 - Portland General Electric (PGE)
 - Puget Sound Energy (PSE)
