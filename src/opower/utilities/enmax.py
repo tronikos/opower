@@ -73,8 +73,9 @@ class Enmax(UtilityBase):
             result = await resp.json()
             access_token = result["access_token"]
 
-        async with session.get(
-            f"https://myaccount.enmax.com/api/account/associated-accounts?token={access_token}",
+        async with session.post(
+            "https://myaccount.enmax.com/api/account/associated-accounts",
+            json={"token": access_token},
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         ) as resp:
