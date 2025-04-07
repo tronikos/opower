@@ -110,49 +110,58 @@ class AEPBase(ABC):
         username: str,
         password: str,
         optional_mfa_secret: Optional[str],
-    ) -> None:
-        """Login in AEP using user/pass and then do the SAML call to opower."""
+    ) -> str: # MODIFIED: Return type
+        """Login in AEP using user/pass and fetch the AccessToken via AJAX endpoint.""" # MODIFIED: Docstring
         # Clear cookies before logging in again, in case old ones are still around
         session.cookie_jar.clear(lambda c: c["domain"].endswith("opower.com"))
 
         login_parser = AEPLoginParser(username, password)
-        token_parser = AEPTokenParser()
 
         # Get the login page and parse the ASP.Net Form Field that have generated names
         async with session.get(
             f"https://www.{cls.hostname()}/account/usage/",
             headers={"User-Agent": USER_AGENT},
-            raise_for_status=True,
+            raise_for_status=True, # Keep True for initial GET
         ) as resp:
             text = await resp.text()
             login_parser.feed(text)
 
-        # Post the login page with the user credentials and get the cookieKey
+        # Post the login page with the user credentials
+        post_url = f"https://www.{cls.hostname()}/account/usage/"
         async with session.post(
-            f"https://www.{cls.hostname()}/account/usage/",
-            headers={"User-Agent": USER_AGENT},
-            raise_for_status=True,
+            post_url,
+            headers={"User-Agent": USER_AGENT, "Content-Type": "application/x-www-form-urlencoded", "Referer": post_url},
+            raise_for_status=False, # MODIFIED: Must be False to allow reading html below
             data=login_parser.inputs,
         ) as resp:
             html = await resp.text()
-            token_parser.feed(html)
+            # ADDED: Necessary check to replace raise_for_status=True functionality
+            if resp.status != 200:
+                raise InvalidAuth(f"Login POST failed with status {resp.status}")
 
-        if token_parser.token_url is None or token_parser.cookieKey is None:
-            raise InvalidAuth("Username/Password are invalid")
+        # REMOVED: token_parser logic and check
 
+        # Keep original subdomain extraction and assertion
         match = re.search(r"https://([^.]*).opower.com", html)
-        assert match
+        assert match # Reverted to original assert
         cls._subdomain = match.group(1)
 
-        url = (
-            f"https://{cls.subdomain()}.opower.com/ei/x/embedded-api/authenticate?"
-            + urllib.parse.urlencode(
-                {
-                    "client-url": f"https:{token_parser.token_url}&ou-session-initiated=true",
-                    "error-param": "ou-auth-error",
-                    "ou-entity-id": token_parser.cookieKey,
-                }
-            )
-        )
+        # REMOVED: SAML URL construction and await async_auth_saml
 
-        await async_auth_saml(session, url)
+        # --- ADDED: New Token Fetch Logic (Minimal Version) ---
+        token_url = f"https://www.{cls.hostname()}/account/oauth/ValidToken"
+        token_headers = {
+            "User-Agent": USER_AGENT,
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": post_url
+        }
+        async with session.get(token_url, headers=token_headers, raise_for_status=True) as token_resp:
+            token_data = await token_resp.json()
+            # Minimal parsing/error handling - relies on structure being correct
+            try:
+                access_token = token_data[0]['data']['AccessToken']
+                return access_token # ADDED: Return token
+            except (KeyError, IndexError, TypeError) as e:
+                # Raise InvalidAuth on parsing failure, as original logic would have failed too
+                raise InvalidAuth("Failed to parse access token from JSON response.") from e
