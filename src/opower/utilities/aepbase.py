@@ -76,8 +76,9 @@ class AEPBase(ABC):
         login_parser = AEPLoginParser(username, password)
 
         # Get the login page and parse the ASP.Net Form Field that have generated names
+        usage_url = f"https://www.{cls.hostname()}/account/usage/"
         async with session.get(
-            f"https://www.{cls.hostname()}/account/usage/",
+            usage_url,
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         ) as resp:
@@ -85,38 +86,37 @@ class AEPBase(ABC):
             login_parser.feed(text)
 
         # Post the login page with the user credentials
-        post_url = f"https://www.{cls.hostname()}/account/usage/"
         async with session.post(
-            post_url,
+            usage_url,
             headers={
                 "User-Agent": USER_AGENT,
                 "Content-Type": "application/x-www-form-urlencoded",
-                "Referer": post_url,
+                "Referer": usage_url,
             },
             raise_for_status=True,
             data=login_parser.inputs,
         ) as resp:
             html = await resp.text()
 
+        match = re.search(
+            r'<[^>]*?class="error"[^>]*?>.*?<p>(.*?)</p>', html, re.DOTALL
+        )
+        if match:
+            raise InvalidAuth(match.group(1).strip())
+
         match = re.search(r"https://([^.]*).opower.com", html)
         assert match
         cls._subdomain = match.group(1)
 
-        token_url = f"https://www.{cls.hostname()}/account/oauth/ValidToken"
-        token_headers = {
-            "User-Agent": USER_AGENT,
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": post_url,
-        }
         async with session.get(
-            token_url, headers=token_headers, raise_for_status=True
+            f"https://www.{cls.hostname()}/account/oauth/ValidToken",
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": usage_url,
+            },
+            raise_for_status=True,
         ) as token_resp:
             token_data = await token_resp.json()
-            try:
-                access_token = str(token_data[0]["data"]["AccessToken"])
-                return access_token
-            except (KeyError, IndexError, TypeError) as e:
-                raise InvalidAuth(
-                    "Failed to parse access token from JSON response."
-                ) from e
+            return str(token_data[0]["data"]["AccessToken"])
