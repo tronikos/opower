@@ -27,6 +27,7 @@ Supported utilities (in alphabetical order):
   - Delmarva Power
   - PECO Energy Company (PECO)
   - Potomac Electric Power Company (Pepco)
+- Glendale Water and Power (GWP)
 - Mercury NZ Limited
 - National Grid subsidiaries
   - National Grid Massachusetts

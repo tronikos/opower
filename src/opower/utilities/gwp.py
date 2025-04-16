@@ -8,7 +8,7 @@ from ..const import USER_AGENT
 from .base import UtilityBase
 
 
-class GlendaleWaterAndPower(UtilityBase):
+class GWP(UtilityBase):
     """Glendale Water and Power (GWP)."""
 
     @staticmethod
