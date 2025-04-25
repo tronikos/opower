@@ -8,7 +8,7 @@ from ..const import USER_AGENT
 from .base import UtilityBase
 
 
-class GWP(UtilityBase):
+class GlendaleWaterAndPower(UtilityBase):
     """Glendale Water and Power (GWP)."""
 
     @staticmethod
@@ -24,7 +24,7 @@ class GWP(UtilityBase):
     @staticmethod
     def timezone() -> str:
         """Return the timezone."""
-        return "America/Los_Angeles"
+        return "America/Los_Angeles"    
 
     @staticmethod
     async def async_login(
