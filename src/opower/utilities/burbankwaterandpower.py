@@ -41,6 +41,6 @@ class BurbankWaterAndPower(UtilityBase):
                 "password": password,
             },
             headers={"User-Agent": USER_AGENT},
-            raise_for_status=False,
+            raise_for_status=True,
         ) as _:
             pass

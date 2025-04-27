@@ -24,7 +24,7 @@ class GlendaleWaterAndPower(UtilityBase):
     @staticmethod
     def timezone() -> str:
         """Return the timezone."""
-        return "America/Los_Angeles"    
+        return "America/Los_Angeles"
 
     @staticmethod
     async def async_login(
@@ -41,6 +41,6 @@ class GlendaleWaterAndPower(UtilityBase):
                 "password": password,
             },
             headers={"User-Agent": USER_AGENT},
-            raise_for_status=False,
+            raise_for_status=True,
         ) as _:
             pass
