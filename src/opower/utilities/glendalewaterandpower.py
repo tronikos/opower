@@ -1,4 +1,4 @@
-"""Burbank Water and Power (BWP)."""
+"""Glendale Water and Power (GWP)."""
 
 from typing import Optional
 
@@ -8,18 +8,18 @@ from ..const import USER_AGENT
 from .base import UtilityBase
 
 
-class BurbankWaterAndPower(UtilityBase):
-    """Burbank Water and Power (BWP)."""
+class GlendaleWaterAndPower(UtilityBase):
+    """Glendale Water and Power (GWP)."""
 
     @staticmethod
     def name() -> str:
         """Distinct recognizable name of the utility."""
-        return "Burbank Water and Power (BWP)"
+        return "Glendale Water and Power (GWP)"
 
     @staticmethod
     def subdomain() -> str:
         """Return the opower.com subdomain for this utility."""
-        return "bwp"
+        return "gwp"
 
     @staticmethod
     def timezone() -> str:
@@ -35,7 +35,7 @@ class BurbankWaterAndPower(UtilityBase):
     ) -> None:
         """Login to the utility website."""
         async with session.post(
-            "https://bwp.opower.com/ei/edge/apis/user-account-control-v1/cws/v1/bwp/account/signin",
+            "https://gwp.opower.com/ei/edge/apis/user-account-control-v1/cws/v1/gwp/account/signin",
             json={
                 "username": username,
                 "password": password,
