@@ -1,0 +1,14 @@
+{
+    "configurations": [
+      {
+        "type": "debugpy",
+        "request": "launch",
+        "name": "Launch Opower",
+        "module": "src.opower",
+        "args": ["--verbose"],
+        "console": "integratedTerminal",
+        "justMyCode": true,
+        "cwd": "${workspaceFolder}"
+      }
+    ]
+  }

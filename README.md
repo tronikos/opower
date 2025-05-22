@@ -68,7 +68,7 @@ source .venv/bin/activate
 
 # Install dependencies
 python -m pip install --upgrade pip
-python -m pip install .
+python -m pip install -e .
 
 # Run pre-commit
 python -m pip install pre-commit
