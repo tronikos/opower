@@ -2,26 +2,47 @@
 
 import base64
 import re
+from urllib.parse import urljoin
 
 import aiohttp
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from ..const import USER_AGENT
+from ..exceptions import CannotConnect
 
 
 def get_form_action_url_and_hidden_inputs(html: str) -> tuple[str, dict[str, str]]:
     """Return the URL and hidden inputs from the single form in a page."""
-    match = re.search(r'action="([^"]*)"', html)
+    match = re.search(r'action="([^"]*)"', html, re.IGNORECASE)
     if not match:
         return "", {}
     action_url = match.group(1)
     inputs = {}
     for match in re.finditer(
-        r'input\s*type="hidden"\s*name="([^"]*)"\s*value="([^"]*)"', html
+        r'input\s*type="hidden"\s*name="([^"]*)"\s*value="([^"]*)"', html, re.IGNORECASE
     ):
         inputs[match.group(1)] = match.group(2)
     return action_url, inputs
+
+
+async def async_follow_forms(
+    session: aiohttp.ClientSession, url: str, html: str
+) -> None:
+    """Follow the forms in the HTML until we reach a page with no forms."""
+    for _ in range(5):
+        action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(html)
+        if not action_url:
+            return
+        url = urljoin(url, action_url)
+        async with session.post(
+            url,
+            data=hidden_inputs,
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+        ) as resp:
+            html = await resp.text()
+    raise CannotConnect("Reached maximum number of redirects.")
 
 
 async def async_auth_saml(session: aiohttp.ClientSession, url: str) -> None:
