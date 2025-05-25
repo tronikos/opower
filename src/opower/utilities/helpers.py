@@ -1,6 +1,7 @@
 """Helper functions."""
 
 import base64
+import logging
 import re
 from urllib.parse import urljoin
 
@@ -10,6 +11,8 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from ..const import USER_AGENT
 from ..exceptions import CannotConnect
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def get_form_action_url_and_hidden_inputs(html: str) -> tuple[str, dict[str, str]]:
@@ -35,6 +38,7 @@ async def async_follow_forms(
         if not action_url:
             return
         url = urljoin(url, action_url)
+        _LOGGER.debug("POST %s", url)
         async with session.post(
             url,
             data=hidden_inputs,
