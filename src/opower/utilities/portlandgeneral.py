@@ -61,7 +61,7 @@ class PortlandGeneral(UtilityBase):
             result = await resp.json()
 
         async with session.post(
-            "https://api.portlandgeneral.com/pg-token-implicit/token",
+            "https://apix.portlandgeneral.com/pge-graphql/pg-token-implicit/token",
             params={
                 "client_id": "VrrKnd0tw2O4zIM6vqHLYn0PxM3ZW2hY",  # learned from https://github.com/piekstra/portlandgeneral-api
                 "response_type": "token",
