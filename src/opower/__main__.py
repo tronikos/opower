@@ -14,6 +14,7 @@ from opower import (
     AggregateType,
     Opower,
     ReadResolution,
+    create_cookie_jar,
     get_supported_utilities,
     select_utility,
 )
@@ -94,7 +95,7 @@ async def _main() -> None:
         input("2FA secret: ") if select_utility(utility).accepts_mfa() else None
     )
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
         opower = Opower(session, utility, username, password, mfa_secret)
         await opower.async_login()
         if not args.csv:

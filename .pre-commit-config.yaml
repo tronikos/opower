@@ -1,7 +1,7 @@
 ---
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
+    rev: v5.0.0
     hooks:
       - id: check-added-large-files
       - id: check-ast
@@ -26,42 +26,45 @@ repos:
       - id: mixed-line-ending
       - id: trailing-whitespace
   - repo: https://github.com/PyCQA/isort
-    rev: 5.13.2
+    rev: 6.0.1
     hooks:
       - id: isort
   - repo: https://github.com/psf/black
-    rev: 24.4.2
+    rev: 25.1.0
     hooks:
       - id: black
   - repo: https://github.com/PyCQA/flake8
-    rev: 7.1.0
+    rev: 7.2.0
     hooks:
       - id: flake8
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.5.1
+    rev: v0.11.13
     hooks:
       - id: ruff
         args: [--fix]
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.10.1
+    rev: v1.16.0
     hooks:
       - id: mypy
         args: [--strict]
+        additional_dependencies: [
+          "pytest-mypy",
+        ]
   - repo: https://github.com/asottile/pyupgrade
-    rev: v3.16.0
+    rev: v3.20.0
     hooks:
       - id: pyupgrade
         args: [--py39-plus]
   - repo: https://github.com/adrienverge/yamllint.git
-    rev: v1.35.1
+    rev: v1.37.1
     hooks:
       - id: yamllint
   - repo: https://github.com/igorshubovych/markdownlint-cli
-    rev: v0.38.0
+    rev: v0.45.0
     hooks:
       - id: markdownlint
   - repo: https://github.com/codespell-project/codespell
-    rev: v2.3.0
+    rev: v2.4.1
     hooks:
       - id: codespell
 

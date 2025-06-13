@@ -76,11 +76,11 @@ pre-commit install
 pre-commit run --all-files
 
 # Alternative: run formatter, lint, and type checking
-python -m pip install isort black flake8 ruff mypy
+python -m pip install isort black flake8 ruff mypy pytest-mypy
 isort . ; black . ; flake8 . ; ruff check . --fix ; mypy --install-types .
 
 # Run tests
-python -m pip install pytest python-dotenv
+python -m pip install pytest pytest-asyncio python-dotenv
 pytest
 
 # Run command line

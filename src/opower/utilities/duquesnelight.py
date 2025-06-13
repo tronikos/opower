@@ -120,8 +120,7 @@ class DuquesneLight(UtilityBase):
         ) as resp:
             usage_parser.feed(await resp.text())
 
-            assert (
-                usage_parser.opower_access_token
-            ), "Failed to parse OPower bearer token"
+            if not usage_parser.opower_access_token:
+                raise InvalidAuth("No OPower access token found in response")
 
         return usage_parser.opower_access_token

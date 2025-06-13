@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 import aiohttp
 
 from ..exceptions import CannotConnect, InvalidAuth
+from ..helpers import create_cookie_jar
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -35,7 +36,9 @@ async def async_auth_oidc(
         None, ssl.create_default_context
     )
     connector = aiohttp.TCPConnector(ssl=ssl_context)
-    secure_session = aiohttp.ClientSession(connector=connector)
+    secure_session = aiohttp.ClientSession(
+        connector=connector, cookie_jar=create_cookie_jar()
+    )
     try:
         code_verifier = _generate_code_verifier()
         code_challenge = _generate_code_challenge(code_verifier)
@@ -301,6 +304,8 @@ async def _confirm_signin(
     )
     if status != 200:
         _LOGGER.error("Failed to confirm signin. Status: %s", status)
+        if status == 403:
+            raise InvalidAuth("Invalid username or password")
         raise CannotConnect("Failed to confirm signin")
     if final_url:
         query = urlparse(final_url).query
@@ -308,6 +313,13 @@ async def _confirm_signin(
         auth_code = parsed_query.get("code", [None])[0]
         if auth_code:
             _LOGGER.debug("Sign-in confirmed, authorization code obtained")
+        elif "error" in parsed_query:
+            _LOGGER.error(
+                "Sign-in failed with error: %s, %s",
+                parsed_query.get("error"),
+                parsed_query.get("error_description"),
+            )
+            raise InvalidAuth("Sign-in failed")
         else:
             _LOGGER.warning("Sign-in confirmed, but no authorization code found")
         return auth_code
