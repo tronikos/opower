@@ -56,6 +56,80 @@ Since this library is used by Home Assistant, see <https://www.home-assistant.io
 
 So follow that advice and try to scrape all fields at once, similar to the `get_form_action_url_and_hidden_inputs` in helpers.py.
 
+## Example Usage - CLI
+
+The opower library comes with a CLI interface to get familiar with the library and read actual data from your utility.
+
+```sh
+# Show information on how to call the library CLI interface
+python -m opower --help
+
+# Example: show recent usage only, for all accounts:
+python -m opower --utility comed --username <username> --password <password> --usage_only --aggregate_type day
+[...]
+start_time	end_time	consumption	start_minus_prev_end	end_minus_prev_end
+2025-06-10 00:00:00-05:00	2025-06-11 00:00:00-05:00	-9.44	None	None
+2025-06-11 00:00:00-05:00	2025-06-12 00:00:00-05:00	-3.825	0:00:00	1 day, 0:00:00
+2025-06-12 00:00:00-05:00	2025-06-13 00:00:00-05:00	9.6225	0:00:00	1 day, 0:00:00
+2025-06-13 00:00:00-05:00	2025-06-14 00:00:00-05:00	13.6575	0:00:00	1 day, 0:00:00
+2025-06-14 00:00:00-05:00	2025-06-15 00:00:00-05:00	-0.665	0:00:00	1 day, 0:00:00
+2025-06-15 00:00:00-05:00	2025-06-16 00:00:00-05:00	-4.5125	0:00:00	1 day, 0:00:00
+
+```
+
+## Example Usage - in Python
+
+```python
+#!/usr/bin/env python3
+
+import asyncio
+import datetime
+from aiohttp import ClientSession
+from opower import Opower, AggregateType
+from opower.helpers import create_cookie_jar
+
+async def main():
+    # Replace these with your actual utility login credentials
+    utility = "comed"  # e.g., "comed", "pgande", "bge"
+    username = "your_username"
+    password = "your_password"
+
+    # Create a session with a cookie jar required by Opower
+    async with ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opw = Opower(
+            session=session,
+            utility=utility,
+            username=username,
+            password=password,
+        )
+
+        # Log in to the utility account
+        await opw.async_login()
+
+        # Get all associated accounts (usually just one)
+        accounts = await opw.async_get_accounts()
+
+        # Define the date range for usage data
+        end_date = datetime.datetime.now() - datetime.timedelta(days=1)
+        start_date = end_date - datetime.timedelta(days=7)
+
+        # Fetch and print daily usage data
+        for account in accounts:
+            print(account)
+            usage_data = await opw.async_get_usage_reads(
+                account,
+                AggregateType.DAY,
+                start_date,
+                end_date,
+            )
+
+            for usage_read in usage_data:
+                print(f"{usage_read.start_time.date()}: {usage_read.consumption:.2f} kWh")
+
+asyncio.run(main())
+```
+
+
 ## Development environment
 
 ```sh
