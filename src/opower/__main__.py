@@ -1,4 +1,4 @@
-# ruff: noqa: T201
+# ruff: noqa: T201, ASYNC230, PLR0912, PLR0915
 """Demo usage of Opower library."""
 
 import argparse

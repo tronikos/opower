@@ -203,11 +203,10 @@ class Opower:
 
         except ClientResponseError as err:
             if err.status in (401, 403):
-                raise InvalidAuth(err)
-            else:
-                raise CannotConnect(err)
+                raise InvalidAuth(err) from err
+            raise CannotConnect(err) from err
         except ClientError as err:
-            raise CannotConnect(err)
+            raise CannotConnect(err) from err
 
     async def async_get_accounts(self) -> list[Account]:
         """Get a list of accounts for the signed in user.
@@ -224,16 +223,16 @@ class Opower:
             for account in utility_accounts:
                 utility_account_id = account["preferredUtilityAccountId"]
                 account_uuid = account["uuid"]
-                id = utility_account_id if utility_account_ids.count(utility_account_id) == 1 else account_uuid
+                account_id = utility_account_id if utility_account_ids.count(utility_account_id) == 1 else account_uuid
                 accounts.append(
                     Account(
                         customer=Customer(uuid=customer["uuid"]),
                         uuid=account_uuid,
                         utility_account_id=utility_account_id,
-                        id=id,
+                        id=account_id,
                         meter_type=MeterType(account["meterType"]),
                         read_resolution=ReadResolution(account["readResolution"]),
-                    )
+                    ),
                 )
         return accounts
 
@@ -275,14 +274,14 @@ class Opower:
                 if not forecast["accountUuids"]:
                     continue
                 account_uuid = forecast["accountUuids"][0]
-                id = utility_account_id if utility_account_ids.count(utility_account_id) == 1 else account_uuid
+                account_id = utility_account_id if utility_account_ids.count(utility_account_id) == 1 else account_uuid
                 forecasts.append(
                     Forecast(
                         account=Account(
                             customer=Customer(uuid=customer["uuid"]),
                             uuid=account_uuid,
                             utility_account_id=utility_account_id,
-                            id=id,
+                            id=account_id,
                             meter_type=MeterType(forecast["meterType"]),
                             read_resolution=None,
                         ),
@@ -532,7 +531,7 @@ class Opower:
             if err.status == 500 and aggregate_type == AggregateType.BILL:
                 _LOGGER.debug("Ignoring error while fetching bill data: %s", err)
                 return []
-            raise err
+            raise
 
     def _get_account_id(self) -> str:
         for user_account in self.user_accounts:

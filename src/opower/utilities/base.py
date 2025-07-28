@@ -1,6 +1,6 @@
 """Base class that each utility needs to extend."""
 
-from typing import Any
+from typing import Any, ClassVar
 
 import aiohttp
 
@@ -8,7 +8,7 @@ import aiohttp
 class UtilityBase:
     """Base class that each utility needs to extend."""
 
-    subclasses: list[type["UtilityBase"]] = []
+    subclasses: ClassVar[list[type["UtilityBase"]]] = []
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Keep track of all subclass implementations."""

@@ -112,7 +112,7 @@ class Evergy(UtilityBase):
             Evergy._subdomain = domain.split(".", 1)[0]
             _LOGGER.debug("detected Evergy subdomain: %s", Evergy._subdomain)
             if Evergy._subdomain not in {"kcpk", "kcpl"}:
-                _LOGGER.warn(
+                _LOGGER.warning(
                     "unexpected Evergy subdomain %s, continuing",
                     Evergy._subdomain,
                 )

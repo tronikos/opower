@@ -72,13 +72,12 @@ async def async_auth_oidc(
         if tokens and "access_token" in tokens:
             _LOGGER.debug("Successfully obtained access token")
             return tokens["access_token"]
-        else:
-            _LOGGER.error("Failed to obtain access token")
-            raise CannotConnect("Failed to obtain access token")
+        _LOGGER.error("Failed to obtain access token")
+        raise CannotConnect("Failed to obtain access token")
 
     except aiohttp.ClientError as err:
-        _LOGGER.error("Connection error during login: %s", str(err))
-        raise CannotConnect(f"Connection error: {err}")
+        _LOGGER.exception("Connection error during login")
+        raise CannotConnect(f"Connection error: {err}") from err
     finally:
         await secure_session.close()
 
@@ -208,8 +207,8 @@ async def _fetch(session: aiohttp.ClientSession, url: str, **kwargs: Any) -> tup
             content = await response.text()
             _LOGGER.debug("Fetch completed. Status: %s", response.status)
             return content, str(response.url), response.status
-    except aiohttp.ClientError as e:
-        _LOGGER.error("Network error occurred: %s", str(e))
+    except aiohttp.ClientError:
+        _LOGGER.exception("Network error occurred")
         return None, None, 0
 
 
@@ -227,11 +226,12 @@ def _extract_settings(auth_content: str) -> dict[str, Any] | None:
     settings_json = auth_content[settings_start + 15 : settings_end].strip()
     try:
         settings: dict[str, Any] = json.loads(settings_json)
+    except json.JSONDecodeError:
+        _LOGGER.exception("Failed to parse settings JSON")
+        return None
+    else:
         _LOGGER.debug("Settings successfully extracted")
         return settings
-    except json.JSONDecodeError:
-        _LOGGER.error("Failed to parse settings JSON")
-        return None
 
 
 async def _post_credentials(

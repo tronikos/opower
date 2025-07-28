@@ -1,7 +1,7 @@
 """Base Abstract class for American Electric Power."""
 
 import re
-from abc import ABC
+from abc import ABC, abstractmethod
 from html.parser import HTMLParser
 
 import aiohttp
@@ -56,9 +56,9 @@ class AEPBase(ABC):
         return "America/New_York"
 
     @staticmethod
+    @abstractmethod
     def hostname() -> str:
         """Return the hostname for login."""
-        raise NotImplementedError
 
     @classmethod
     async def async_login(

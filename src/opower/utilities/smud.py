@@ -22,6 +22,7 @@
 
 import logging
 from html.parser import HTMLParser
+from typing import ClassVar
 from urllib.parse import parse_qs
 
 from aiohttp import ClientResponse, ClientSession
@@ -290,7 +291,7 @@ class SMUD(UtilityBase):
         return str(query_parts["redirectUrl"][0])
 
     # Store cookies so we can log what is new after each request.
-    cookies: dict[str, list[str]] = {}
+    cookies: ClassVar[dict[str, list[str]]] = {}
 
     @staticmethod
     async def log_response(response: ClientResponse, session: ClientSession) -> None:

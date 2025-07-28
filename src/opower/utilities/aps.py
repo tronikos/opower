@@ -106,15 +106,13 @@ def extract_rsa_key(js_content: str) -> str:
     if match:
         # Get and format the RSA key
         rsa_key = match.group(1)
-        formatted_key = re.sub(
+        return re.sub(
             r"(-----BEGIN PUBLIC KEY-----)(.*)(-----END PUBLIC KEY-----)",
             r"\1\n\2\n\3",
             rsa_key,
             flags=re.DOTALL,
         )
-        return formatted_key
-    else:
-        raise CannotConnect("The RSA public key was not found.")
+    raise CannotConnect("The RSA public key was not found.")
 
 
 def find_first_service_address_id(account_details: dict[str, Any]) -> str | None:

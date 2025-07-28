@@ -65,7 +65,8 @@ class TestSMUDLoginParser(unittest.TestCase):
     def test_parse(self) -> None:
         """Test finding the input __RequestVerificationToken value."""
         loginParser = SMUDLoginParser()
-        html = open(REQUEST_VERIFICATION_TOKEN_HTML_FILENAME).read()
+        with open(REQUEST_VERIFICATION_TOKEN_HTML_FILENAME) as f:
+            html = f.read()
         loginParser.feed(html)
         result = loginParser.verification_token
         assert result is not None
@@ -79,7 +80,8 @@ class TestSMUDOktaResponseSamlResponseValueParser(unittest.TestCase):
     def test_parse(self) -> None:
         """Test parsing the input SamlResponse value."""
         samlResponseParser = SMUDOktaResponseSamlResponseValueParser()
-        html = open(OKTA_SAML_RESPONSE_HTML_FILENAME).read()
+        with open(OKTA_SAML_RESPONSE_HTML_FILENAME) as f:
+            html = f.read()
         samlResponseParser.feed(html)
         result = samlResponseParser.saml_response
         assert result is not None

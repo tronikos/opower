@@ -82,30 +82,29 @@ class ConEd(UtilityBase):
             redirectUrl = None
             if "authRedirectUrl" in result:
                 redirectUrl = result["authRedirectUrl"]
+            elif result["newDevice"]:
+                if not result["noMfa"]:
+                    if not optional_mfa_secret:
+                        raise InvalidAuth("TOTP secret is required for MFA accounts")
+
+                    mfaCode = TOTP(optional_mfa_secret.strip()).now()
+
+                    async with session.post(
+                        login_base + "/VerifyFactor",
+                        headers=login_headers,
+                        json={
+                            "MFACode": mfaCode,
+                            "ReturnUrl": RETURN_URL,
+                            "OpenIdRelayState": "",
+                        },
+                        raise_for_status=True,
+                    ) as resp:  # noqa: PLW2901
+                        mfaResult = await resp.json()
+                        if not mfaResult["code"]:
+                            raise InvalidAuth("2FA code was invalid. Is the secret wrong?")
+                        redirectUrl = mfaResult["authRedirectUrl"]
             else:
-                if result["newDevice"]:
-                    if not result["noMfa"]:
-                        if not optional_mfa_secret:
-                            raise InvalidAuth("TOTP secret is required for MFA accounts")
-
-                        mfaCode = TOTP(optional_mfa_secret.strip()).now()
-
-                        async with session.post(
-                            login_base + "/VerifyFactor",
-                            headers=login_headers,
-                            json={
-                                "MFACode": mfaCode,
-                                "ReturnUrl": RETURN_URL,
-                                "OpenIdRelayState": "",
-                            },
-                            raise_for_status=True,
-                        ) as resp:
-                            mfaResult = await resp.json()
-                            if not mfaResult["code"]:
-                                raise InvalidAuth("2FA code was invalid. Is the secret wrong?")
-                            redirectUrl = mfaResult["authRedirectUrl"]
-                else:
-                    raise InvalidAuth("Login Failed")
+                raise InvalidAuth("Login Failed")
 
             assert redirectUrl
             async with session.get(
@@ -115,7 +114,7 @@ class ConEd(UtilityBase):
                 },
                 allow_redirects=True,
                 raise_for_status=True,
-            ) as resp:
+            ) as resp:  # noqa: PLW2901
                 pass
 
         async with session.get(

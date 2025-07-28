@@ -1,11 +1,15 @@
 """Tests for Opower."""
 
+from typing import TYPE_CHECKING
+
 import aiohttp
 import pytest
 
 from opower import Opower, create_cookie_jar, get_supported_utilities
 from opower.exceptions import InvalidAuth
-from opower.utilities import UtilityBase
+
+if TYPE_CHECKING:
+    from opower.utilities import UtilityBase
 
 
 @pytest.mark.parametrize("utility", get_supported_utilities())
@@ -17,7 +21,7 @@ async def test_invalid_auth(utility: type["UtilityBase"]) -> None:
             session,
             utility.name(),
             username="test",
-            password="test",
+            password="test",  # noqa: S106
             optional_mfa_secret=None,
         )
         with pytest.raises(InvalidAuth):

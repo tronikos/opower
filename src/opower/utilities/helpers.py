@@ -94,5 +94,4 @@ def js_encrypt(pub_key: str, text: str) -> str:
         cipher_text_base64 = base64.b64encode(cipher_text)
 
         return cipher_text_base64.decode()
-    else:
-        raise ConnectionError("Could not find public key to and encrypt password.")
+    raise ConnectionError("Could not find public key to and encrypt password.")

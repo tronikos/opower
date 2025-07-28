@@ -57,8 +57,7 @@ class Enmax(UtilityBase):
                 # The following text will likely be displayed during maintenance periods
                 if ("an error occurred retrieving or updating data") in error_message:
                     raise CannotConnect(error_message)
-                else:
-                    raise InvalidAuth(error_message)
+                raise InvalidAuth(error_message)
             token = result["token"]
 
         async with session.post(
