@@ -121,7 +121,6 @@ class SMUD(UtilityBase):
         session: ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: str | None,  # Not used by SMUD.
     ) -> None:
         """Login to the utility website and authorize opower."""
         # If we already have a cookie, return early if it is valid.

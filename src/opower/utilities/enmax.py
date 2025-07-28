@@ -34,7 +34,6 @@ class Enmax(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: str | None,
     ) -> str:
         """Login to the utility website."""
         _LOGGER.debug("Starting enmax login")

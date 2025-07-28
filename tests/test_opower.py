@@ -22,7 +22,7 @@ async def test_invalid_auth(utility: type["UtilityBase"]) -> None:
             utility.name(),
             username="test",
             password="test",  # noqa: S106
-            optional_mfa_secret=None,
+            optional_totp_secret=None,
         )
         with pytest.raises(InvalidAuth):
             await opower.async_login()

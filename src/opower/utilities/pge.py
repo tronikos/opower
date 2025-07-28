@@ -36,7 +36,6 @@ class PGE(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: str | None,
     ) -> None:
         """Login to the utility website."""
         url = "https://www.pge.com/eimpapi/auth/login"

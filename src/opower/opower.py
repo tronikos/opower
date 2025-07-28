@@ -175,7 +175,7 @@ class Opower:
         utility: str,
         username: str,
         password: str,
-        optional_mfa_secret: str | None = None,
+        optional_totp_secret: str | None = None,
     ) -> None:
         """Initialize."""
         # Note: Do not modify default headers since Home Assistant that uses this library needs to use
@@ -184,7 +184,7 @@ class Opower:
         self.utility: type[UtilityBase] = select_utility(utility)
         self.username: str = username
         self.password: str = password
-        self.optional_mfa_secret: str | None = optional_mfa_secret
+        self.optional_totp_secret: str | None = optional_totp_secret
         self.access_token: str | None = None
         self.customers: list[Any] = []
         self.user_accounts: list[Any] = []
@@ -197,9 +197,9 @@ class Opower:
         :raises CannotConnect: if we receive any HTTP error
         """
         try:
-            self.access_token = await self.utility.async_login(
-                self.session, self.username, self.password, self.optional_mfa_secret
-            )
+            if self.utility.accepts_totp_secret() and self.optional_totp_secret:
+                self.utility.set_totp_secret(self.optional_totp_secret.strip())
+            self.access_token = await self.utility.async_login(self.session, self.username, self.password)
 
         except ClientResponseError as err:
             if err.status in (401, 403):
@@ -232,7 +232,7 @@ class Opower:
                         id=account_id,
                         meter_type=MeterType(account["meterType"]),
                         read_resolution=ReadResolution(account["readResolution"]),
-                    ),
+                    )
                 )
         return accounts
 

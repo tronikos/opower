@@ -66,7 +66,6 @@ class AEPBase(ABC):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: str | None,
     ) -> str:
         """Login in AEP using user/pass and return the Opower access token."""
         # Clear cookies before logging in again, in case old ones are still around

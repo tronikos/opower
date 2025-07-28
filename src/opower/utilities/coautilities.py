@@ -42,7 +42,6 @@ class COAUtilities(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: str | None,
     ) -> str | None:
         """Login to the utility website."""
         # Get cookies

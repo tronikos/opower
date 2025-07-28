@@ -62,7 +62,6 @@ class DuquesneLight(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: str | None,
     ) -> str:
         """Login to the utility website."""
         # Double-logins are somewhat broken if cookies stay around.

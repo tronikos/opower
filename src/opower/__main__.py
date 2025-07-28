@@ -38,8 +38,8 @@ async def _main() -> None:
         help="Password for logging into the utility's website. If not provided, you will be asked for it",
     )
     parser.add_argument(
-        "--mfa_secret",
-        help="MFA secret for logging into the utility's website.",
+        "--totp_secret",
+        help="TOTP secret for logging into the utility's website (for TOTP-based MFA).",
     )
     parser.add_argument(
         "--aggregate_type",
@@ -80,12 +80,13 @@ async def _main() -> None:
     logging.basicConfig(level=logging.DEBUG - args.verbose + 1 if args.verbose > 0 else logging.INFO)
 
     utility = args.utility or input(f"Utility, one of {supported_utilities}: ")
+    utility_class = select_utility(utility)
     username = args.username or input("Username: ")
     password = args.password or getpass("Password: ")
-    mfa_secret = args.mfa_secret or (input("2FA secret: ") if select_utility(utility).accepts_mfa() else None)
+    totp_secret = args.totp_secret or (input("TOTP secret: ") if utility_class.accepts_totp_secret() else None)
 
     async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
-        opower = Opower(session, utility, username, password, mfa_secret)
+        opower = Opower(session, utility, username, password, totp_secret)
         await opower.async_login()
         if not args.csv:
             # Re-login to make sure code handles already logged in sessions.

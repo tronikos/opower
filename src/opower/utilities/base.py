@@ -9,6 +9,7 @@ class UtilityBase:
     """Base class that each utility needs to extend."""
 
     subclasses: ClassVar[list[type["UtilityBase"]]] = []
+    _totp_secret: str | None = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Keep track of all subclass implementations."""
@@ -34,8 +35,8 @@ class UtilityBase:
         raise NotImplementedError
 
     @staticmethod
-    def accepts_mfa() -> bool:
-        """Check if Utility implementations supports MFA."""
+    def accepts_totp_secret() -> bool:
+        """Check if Utility accepts TOTP secret."""
         return False
 
     @staticmethod
@@ -53,12 +54,16 @@ class UtilityBase:
         """Check if Utility supports realtime usage reads."""
         return False
 
+    @classmethod
+    def set_totp_secret(cls, totp_secret: str) -> None:
+        """Set the TOTP secret."""
+        cls._totp_secret = totp_secret
+
     @staticmethod
     async def async_login(
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: str | None,
     ) -> str | None:
         """Login to the utility website.
 

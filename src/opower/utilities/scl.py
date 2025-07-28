@@ -60,7 +60,6 @@ class SCL(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: str | None,
     ) -> str:
         """Login to the utility website."""
         # GET https://myutilities.seattle.gov/rest/auth/ssologin

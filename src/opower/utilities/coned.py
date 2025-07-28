@@ -29,8 +29,8 @@ class ConEd(UtilityBase):
         return "America/New_York"
 
     @staticmethod
-    def accepts_mfa() -> bool:
-        """Check if Utility implementations supports MFA."""
+    def accepts_totp_secret() -> bool:
+        """Check if Utility accepts TOTP secret."""
         return True
 
     @staticmethod
@@ -49,7 +49,6 @@ class ConEd(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: str | None,
     ) -> str:
         """Login to the utility website."""
         hostname = cls.hostname()
@@ -84,10 +83,10 @@ class ConEd(UtilityBase):
                 redirectUrl = result["authRedirectUrl"]
             elif result["newDevice"]:
                 if not result["noMfa"]:
-                    if not optional_mfa_secret:
+                    if not cls._totp_secret:
                         raise InvalidAuth("TOTP secret is required for MFA accounts")
 
-                    mfaCode = TOTP(optional_mfa_secret.strip()).now()
+                    mfaCode = TOTP(cls._totp_secret).now()
 
                     async with session.post(
                         login_base + "/VerifyFactor",

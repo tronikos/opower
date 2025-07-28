@@ -29,7 +29,6 @@ class GlendaleWaterAndPower(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: str | None,
     ) -> None:
         """Login to the utility website."""
         async with session.post(

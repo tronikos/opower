@@ -37,7 +37,6 @@ class NationalGrid:
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: str | None,
     ) -> str | None:
         """Perform the login process and return an access token."""
         _LOGGER.debug("Starting login process for National Grid")
