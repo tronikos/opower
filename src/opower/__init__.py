@@ -1,6 +1,6 @@
 """Library for getting historical and forecasted usage/cost from an utility using opower.com JSON API."""
 
-from .exceptions import CannotConnect, InvalidAuth
+from .exceptions import CannotConnect, InvalidAuth, MfaChallenge
 from .helpers import create_cookie_jar
 from .opower import (
     Account,
@@ -16,6 +16,7 @@ from .opower import (
     get_supported_utility_names,
     select_utility,
 )
+from .utilities.base import MfaHandlerBase
 
 __all__ = [
     "Account",
@@ -25,6 +26,8 @@ __all__ = [
     "Forecast",
     "InvalidAuth",
     "MeterType",
+    "MfaChallenge",
+    "MfaHandlerBase",
     "Opower",
     "ReadResolution",
     "UnitOfMeasure",

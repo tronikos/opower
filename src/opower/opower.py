@@ -176,6 +176,7 @@ class Opower:
         username: str,
         password: str,
         optional_totp_secret: str | None = None,
+        headless_login_service_url: str | None = None,
     ) -> None:
         """Initialize."""
         # Note: Do not modify default headers since Home Assistant that uses this library needs to use
@@ -185,6 +186,7 @@ class Opower:
         self.username: str = username
         self.password: str = password
         self.optional_totp_secret: str | None = optional_totp_secret
+        self.headless_login_service_url: str | None = headless_login_service_url
         self.access_token: str | None = None
         self.customers: list[Any] = []
         self.user_accounts: list[Any] = []
@@ -194,11 +196,16 @@ class Opower:
         """Login to the utility website and authorize opower.com for access.
 
         :raises InvalidAuth: if login information is incorrect
+        :raises MfaChallenge: if interactive MFA is required
         :raises CannotConnect: if we receive any HTTP error
         """
         try:
             if self.utility.accepts_totp_secret() and self.optional_totp_secret:
                 self.utility.set_totp_secret(self.optional_totp_secret.strip())
+            if self.utility.requires_headless_login_service():
+                if not self.headless_login_service_url:
+                    raise ValueError("Headless login service URL is required for this utility but was not provided.")
+                self.utility.set_headless_login_service_url(self.headless_login_service_url.rstrip("/"))
             self.access_token = await self.utility.async_login(self.session, self.username, self.password)
 
         except ClientResponseError as err:

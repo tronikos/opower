@@ -1,5 +1,10 @@
 """Exceptions."""
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .utilities.base import MfaHandlerBase
+
 
 class CannotConnect(Exception):
     """Error to indicate we cannot connect."""
@@ -7,6 +12,15 @@ class CannotConnect(Exception):
 
 class InvalidAuth(Exception):
     """Error to indicate there is invalid auth."""
+
+
+class MfaChallenge(Exception):
+    """Raised when MFA is required and user interaction is needed."""
+
+    def __init__(self, message: str, handler: "MfaHandlerBase") -> None:
+        """Initialize the exception."""
+        super().__init__(message)
+        self.handler = handler
 
 
 class ApiException(Exception):
