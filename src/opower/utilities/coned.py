@@ -53,11 +53,7 @@ class ConEd(UtilityBase):
     ) -> str:
         """Login to the utility website."""
         hostname = cls.hostname()
-        login_base = (
-            "https://www."
-            + hostname
-            + "/sitecore/api/ssc/ConEdWeb-Foundation-Login-Areas-LoginAPI/User/0"
-        )
+        login_base = "https://www." + hostname + "/sitecore/api/ssc/ConEdWeb-Foundation-Login-Areas-LoginAPI/User/0"
         login_headers = {
             "User-Agent": USER_AGENT,
             "Referer": "https://www." + hostname + "/",
@@ -65,10 +61,7 @@ class ConEd(UtilityBase):
 
         # Double-logins are somewhat broken if cookies stay around.
         # Let's clear everything except device tokens (which allow skipping 2FA)
-        session.cookie_jar.clear(
-            lambda cookie: cookie["domain"] == "www." + hostname
-            and cookie.key != "CE_DEVICE_ID"
-        )
+        session.cookie_jar.clear(lambda cookie: cookie["domain"] == "www." + hostname and cookie.key != "CE_DEVICE_ID")
 
         async with session.post(
             login_base + "/Login",
@@ -93,9 +86,7 @@ class ConEd(UtilityBase):
                 if result["newDevice"]:
                     if not result["noMfa"]:
                         if not optional_mfa_secret:
-                            raise InvalidAuth(
-                                "TOTP secret is required for MFA accounts"
-                            )
+                            raise InvalidAuth("TOTP secret is required for MFA accounts")
 
                         mfaCode = TOTP(optional_mfa_secret.strip()).now()
 
@@ -111,9 +102,7 @@ class ConEd(UtilityBase):
                         ) as resp:
                             mfaResult = await resp.json()
                             if not mfaResult["code"]:
-                                raise InvalidAuth(
-                                    "2FA code was invalid. Is the secret wrong?"
-                                )
+                                raise InvalidAuth("2FA code was invalid. Is the secret wrong?")
                             redirectUrl = mfaResult["authRedirectUrl"]
                 else:
                     raise InvalidAuth("Login Failed")

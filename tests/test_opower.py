@@ -8,11 +8,6 @@ from opower.exceptions import InvalidAuth
 from opower.utilities import UtilityBase
 
 
-def test_dummy() -> None:
-    """Test dummy."""
-    assert True
-
-
 @pytest.mark.parametrize("utility", get_supported_utilities())
 @pytest.mark.asyncio
 async def test_invalid_auth(utility: type["UtilityBase"]) -> None:

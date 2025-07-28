@@ -1,7 +1,7 @@
 """Puget Sound Energy (PSE)."""
 
-from html.parser import HTMLParser
 import re
+from html.parser import HTMLParser
 
 import aiohttp
 
@@ -38,10 +38,7 @@ class PSEUsageParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Recognizes inline scripts."""
-        if (
-            tag == "script"
-            and next(filter(lambda attr: attr[0] == "src", attrs), None) is None
-        ):
+        if tag == "script" and next(filter(lambda attr: attr[0] == "src", attrs), None) is None:
             self._in_inline_script = True
 
     def handle_data(self, data: str) -> None:
@@ -95,9 +92,7 @@ class PSE(UtilityBase):
         ) as resp:
             login_parser.feed(await resp.text())
 
-            assert (
-                login_parser.verification_token
-            ), "Failed to parse __RequestVerificationToken"
+            assert login_parser.verification_token, "Failed to parse __RequestVerificationToken"
 
         await session.post(
             "https://www.pse.com/api/pseauthentication/AsyncSignIn",
@@ -132,8 +127,6 @@ class PSE(UtilityBase):
         ) as resp:
             usage_parser.feed(await resp.text())
 
-            assert (
-                usage_parser.opower_access_token
-            ), "Failed to parse OPower bearer token"
+            assert usage_parser.opower_access_token, "Failed to parse OPower bearer token"
 
         return usage_parser.opower_access_token

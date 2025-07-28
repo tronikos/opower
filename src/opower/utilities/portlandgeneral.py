@@ -33,27 +33,29 @@ class PortlandGeneral(UtilityBase):
         optional_mfa_secret: str | None,
     ) -> str:
         """Login to the utility website."""
-        async with session.post(
-            "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword",
-            headers={
-                "authority": "identitytoolkit.googleapis.com",
-                "User-Agent": USER_AGENT,
-                "accept": "*/*",
-                "content-type": "application/json",
-                "origin": "https://portlandgeneral.com",
-                "referer": "https://portlandgeneral.com/",
-            },
-            json={
-                "email": username,
-                "password": password,
-                "returnSecureToken": True,
-            },
-            params={
-                "key": "AIzaSyDGQGl4SfFoD_KJTo87PboxfNmq89pifqU",  # learned from https://github.com/piekstra/portlandgeneral-api
-                # If this is incorrect, the resp is 400 and indistinguishable from incorrect username or password
-            },
-            raise_for_status=False,
-        ) as resp:
+        async with (
+            session.post(
+                "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword",
+                headers={
+                    "authority": "identitytoolkit.googleapis.com",
+                    "User-Agent": USER_AGENT,
+                    "accept": "*/*",
+                    "content-type": "application/json",
+                    "origin": "https://portlandgeneral.com",
+                    "referer": "https://portlandgeneral.com/",
+                },
+                json={
+                    "email": username,
+                    "password": password,
+                    "returnSecureToken": True,
+                },
+                params={
+                    "key": "AIzaSyDGQGl4SfFoD_KJTo87PboxfNmq89pifqU",  # learned from https://github.com/piekstra/portlandgeneral-api
+                    # If this is incorrect, the resp is 400 and indistinguishable from incorrect username or password
+                },
+                raise_for_status=False,
+            ) as resp
+        ):
             if resp.status == 400:
                 raise InvalidAuth("Username and password failed")
             result = await resp.json()
@@ -80,8 +82,5 @@ class PortlandGeneral(UtilityBase):
                     + ". Code 500 could mean the client_id const is incorrect."
                 )
             if "errorResponse" in result:
-                raise InvalidAuth(
-                    "Username and Password Succeeded, but api responded with "
-                    + str(result["errorResponse"])
-                )
+                raise InvalidAuth("Username and Password Succeeded, but api responded with " + str(result["errorResponse"]))
             return str(result.get("access_token"))

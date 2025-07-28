@@ -1,7 +1,7 @@
 """Duquesne Light Company (DQE)."""
 
-from html.parser import HTMLParser
 import re
+from html.parser import HTMLParser
 
 import aiohttp
 
@@ -23,10 +23,7 @@ class DQEUsageParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Recognizes inline scripts."""
-        if (
-            tag == "script"
-            and next(filter(lambda attr: attr[0] == "src", attrs), None) is None
-        ):
+        if tag == "script" and next(filter(lambda attr: attr[0] == "src", attrs), None) is None:
             self._in_inline_script = True
 
     def handle_data(self, data: str) -> None:
@@ -69,9 +66,7 @@ class DuquesneLight(UtilityBase):
     ) -> str:
         """Login to the utility website."""
         # Double-logins are somewhat broken if cookies stay around.
-        session.cookie_jar.clear(
-            lambda cookie: cookie["domain"] == "www.duquesnelight.com"
-        )
+        session.cookie_jar.clear(lambda cookie: cookie["domain"] == "www.duquesnelight.com")
         # DQE uses Incapsula and merely passing the User-Agent is not enough.
         headers = {
             "User-Agent": USER_AGENT,

@@ -22,16 +22,12 @@ def get_form_action_url_and_hidden_inputs(html: str) -> tuple[str, dict[str, str
         return "", {}
     action_url = match.group(1)
     inputs = {}
-    for match in re.finditer(
-        r'input\s*type="hidden"\s*name="([^"]*)"\s*value="([^"]*)"', html, re.IGNORECASE
-    ):
+    for match in re.finditer(r'input\s*type="hidden"\s*name="([^"]*)"\s*value="([^"]*)"', html, re.IGNORECASE):
         inputs[match.group(1)] = match.group(2)
     return action_url, inputs
 
 
-async def async_follow_forms(
-    session: aiohttp.ClientSession, url: str, html: str
-) -> None:
+async def async_follow_forms(session: aiohttp.ClientSession, url: str, html: str) -> None:
     """Follow the forms in the HTML until we reach a page with no forms."""
     for _ in range(5):
         action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(html)

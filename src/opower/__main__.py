@@ -1,11 +1,12 @@
+# ruff: noqa: T201
 """Demo usage of Opower library."""
 
 import argparse
 import asyncio
 import csv
+import logging
 from datetime import datetime, timedelta
 from getpass import getpass
-import logging
 
 import aiohttp
 
@@ -20,9 +21,7 @@ from opower import (
 
 
 async def _main() -> None:
-    supported_utilities = [
-        utility.__name__.lower() for utility in get_supported_utilities()
-    ]
+    supported_utilities = [utility.__name__.lower() for utility in get_supported_utilities()]
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--utility",
@@ -32,13 +31,11 @@ async def _main() -> None:
     )
     parser.add_argument(
         "--username",
-        help="Username for logging into the utility's website. "
-        "If not provided, you will be asked for it",
+        help="Username for logging into the utility's website. If not provided, you will be asked for it",
     )
     parser.add_argument(
         "--password",
-        help="Password for logging into the utility's website. "
-        "If not provided, you will be asked for it",
+        help="Password for logging into the utility's website. If not provided, you will be asked for it",
     )
     parser.add_argument(
         "--mfa_secret",
@@ -72,27 +69,20 @@ async def _main() -> None:
         "--csv",
         help="csv file to store data",
     )
-    parser.add_argument(
-        "-v", "--verbose", help="enable verbose logging", action="count", default=0
-    )
+    parser.add_argument("-v", "--verbose", help="enable verbose logging", action="count", default=0)
     parser.add_argument(
         "--realtime",
-        help="If true, fetches usage-only data from the realtime API. "
-        "Not all utilities support the realtime API.",
+        help="If true, fetches usage-only data from the realtime API. Not all utilities support the realtime API.",
         action="store_true",
     )
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.DEBUG - args.verbose + 1 if args.verbose > 0 else logging.INFO
-    )
+    logging.basicConfig(level=logging.DEBUG - args.verbose + 1 if args.verbose > 0 else logging.INFO)
 
     utility = args.utility or input(f"Utility, one of {supported_utilities}: ")
     username = args.username or input("Username: ")
     password = args.password or getpass("Password: ")
-    mfa_secret = args.mfa_secret or (
-        input("2FA secret: ") if select_utility(utility).accepts_mfa() else None
-    )
+    mfa_secret = args.mfa_secret or (input("2FA secret: ") if select_utility(utility).accepts_mfa() else None)
 
     async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
         opower = Opower(session, utility, username, password, mfa_secret)
@@ -104,15 +94,9 @@ async def _main() -> None:
                 print("\nCurrent bill forecast:", forecast)
         for account in await opower.async_get_accounts():
             aggregate_type = args.aggregate_type
-            if (
-                aggregate_type == AggregateType.HOUR
-                and account.read_resolution == ReadResolution.DAY
-            ):
+            if aggregate_type == AggregateType.HOUR and account.read_resolution == ReadResolution.DAY:
                 aggregate_type = AggregateType.DAY
-            elif (
-                aggregate_type != AggregateType.BILL
-                and account.read_resolution == ReadResolution.BILLING
-            ):
+            elif aggregate_type != AggregateType.BILL and account.read_resolution == ReadResolution.BILLING:
                 aggregate_type = AggregateType.BILL
             if not args.csv:
                 print(
@@ -150,19 +134,10 @@ async def _main() -> None:
                                 ]
                             )
                 else:
-                    print(
-                        "start_time\tend_time\tconsumption"
-                        "\tstart_minus_prev_end\tend_minus_prev_end"
-                    )
+                    print("start_time\tend_time\tconsumption\tstart_minus_prev_end\tend_minus_prev_end")
                     for usage_read in usage_data:
-                        start_minus_prev_end = (
-                            None
-                            if prev_end is None
-                            else usage_read.start_time - prev_end
-                        )
-                        end_minus_prev_end = (
-                            None if prev_end is None else usage_read.end_time - prev_end
-                        )
+                        start_minus_prev_end = None if prev_end is None else usage_read.start_time - prev_end
+                        end_minus_prev_end = None if prev_end is None else usage_read.end_time - prev_end
                         prev_end = usage_read.end_time
                         print(
                             f"{usage_read.start_time}"
@@ -182,9 +157,7 @@ async def _main() -> None:
                 if args.csv:
                     with open(args.csv, "w", newline="") as csv_file:
                         writer = csv.writer(csv_file)
-                        writer.writerow(
-                            ["start_time", "end_time", "consumption", "provided_cost"]
-                        )
+                        writer.writerow(["start_time", "end_time", "consumption", "provided_cost"])
                         for cost_read in cost_data:
                             writer.writerow(
                                 [
@@ -195,19 +168,10 @@ async def _main() -> None:
                                 ]
                             )
                 else:
-                    print(
-                        "start_time\tend_time\tconsumption\tprovided_cost"
-                        "\tstart_minus_prev_end\tend_minus_prev_end"
-                    )
+                    print("start_time\tend_time\tconsumption\tprovided_cost\tstart_minus_prev_end\tend_minus_prev_end")
                     for cost_read in cost_data:
-                        start_minus_prev_end = (
-                            None
-                            if prev_end is None
-                            else cost_read.start_time - prev_end
-                        )
-                        end_minus_prev_end = (
-                            None if prev_end is None else cost_read.end_time - prev_end
-                        )
+                        start_minus_prev_end = None if prev_end is None else cost_read.start_time - prev_end
+                        end_minus_prev_end = None if prev_end is None else cost_read.end_time - prev_end
                         prev_end = cost_read.end_time
                         print(
                             f"{cost_read.start_time}"

@@ -1,17 +1,17 @@
 """Implementation of opower.com JSON API."""
 
 import dataclasses
-from datetime import date, datetime
-from enum import Enum
 import json
 import logging
+from datetime import date, datetime
+from enum import Enum
 from typing import Any
 from urllib.parse import urlencode
 
 import aiohttp
-from aiohttp.client_exceptions import ClientError, ClientResponseError
 import aiozoneinfo
 import arrow
+from aiohttp.client_exceptions import ClientError, ClientResponseError
 
 from .const import USER_AGENT
 from .exceptions import ApiException, CannotConnect, InvalidAuth
@@ -224,11 +224,7 @@ class Opower:
             for account in utility_accounts:
                 utility_account_id = account["preferredUtilityAccountId"]
                 account_uuid = account["uuid"]
-                id = (
-                    utility_account_id
-                    if utility_account_ids.count(utility_account_id) == 1
-                    else account_uuid
-                )
+                id = utility_account_id if utility_account_ids.count(utility_account_id) == 1 else account_uuid
                 accounts.append(
                     Account(
                         customer=Customer(uuid=customer["uuid"]),
@@ -261,10 +257,7 @@ class Opower:
                 _LOGGER.debug("Ignoring combined-forecast error: %s", err)
                 continue
             if (
-                all(
-                    x in result["totalMetadata"]
-                    for x in ["NO_FORECASTED_COST", "NO_FORECASTED_USAGE"]
-                )
+                all(x in result["totalMetadata"] for x in ["NO_FORECASTED_COST", "NO_FORECASTED_USAGE"])
                 and "DATA_COVERAGE_QUALITY_CHECK_FAILED" not in result["totalMetadata"]
             ):
                 _LOGGER.debug(
@@ -282,11 +275,7 @@ class Opower:
                 if not forecast["accountUuids"]:
                     continue
                 account_uuid = forecast["accountUuids"][0]
-                id = (
-                    utility_account_id
-                    if utility_account_ids.count(utility_account_id) == 1
-                    else account_uuid
-                )
+                id = utility_account_id if utility_account_ids.count(utility_account_id) == 1 else account_uuid
                 forecasts.append(
                     Forecast(
                         account=Account(
@@ -361,20 +350,14 @@ class Opower:
         The resolution for gas is typically 'day' while for electricity it's hour or quarter hour.
         Opower typically keeps historical cost data for 3 years.
         """
-        reads = await self._async_get_dated_data(
-            account, aggregate_type, start_date, end_date, usage_only
-        )
+        reads = await self._async_get_dated_data(account, aggregate_type, start_date, end_date, usage_only)
         result = []
         for read in reads:
             result.append(
                 CostRead(
                     start_time=datetime.fromisoformat(read["startTime"]),
                     end_time=datetime.fromisoformat(read["endTime"]),
-                    consumption=(
-                        read["value"]
-                        if "value" in read
-                        else read["consumption"]["value"]
-                    ),
+                    consumption=(read["value"] if "value" in read else read["consumption"]["value"]),
                     provided_cost=read.get("providedCost", 0) or 0,
                 )
             )
@@ -388,9 +371,7 @@ class Opower:
         # They don't return any data when hitting the cost endpoint so try again with the usage only endpoint.
         if aggregate_type != AggregateType.BILL and not result and not usage_only:
             _LOGGER.debug("Got no usage/cost data. Falling back to just usage data.")
-            return await self.async_get_cost_reads(
-                account, aggregate_type, start_date, end_date, usage_only=True
-            )
+            return await self.async_get_cost_reads(account, aggregate_type, start_date, end_date, usage_only=True)
         return result
 
     async def async_get_usage_reads(
@@ -405,9 +386,7 @@ class Opower:
         The resolution for gas is typically 'day' while for electricity it's hour or quarter hour.
         Opower typically keeps historical usage data for a bit over 3 years.
         """
-        reads = await self._async_get_dated_data(
-            account, aggregate_type, start_date, end_date, usage_only=True
-        )
+        reads = await self._async_get_dated_data(account, aggregate_type, start_date, end_date, usage_only=True)
         result = []
         for read in reads:
             result.append(
@@ -477,19 +456,14 @@ class Opower:
         usage_only: bool = False,
     ) -> list[Any]:
         """Wrap _async_fetch by breaking requests for big date ranges to smaller ones to satisfy opower imposed limits."""
-        if (
-            account.read_resolution is not None
-            and aggregate_type not in SUPPORTED_AGGREGATE_TYPES[account.read_resolution]
-        ):
+        if account.read_resolution is not None and aggregate_type not in SUPPORTED_AGGREGATE_TYPES[account.read_resolution]:
             raise ValueError(
                 f"Requested aggregate_type: {aggregate_type} "
                 f"not supported by account's read_resolution: {account.read_resolution}"
             )
         if start_date is None:
             if aggregate_type == AggregateType.BILL:
-                return await self._async_fetch(
-                    account, aggregate_type, start_date, end_date, usage_only
-                )
+                return await self._async_fetch(account, aggregate_type, start_date, end_date, usage_only)
             raise ValueError("start_date is required unless aggregate_type=BILL")
         if end_date is None:
             raise ValueError("end_date is required unless aggregate_type=BILL")
@@ -503,9 +477,7 @@ class Opower:
             max_request_days = 363
         elif aggregate_type == AggregateType.HOUR:
             max_request_days = 26
-        elif aggregate_type == AggregateType.HALF_HOUR:
-            max_request_days = 6
-        elif aggregate_type == AggregateType.QUARTER_HOUR:
+        elif aggregate_type == AggregateType.HALF_HOUR or aggregate_type == AggregateType.QUARTER_HOUR:
             max_request_days = 6
 
         # Fetch data in batches in reverse chronological order
@@ -519,9 +491,7 @@ class Opower:
                 req_start = max(start, req_end.shift(days=-max_request_days))
             if req_start >= req_end:
                 return result
-            reads = await self._async_fetch(
-                account, aggregate_type, req_start, req_end, usage_only
-            )
+            reads = await self._async_fetch(account, aggregate_type, req_start, req_end, usage_only)
             if not reads:
                 return result
             result = reads + result
@@ -550,13 +520,9 @@ class Opower:
         params = {"aggregateType": aggregate_type.value}
         headers = self._get_headers(account.customer.uuid)
         if start_date:
-            params["startDate"] = (
-                start_date.date() if convert_to_date else start_date
-            ).isoformat()
+            params["startDate"] = (start_date.date() if convert_to_date else start_date).isoformat()
         if end_date:
-            params["endDate"] = (
-                end_date.date() if convert_to_date else end_date
-            ).isoformat()
+            params["endDate"] = (end_date.date() if convert_to_date else end_date).isoformat()
         try:
             result = await self._async_get_request(url, params, headers)
             return list(result["reads"])
@@ -585,9 +551,7 @@ class Opower:
         opower_selected_entities = []
         if self.utility.is_dss() and self.user_accounts:
             # Required for DSS endpoints
-            opower_selected_entities.append(
-                f"urn:session:account:{self._get_account_id()}"
-            )
+            opower_selected_entities.append(f"urn:session:account:{self._get_account_id()}")
 
         if customer_uuid:
             opower_selected_entities.append(f"urn:opower:customer:uuid:{customer_uuid}")
@@ -606,9 +570,7 @@ class Opower:
             return "webcenter"
         return "ei"
 
-    async def _async_get_request(
-        self, url: str, params: dict[str, str], headers: dict[str, str]
-    ) -> Any:
+    async def _async_get_request(self, url: str, params: dict[str, str], headers: dict[str, str]) -> Any:
         full_url = f"{url}?{urlencode(params)}"
         _LOGGER.debug("Fetching: %s", full_url)
         try:
@@ -621,9 +583,7 @@ class Opower:
                         response_text=await resp.text(),
                     )
                 result = await resp.json()
-                _LOGGER.log(
-                    logging.DEBUG - 1, "Fetched: %s", json.dumps(result, indent=2)
-                )
+                _LOGGER.log(logging.DEBUG - 1, "Fetched: %s", json.dumps(result, indent=2))
                 return result
         except ClientError as e:
             raise ApiException(f"Client Error: {e}", url=full_url) from e

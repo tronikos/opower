@@ -1,7 +1,7 @@
 """Evergy."""
 
-from html.parser import HTMLParser
 import logging
+from html.parser import HTMLParser
 
 import aiohttp
 
@@ -65,9 +65,7 @@ class Evergy(UtilityBase):
         ) as resp:
             login_parser.feed(await resp.text())
 
-            assert (
-                login_parser.verification_token
-            ), "Failed to parse login verification token"
+            assert login_parser.verification_token, "Failed to parse login verification token"
 
         login_payload = {
             "username": username,

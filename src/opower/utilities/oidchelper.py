@@ -32,13 +32,9 @@ async def async_auth_oidc(
     policy_confirm_endpoint: str,
 ) -> str | None:
     """Perform the login process and return an access token."""
-    ssl_context = await asyncio.get_running_loop().run_in_executor(
-        None, ssl.create_default_context
-    )
+    ssl_context = await asyncio.get_running_loop().run_in_executor(None, ssl.create_default_context)
     connector = aiohttp.TCPConnector(ssl=ssl_context)
-    secure_session = aiohttp.ClientSession(
-        connector=connector, cookie_jar=create_cookie_jar()
-    )
+    secure_session = aiohttp.ClientSession(connector=connector, cookie_jar=create_cookie_jar())
     try:
         code_verifier = _generate_code_verifier()
         code_challenge = _generate_code_challenge(code_verifier)
@@ -112,13 +108,9 @@ def _generate_code_challenge(code_verifier: str) -> str:
     return base64.urlsafe_b64encode(code_challenge_digest).decode("utf-8").rstrip("=")
 
 
-async def _get_config(
-    session: aiohttp.ClientSession, base_url: str, tenant_id: str, policy: str
-) -> ConfigDict:
+async def _get_config(session: aiohttp.ClientSession, base_url: str, tenant_id: str, policy: str) -> ConfigDict:
     """Get the configuration from the server."""
-    config_url = (
-        f"{base_url}/{tenant_id}/{policy}/v2.0/.well-known/openid-configuration"
-    )
+    config_url = f"{base_url}/{tenant_id}/{policy}/v2.0/.well-known/openid-configuration"
     _LOGGER.debug("Fetching OAuth configuration from: %s", config_url)
     config_text, _, status = await _fetch(session, config_url)
     if status != 200 or not config_text:
@@ -151,9 +143,7 @@ async def _get_auth(
         "code_challenge_method": "S256",
     }
     _LOGGER.debug("Requesting authorization code")
-    auth_content, final_url, status = await _fetch(
-        session, config["authorization_endpoint"], params=auth_params
-    )
+    auth_content, final_url, status = await _fetch(session, config["authorization_endpoint"], params=auth_params)
     if status != 200 or not auth_content:
         _LOGGER.error("Failed to get authorization. Status: %s", status)
         raise CannotConnect("Failed to get authorization")
@@ -178,9 +168,7 @@ async def _get_auth(
         self_asserted_endpoint,
     )
     _LOGGER.debug("Confirming sign-in")
-    return await _confirm_signin(
-        session, config["issuer"], settings, policy, policy_confirm_endpoint
-    )
+    return await _confirm_signin(session, config["issuer"], settings, policy, policy_confirm_endpoint)
 
 
 async def _get_access(
@@ -202,9 +190,7 @@ async def _get_access(
         "scope": scope_access,
     }
     _LOGGER.debug("Requesting access token")
-    token_content, _, status = await _fetch(
-        session, config["token_endpoint"], method="POST", data=token_data
-    )
+    token_content, _, status = await _fetch(session, config["token_endpoint"], method="POST", data=token_data)
     if status != 200 or not token_content:
         _LOGGER.error("Failed to get access token. Status: %s", status)
         raise CannotConnect("Failed to get access token")
@@ -212,9 +198,7 @@ async def _get_access(
     return tokens
 
 
-async def _fetch(
-    session: aiohttp.ClientSession, url: str, **kwargs: Any
-) -> tuple[str | None, str | None, int]:
+async def _fetch(session: aiohttp.ClientSession, url: str, **kwargs: Any) -> tuple[str | None, str | None, int]:
     """Fetch data from a URL."""
     method = kwargs.pop("method", "GET")
     timeout = aiohttp.ClientTimeout(total=30)

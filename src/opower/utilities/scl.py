@@ -17,9 +17,7 @@ def _get_form_action_url_and_hidden_inputs(html: str) -> tuple[str, dict[str, st
         return "", {}
     action_url = match.group(1)
     inputs = {}
-    for match in re.finditer(
-        r'input\s*type="hidden"\s*name="([^"]*)"\s*value="([^"]*)"', html, re.IGNORECASE
-    ):
+    for match in re.finditer(r'input\s*type="hidden"\s*name="([^"]*)"\s*value="([^"]*)"', html, re.IGNORECASE):
         inputs[match.group(1)] = match.group(2)
     return action_url, inputs
 
@@ -27,9 +25,7 @@ def _get_form_action_url_and_hidden_inputs(html: str) -> tuple[str, dict[str, st
 def _get_session_storage_values(html: str) -> dict[str, str]:
     """Return the items set in session storage on login.seattle.gov."""
     items = {}
-    for match in re.finditer(
-        r"sessionStorage\.setItem\(\"(.*?)\",\s*['\"](.*)['\"]\)", html
-    ):
+    for match in re.finditer(r"sessionStorage\.setItem\(\"(.*?)\",\s*['\"](.*)['\"]\)", html):
         items[match.group(1)] = match.group(2)
     return items
 
@@ -69,13 +65,9 @@ class SCL(UtilityBase):
         """Login to the utility website."""
         # GET https://myutilities.seattle.gov/rest/auth/ssologin
         # response has next URL, signature, state, loginCtx in HTML form
-        async with session.get(
-            "https://myutilities.seattle.gov/rest/auth/ssologin"
-        ) as resp:
+        async with session.get("https://myutilities.seattle.gov/rest/auth/ssologin") as resp:
             ssologin_result = await resp.text()
-        action_url, hidden_inputs = _get_form_action_url_and_hidden_inputs(
-            ssologin_result
-        )
+        action_url, hidden_inputs = _get_form_action_url_and_hidden_inputs(ssologin_result)
         if action_url == "https://login.seattle.gov/#/login?appName=EPORTAL_PROD":
             # Not logged in to seattle.gov, go through SSO flow
             assert set(hidden_inputs.keys()) == {"signature", "state", "loginCtx"}
@@ -121,9 +113,7 @@ class SCL(UtilityBase):
                 raise_for_status=True,
             ) as resp:
                 session_result = await resp.text()
-            action_url, hidden_inputs = _get_form_action_url_and_hidden_inputs(
-                session_result
-            )
+            action_url, hidden_inputs = _get_form_action_url_and_hidden_inputs(session_result)
             assert (
                 action_url
                 == "https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/fed/v1/user/response/login"
@@ -140,9 +130,7 @@ class SCL(UtilityBase):
                 raise_for_status=True,
             ) as resp:
                 idcs_login_result = await resp.text()
-            action_url, hidden_inputs = _get_form_action_url_and_hidden_inputs(
-                idcs_login_result
-            )
+            action_url, hidden_inputs = _get_form_action_url_and_hidden_inputs(idcs_login_result)
 
         assert action_url == "https://myutilities.seattle.gov/rest/auth/samlresp"
         assert set(hidden_inputs.keys()) == {"RelayState", "SAMLResponse"}

@@ -16,6 +16,14 @@ dependencies = [
     "pyotp>=2.0",
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-asyncio",
+    "python-dotenv",
+]
+
+
 [project.urls]
 "Homepage" = "https://github.com/tronikos/opower"
 "Bug Tracker" = "https://github.com/tronikos/opower/issues"
@@ -24,21 +32,16 @@ dependencies = [
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
-[tool.black]
-extend-exclude = "_pb2.py|_pb2_grpc.py"
-
-[tool.isort]
-profile = "black"
-force_sort_within_sections = true
-combine_as_imports = true
-extend_skip_glob = ["*_pb2.py", "*_pb2_grpc.py"]
-
 [tool.ruff]
 target-version = "py311"
-exclude = ["*_pb2.py", "*_pb2_grpc.py", "*.pyi"]
 line-length = 127
+exclude = [
+    ".git", ".mypy_cache", ".ruff_cache", ".venv", "__pypackages__",
+    "build", "dist", "venv", "*_pb2.py", "*_pb2_grpc.py", "*.pyi"
+]
 
-lint.select = [
+[tool.ruff.lint]
+select = [
     "B007", # Loop control variable {name} not used within loop body
     "B014", # Exception handler with duplicate exception
     "C",  # complexity
@@ -61,27 +64,25 @@ lint.select = [
     "UP",  # pyupgrade
     "W",  # pycodestyle
 ]
-
-lint.ignore = [
+ignore = [
     "D203",  # 1 blank line required before class docstring
     "D213",  # Multi-line docstring summary should start at the second line
-    # keep-runtime-annotations
-    'UP006', # Non PEP585 annotations
-    'UP007', # Non PEP604 annotations
 ]
-
-[tool.ruff.lint.flake8-pytest-style]
-fixture-parentheses = false
-
-[tool.ruff.lint.per-file-ignores]
-# Allow for main script to write to stdout
-"__main__.py" = ["T201"]
+fixable = ["ALL"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 25
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=7,<8",
-    "python-dotenv>=1,<2",
-]
+[tool.mypy]
+python_version = "3.11"
+exclude = [".venv", "venv", "build"]
+pretty = true
+strict = true
+show_error_codes = true
+warn_incomplete_stub = true
+enable_error_code = ["ignore-without-code", "redundant-self", "truthy-iterable"]
+
+[tool.codespell]
+skip = "*.json,*.csv,*.lock,./.git/*,./.venv/*"
+check-filenames = true
+check-hidden = true

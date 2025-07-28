@@ -76,9 +76,7 @@ class Aps(UtilityBase):
             raise_for_status=True,
         ) as resp:
             user_details = await resp.json(content_type="application /json")
-            account_details = user_details["Details"]["AccountDetails"][
-                "getAccountDetailsResponse"
-            ]["getAccountDetailsRes"]
+            account_details = user_details["Details"]["AccountDetails"]["getAccountDetailsResponse"]["getAccountDetailsRes"]
             account_id = account_details["getPersonDetails"]["accountID"]
             service_address_id = find_first_service_address_id(account_details)
             if service_address_id is None:
@@ -122,16 +120,12 @@ def extract_rsa_key(js_content: str) -> str:
 def find_first_service_address_id(account_details: dict[str, Any]) -> str | None:
     """Find the first service address ID from the account details."""
     try:
-        premise_details_list = account_details["getSASPListByAccountID"][
-            "premiseDetailsList"
-        ]
+        premise_details_list = account_details["getSASPListByAccountID"]["premiseDetailsList"]
         for premise in premise_details_list:
             sasp_details = premise.get("sASPDetails", [])
             for sasp in sasp_details:
                 if "sAID" in sasp:
                     return str(sasp["sAID"])
     except (KeyError, TypeError):
-        _LOGGER.warning(
-            "Could not find APS Service Address ID in the expected structure"
-        )
+        _LOGGER.warning("Could not find APS Service Address ID in the expected structure")
     return None

@@ -1,8 +1,8 @@
 """Base Abstract class for American Electric Power."""
 
+import re
 from abc import ABC
 from html.parser import HTMLParser
-import re
 
 import aiohttp
 
@@ -97,9 +97,7 @@ class AEPBase(ABC):
         ) as resp:
             html = await resp.text()
 
-        match = re.search(
-            r'<[^>]*?class="error"[^>]*?>.*?<p>(.*?)</p>', html, re.DOTALL
-        )
+        match = re.search(r'<[^>]*?class="error"[^>]*?>.*?<p>(.*?)</p>', html, re.DOTALL)
         if match:
             raise InvalidAuth(match.group(1).strip())
 
