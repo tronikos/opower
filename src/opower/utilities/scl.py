@@ -2,7 +2,6 @@
 
 import json
 import re
-from typing import Optional
 
 import aiohttp
 
@@ -65,7 +64,7 @@ class SCL(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
+        optional_mfa_secret: str | None,
     ) -> str:
         """Login to the utility website."""
         # GET https://myutilities.seattle.gov/rest/auth/ssologin

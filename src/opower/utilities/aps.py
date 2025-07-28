@@ -2,7 +2,7 @@
 
 import logging
 import re
-from typing import Any, Optional
+from typing import Any
 
 import aiohttp
 
@@ -37,7 +37,7 @@ class Aps(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
+        optional_mfa_secret: str | None,
     ) -> None:
         """Login to the utility website."""
         _LOGGER.debug("Starting login process for Arizona Public Service (APS)")
@@ -119,7 +119,7 @@ def extract_rsa_key(js_content: str) -> str:
         raise CannotConnect("The RSA public key was not found.")
 
 
-def find_first_service_address_id(account_details: dict[str, Any]) -> Optional[str]:
+def find_first_service_address_id(account_details: dict[str, Any]) -> str | None:
     """Find the first service address ID from the account details."""
     try:
         premise_details_list = account_details["getSASPListByAccountID"][

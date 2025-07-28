@@ -22,7 +22,6 @@
 
 from html.parser import HTMLParser
 import logging
-from typing import Optional
 from urllib.parse import parse_qs
 
 from aiohttp import ClientResponse, ClientSession
@@ -43,11 +42,11 @@ class SMUDLoginParser(HTMLParser):
     def __init__(self) -> None:
         """Initialize."""
         super().__init__()
-        self.verification_token: Optional[str] = None
-        self.ocis_req_sp: Optional[str] = None
-        self.relay_state: Optional[str] = None
+        self.verification_token: str | None = None
+        self.ocis_req_sp: str | None = None
+        self.relay_state: str | None = None
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Try to extract the verification token from the login input."""
         if tag == "input" and ("name", "__RequestVerificationToken") in attrs:
             _, token = next(filter(lambda attr: attr[0] == "value", attrs))
@@ -90,7 +89,7 @@ class SMUDOktaResponseSamlResponseValueParser(HTMLParser):
     """HTML parser to extract SAMLResponse token from OKTA response for Opower SSO."""
 
     # <input name="SAMLResponse" type="hidden" value="..."/>
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Try to extract the SAMLResponse value."""
         if tag == "input":
             for name, value in attrs:
@@ -121,7 +120,7 @@ class SMUD(UtilityBase):
         session: ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],  # Not used by SMUD.
+        optional_mfa_secret: str | None,  # Not used by SMUD.
     ) -> None:
         """Login to the utility website and authorize opower."""
         # If we already have a cookie, return early if it is valid.

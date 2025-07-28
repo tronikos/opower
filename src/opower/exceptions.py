@@ -1,7 +1,5 @@
 """Exceptions."""
 
-from typing import Optional
-
 
 class CannotConnect(Exception):
     """Error to indicate we cannot connect."""
@@ -18,8 +16,8 @@ class ApiException(Exception):
         self,
         message: str,
         url: str,
-        status: Optional[int] = None,
-        response_text: Optional[str] = None,
+        status: int | None = None,
+        response_text: str | None = None,
     ) -> None:
         """Initialize the exception."""
         super().__init__(message)

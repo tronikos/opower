@@ -6,7 +6,6 @@ import csv
 from datetime import datetime, timedelta
 from getpass import getpass
 import logging
-from typing import Optional
 
 import aiohttp
 
@@ -126,7 +125,7 @@ async def _main() -> None:
                     "end_date=",
                     args.end_date,
                 )
-            prev_end: Optional[datetime] = None
+            prev_end: datetime | None = None
             # Realtime data does not include cost data, so effectively --realtime implies --usage_only.
             if args.usage_only or args.realtime:
                 if args.realtime:

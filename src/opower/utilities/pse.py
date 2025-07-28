@@ -2,7 +2,6 @@
 
 from html.parser import HTMLParser
 import re
-from typing import Optional
 
 import aiohttp
 
@@ -17,9 +16,9 @@ class PSELoginParser(HTMLParser):
     def __init__(self) -> None:
         """Initialize."""
         super().__init__()
-        self.verification_token: Optional[str] = None
+        self.verification_token: str | None = None
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Try to extract the verification token from the login input."""
         if tag == "input" and ("name", "__RequestVerificationToken") in attrs:
             _, token = next(filter(lambda attr: attr[0] == "value", attrs))
@@ -34,10 +33,10 @@ class PSEUsageParser(HTMLParser):
     def __init__(self) -> None:
         """Initialize."""
         super().__init__()
-        self.opower_access_token: Optional[str] = None
+        self.opower_access_token: str | None = None
         self._in_inline_script = False
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Recognizes inline scripts."""
         if (
             tag == "script"
@@ -81,7 +80,7 @@ class PSE(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
+        optional_mfa_secret: str | None,
     ) -> str:
         """Login to the utility website."""
         # Double-logins are somewhat broken if cookies stay around.

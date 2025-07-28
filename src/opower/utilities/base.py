@@ -1,6 +1,6 @@
 """Base class that each utility needs to extend."""
 
-from typing import Any, Optional
+from typing import Any
 
 import aiohttp
 
@@ -58,8 +58,8 @@ class UtilityBase:
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
-    ) -> Optional[str]:
+        optional_mfa_secret: str | None,
+    ) -> str | None:
         """Login to the utility website.
 
         Return the Opower access token or None if this function authorizes with Opower in other ways.

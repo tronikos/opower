@@ -2,7 +2,6 @@
 
 from html.parser import HTMLParser
 import re
-from typing import Optional
 
 import aiohttp
 
@@ -19,10 +18,10 @@ class DQEUsageParser(HTMLParser):
     def __init__(self) -> None:
         """Initialize."""
         super().__init__()
-        self.opower_access_token: Optional[str] = None
+        self.opower_access_token: str | None = None
         self._in_inline_script = False
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Recognizes inline scripts."""
         if (
             tag == "script"
@@ -66,7 +65,7 @@ class DuquesneLight(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
+        optional_mfa_secret: str | None,
     ) -> str:
         """Login to the utility website."""
         # Double-logins are somewhat broken if cookies stay around.

@@ -7,7 +7,7 @@ import json
 import logging
 import secrets
 import ssl
-from typing import Any, Optional, TypedDict
+from typing import Any, TypedDict
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
@@ -30,7 +30,7 @@ async def async_auth_oidc(
     scope_access: str,
     self_asserted_endpoint: str,
     policy_confirm_endpoint: str,
-) -> Optional[str]:
+) -> str | None:
     """Perform the login process and return an access token."""
     ssl_context = await asyncio.get_running_loop().run_in_executor(
         None, ssl.create_default_context
@@ -140,7 +140,7 @@ async def _get_auth(
     policy: str,
     self_asserted_endpoint: str,
     policy_confirm_endpoint: str,
-) -> Optional[str]:
+) -> str | None:
     """Get the authorization code."""
     auth_params = {
         "client_id": client_id,
@@ -191,7 +191,7 @@ async def _get_access(
     client_id: str,
     redirect_uri: str,
     scope_access: str,
-) -> Optional[TokenDict]:
+) -> TokenDict | None:
     """Get the access token."""
     token_data = {
         "client_id": client_id,
@@ -214,7 +214,7 @@ async def _get_access(
 
 async def _fetch(
     session: aiohttp.ClientSession, url: str, **kwargs: Any
-) -> tuple[Optional[str], Optional[str], int]:
+) -> tuple[str | None, str | None, int]:
     """Fetch data from a URL."""
     method = kwargs.pop("method", "GET")
     timeout = aiohttp.ClientTimeout(total=30)
@@ -229,7 +229,7 @@ async def _fetch(
         return None, None, 0
 
 
-def _extract_settings(auth_content: str) -> Optional[dict[str, Any]]:
+def _extract_settings(auth_content: str) -> dict[str, Any] | None:
     """Extract settings from the authorization content."""
     _LOGGER.debug("Extracting settings from authorization content")
     settings_start = auth_content.find("var SETTINGS = ")
@@ -287,7 +287,7 @@ async def _confirm_signin(
     settings: dict[str, Any],
     policy: str,
     policy_confirm_endpoint: str,
-) -> Optional[str]:
+) -> str | None:
     """Confirm the sign-in process."""
     base_url = issuer.rsplit("/", 2)[0]
     _LOGGER.debug("Confirming sign-in at %s", base_url)

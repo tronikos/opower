@@ -1,6 +1,5 @@
 """City of Austin Utilities."""
 
-from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
@@ -43,8 +42,8 @@ class COAUtilities(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
-    ) -> Optional[str]:
+        optional_mfa_secret: str | None,
+    ) -> str | None:
         """Login to the utility website."""
         # Get cookies
         await session.get(

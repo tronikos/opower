@@ -5,7 +5,6 @@ It uses OAuth 2.0 with PKCE for secure authentication.
 """
 
 import logging
-from typing import Optional
 
 import aiohttp
 
@@ -63,8 +62,8 @@ class Mercury(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
-    ) -> Optional[str]:
+        optional_mfa_secret: str | None,
+    ) -> str | None:
         """Perform the login process and return an access token."""
         _LOGGER.debug("Starting login process for Mercury NZ Limited")
         return await async_auth_oidc(

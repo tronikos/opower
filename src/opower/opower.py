@@ -5,7 +5,7 @@ from datetime import date, datetime
 from enum import Enum
 import json
 import logging
-from typing import Any, Optional, Union
+from typing import Any
 from urllib.parse import urlencode
 
 import aiohttp
@@ -109,7 +109,7 @@ class Account:
     # https://github.com/home-assistant/core/issues/108260
     id: str
     meter_type: MeterType
-    read_resolution: Optional[ReadResolution]
+    read_resolution: ReadResolution | None
 
 
 @dataclasses.dataclass
@@ -175,7 +175,7 @@ class Opower:
         utility: str,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str] = None,
+        optional_mfa_secret: str | None = None,
     ) -> None:
         """Initialize."""
         # Note: Do not modify default headers since Home Assistant that uses this library needs to use
@@ -184,8 +184,8 @@ class Opower:
         self.utility: type[UtilityBase] = select_utility(utility)
         self.username: str = username
         self.password: str = password
-        self.optional_mfa_secret: Optional[str] = optional_mfa_secret
-        self.access_token: Optional[str] = None
+        self.optional_mfa_secret: str | None = optional_mfa_secret
+        self.access_token: str | None = None
         self.customers: list[Any] = []
         self.user_accounts: list[Any] = []
         self.meters: list[str] = []
@@ -352,8 +352,8 @@ class Opower:
         self,
         account: Account,
         aggregate_type: AggregateType,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
         usage_only: bool = False,
     ) -> list[CostRead]:
         """Get usage and cost data for the selected account in the given date range aggregated by bill/day/hour.
@@ -397,8 +397,8 @@ class Opower:
         self,
         account: Account,
         aggregate_type: AggregateType,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> list[UsageRead]:
         """Get usage data for the selected account in the given date range aggregated by bill/day/hour.
 
@@ -472,8 +472,8 @@ class Opower:
         self,
         account: Account,
         aggregate_type: AggregateType,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
         usage_only: bool = False,
     ) -> list[Any]:
         """Wrap _async_fetch by breaking requests for big date ranges to smaller ones to satisfy opower imposed limits."""
@@ -531,8 +531,8 @@ class Opower:
         self,
         account: Account,
         aggregate_type: AggregateType,
-        start_date: Union[datetime, arrow.Arrow, None] = None,
-        end_date: Union[datetime, arrow.Arrow, None] = None,
+        start_date: datetime | arrow.Arrow | None = None,
+        end_date: datetime | arrow.Arrow | None = None,
         usage_only: bool = False,
     ) -> list[Any]:
         if usage_only:
@@ -577,7 +577,7 @@ class Opower:
                 return str(user_account["accountId"])
         return str(self.user_accounts[0]["accountId"])
 
-    def _get_headers(self, customer_uuid: Optional[str] = None) -> dict[str, str]:
+    def _get_headers(self, customer_uuid: str | None = None) -> dict[str, str]:
         headers = {"User-Agent": USER_AGENT}
         if self.access_token:
             headers["authorization"] = f"Bearer {self.access_token}"

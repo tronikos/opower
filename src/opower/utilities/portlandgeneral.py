@@ -1,7 +1,5 @@
 """Portland General Electric (PGE)."""
 
-from typing import Optional
-
 import aiohttp
 
 from ..const import USER_AGENT
@@ -32,7 +30,7 @@ class PortlandGeneral(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
+        optional_mfa_secret: str | None,
     ) -> str:
         """Login to the utility website."""
         async with session.post(

@@ -2,7 +2,6 @@
 
 from html.parser import HTMLParser
 import logging
-from typing import Optional
 
 import aiohttp
 
@@ -19,9 +18,9 @@ class EvergyLoginParser(HTMLParser):
     def __init__(self) -> None:
         """Initialize."""
         super().__init__()
-        self.verification_token: Optional[str] = None
+        self.verification_token: str | None = None
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Try to extract the verification token from the login input."""
         if tag == "input" and ("name", "evrgaf") in attrs:
             _, token = next(filter(lambda attr: attr[0] == "value", attrs))
@@ -31,7 +30,7 @@ class EvergyLoginParser(HTMLParser):
 class Evergy(UtilityBase):
     """Evergy."""
 
-    _subdomain: Optional[str] = None
+    _subdomain: str | None = None
 
     @staticmethod
     def name() -> str:
@@ -54,7 +53,7 @@ class Evergy(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
+        optional_mfa_secret: str | None,
     ) -> str:
         """Login to the utility website."""
         login_parser = EvergyLoginParser()
@@ -91,7 +90,7 @@ class Evergy(UtilityBase):
             if resp.status == 200:
                 raise InvalidAuth("Username and password failed")
 
-        opower_access_token: Optional[str] = None
+        opower_access_token: str | None = None
 
         async with session.get(
             "https://www.evergy.com/api/sso/jwt",

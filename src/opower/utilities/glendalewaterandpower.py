@@ -1,7 +1,5 @@
 """Glendale Water and Power (GWP)."""
 
-from typing import Optional
-
 import aiohttp
 
 from ..const import USER_AGENT
@@ -31,7 +29,7 @@ class GlendaleWaterAndPower(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
+        optional_mfa_secret: str | None,
     ) -> None:
         """Login to the utility website."""
         async with session.post(

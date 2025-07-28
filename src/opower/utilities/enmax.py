@@ -1,7 +1,6 @@
 """Enmax."""
 
 import logging
-from typing import Optional
 
 import aiohttp
 
@@ -35,7 +34,7 @@ class Enmax(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
+        optional_mfa_secret: str | None,
     ) -> str:
         """Login to the utility website."""
         _LOGGER.debug("Starting enmax login")

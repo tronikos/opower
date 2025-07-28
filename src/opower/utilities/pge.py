@@ -1,7 +1,6 @@
 """Pacific Gas & Electric (PG&E)."""
 
 import logging
-from typing import Optional
 from urllib.parse import urlencode, urljoin
 
 import aiohttp
@@ -37,7 +36,7 @@ class PGE(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
+        optional_mfa_secret: str | None,
     ) -> None:
         """Login to the utility website."""
         url = "https://www.pge.com/eimpapi/auth/login"

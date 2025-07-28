@@ -3,7 +3,6 @@
 from abc import ABC
 from html.parser import HTMLParser
 import re
-from typing import Optional
 
 import aiohttp
 
@@ -22,7 +21,7 @@ class AEPLoginParser(HTMLParser):
         self.password = password
         self.password_field_found = False
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Try to extract the login input fields."""
         if tag == "input":
             name = ""
@@ -43,7 +42,7 @@ class AEPLoginParser(HTMLParser):
 class AEPBase(ABC):
     """Base Abstract class for American Electric Power."""
 
-    _subdomain: Optional[str] = None
+    _subdomain: str | None = None
 
     @classmethod
     def subdomain(cls) -> str:
@@ -67,7 +66,7 @@ class AEPBase(ABC):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
+        optional_mfa_secret: str | None,
     ) -> str:
         """Login in AEP using user/pass and return the Opower access token."""
         # Clear cookies before logging in again, in case old ones are still around

@@ -3,7 +3,7 @@
 import json
 import logging
 import re
-from typing import Any, Optional
+from typing import Any
 
 import aiohttp
 
@@ -16,7 +16,7 @@ _LOGGER = logging.getLogger(__file__)
 class Exelon:
     """Base class for Exelon subsidiaries."""
 
-    _subdomain: Optional[str] = None
+    _subdomain: str | None = None
 
     # Can find the opower.com subdomain using the GetConfiguration endpoint
     # e.g. https://secure.bge.com/api/Services/MyAccountService.svc/GetConfiguration
@@ -98,7 +98,7 @@ class Exelon:
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
+        optional_mfa_secret: str | None,
     ) -> str:
         """Login to the utility website and authorize opower."""
         async with session.get(
