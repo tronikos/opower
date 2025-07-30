@@ -95,7 +95,7 @@ class DuquesneLight(UtilityBase):
         ) as resp:
             if resp.status == 400:
                 raise InvalidAuth(await resp.text())
-            elif resp.status != 200:
+            if resp.status != 200:
                 resp.raise_for_status()
 
         usage_parser = DQEUsageParser()
