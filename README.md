@@ -1,8 +1,12 @@
 # opower
 
-A Python library for getting historical and forecasted usage/cost from utilities that use opower.com such as PG&amp;E.
+[![PyPI Version](https://img.shields.io/pypi/v/opower.svg)](https://pypi.org/project/opower/)
 
-Supported utilities (in alphabetical order):
+A Python library and command-line tool for getting historical and forecasted usage/cost data from utilities that use opower.com.
+
+This library is used by the [Opower integration in Home Assistant](https://www.home-assistant.io/integrations/opower/).
+
+## Supported Utilities
 
 - American Electric Power (AEP) subsidiaries
   - AEP Ohio
@@ -34,27 +38,27 @@ Supported utilities (in alphabetical order):
   - National Grid NY Long Island
   - National Grid NY Metro
   - National Grid NY Upstate
-- Pacific Gas & Electric (PG&E)
+- Pacific Gas & Electric (PG&E) (\*)
 - Portland General Electric (PGE)
 - Puget Sound Energy (PSE)
 - Sacramento Municipal Utility District (SMUD)
 - Seattle City Light (SCL)
 
-## Support a new utility
+**Note:** Utilities marked with an asterisk require the **[tronikos/opower-login-service](https://github.com/tronikos/opower-login-service)**. This service handles complex login flows (e.g. heavy JavaScript) that cannot be managed by this library directly. It can be run as a Home Assistant Add-on or a Docker container.
 
-To add support for a new utility that uses opower JSON API (you can tell if the energy dashboard of your utility makes network requests to opower.com, e.g. pge.opower.com in the network tab of your browser's developer tools) add a file similar to
-[pge.py](https://github.com/tronikos/opower/blob/main/src/opower/utilities/pge.py)
-or [pse.py](https://github.com/tronikos/opower/blob/main/src/opower/utilities/pse.py)
-or [bge.py](https://github.com/tronikos/opower/blob/main/src/opower/utilities/bge.py)
-etc.
+## Contributing
 
-Name the file after the utility website, e.g. pge.py for pge.com.
+Contributions are welcome! Please feel free to submit a pull request.
 
-Since this library is used by Home Assistant, see <https://www.home-assistant.io/integrations/opower/>, per <https://github.com/home-assistant/architecture/blob/master/adr/0004-webscraping.md> we cannot have a dependency on a headless browser and we can only parse HTML during login.
+### Adding a New Utility
 
-> An exception is made for the authentication phase. An integration is allowed to extract fields from forms. To make it more robust, data should not be gathered by scraping individual fields but instead scrape all fields at once.
+To add support for a new Opower-based utility, follow these steps:
 
-So follow that advice and try to scrape all fields at once, similar to the `get_form_action_url_and_hidden_inputs` in helpers.py.
+1. **Verify it's an Opower utility:** Use your browser's developer tools on your utility's website. If the network tab shows requests to a domain like `utility.opower.com`, it's a good candidate.
+2. **Create a utility file:** Add a new file in `src/opower/utilities` that inherits from `UtilityBase`. Name the file after the utility's website (e.g., `newutility.py` for `newutility.com`).
+3. **Respect scraping limitations:** This library is used by Home Assistant and must adhere to its [architecture rules](https://github.com/home-assistant/architecture/blob/master/adr/0004-webscraping.md). A headless browser cannot be a dependency, and HTML parsing is only allowed for the authentication phase.
+    > An exception is made for the authentication phase. An integration is allowed to extract fields from forms. To make it more robust, data should not be gathered by scraping individual fields but instead scrape all fields at once.
+4. **Login with a headless browser:** If the utility's login requires a headless browser, you will need to add support to the **[tronikos/opower-login-service](https://github.com/tronikos/opower-login-service)**. See the implementation for Pacific Gas & Electric (PG&E) as an example.
 
 ## Development environment
 
@@ -75,12 +79,8 @@ python -m pip install pre-commit
 pre-commit install
 pre-commit run --all-files
 
-# Alternative: run formatter, lint, and type checking
-python -m pip install isort black flake8 ruff mypy pytest-mypy
-isort . ; black . ; flake8 . ; ruff check . --fix ; mypy --install-types .
-
 # Run tests
-python -m pip install pytest pytest-asyncio python-dotenv
+python -m pip install -e ".[test]"
 pytest
 
 # Run command line

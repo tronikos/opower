@@ -13,12 +13,8 @@ from opower.utilities.smud import (
     SMUDOktaResponseSamlResponseValueParser,
 )
 
-REQUEST_VERIFICATION_TOKEN_HTML_FILENAME = os.path.join(
-    os.path.dirname(__file__), "smud/myAccountResponse.html"
-)
-OKTA_SAML_RESPONSE_HTML_FILENAME = os.path.join(
-    os.path.dirname(__file__), "smud/smudOkta.html"
-)
+REQUEST_VERIFICATION_TOKEN_HTML_FILENAME = os.path.join(os.path.dirname(__file__), "smud/myAccountResponse.html")
+OKTA_SAML_RESPONSE_HTML_FILENAME = os.path.join(os.path.dirname(__file__), "smud/smudOkta.html")
 ENV_SECRET_PATH = os.path.join(os.path.dirname(__file__), "../../../.env.secret")
 
 
@@ -51,21 +47,16 @@ class TestSMUD(unittest.IsolatedAsyncioTestCase):
         password = os.getenv("SMUD_PASSWORD")
 
         if username is None or password is None:
-            self.skipTest(
-                "Add `SMUD_USERNAME=` and `SMUD_PASSWORD=` to `.env.secret` to run live SMUD test."
-            )
+            self.skipTest("Add `SMUD_USERNAME=` and `SMUD_PASSWORD=` to `.env.secret` to run live SMUD test.")
 
         smud = SMUD()
         session = aiohttp.ClientSession()
         self.addCleanup(session.close)
 
-        await smud.async_login(session, username, password, None)
+        await smud.async_login(session, username, password)
 
         # Confirm opower cookies have been set.
-        self.assertTrue(
-            len(session.cookie_jar.filter_cookies(URL("https://smud.opower.com/ei")))
-            > 0
-        )
+        self.assertTrue(len(session.cookie_jar.filter_cookies(URL("https://smud.opower.com/ei"))) > 0)
 
 
 class TestSMUDLoginParser(unittest.TestCase):
@@ -74,7 +65,8 @@ class TestSMUDLoginParser(unittest.TestCase):
     def test_parse(self) -> None:
         """Test finding the input __RequestVerificationToken value."""
         loginParser = SMUDLoginParser()
-        html = open(REQUEST_VERIFICATION_TOKEN_HTML_FILENAME).read()
+        with open(REQUEST_VERIFICATION_TOKEN_HTML_FILENAME) as f:
+            html = f.read()
         loginParser.feed(html)
         result = loginParser.verification_token
         assert result is not None
@@ -88,7 +80,8 @@ class TestSMUDOktaResponseSamlResponseValueParser(unittest.TestCase):
     def test_parse(self) -> None:
         """Test parsing the input SamlResponse value."""
         samlResponseParser = SMUDOktaResponseSamlResponseValueParser()
-        html = open(OKTA_SAML_RESPONSE_HTML_FILENAME).read()
+        with open(OKTA_SAML_RESPONSE_HTML_FILENAME) as f:
+            html = f.read()
         samlResponseParser.feed(html)
         result = samlResponseParser.saml_response
         assert result is not None

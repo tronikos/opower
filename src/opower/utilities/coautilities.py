@@ -1,6 +1,5 @@
 """City of Austin Utilities."""
 
-from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
@@ -43,8 +42,7 @@ class COAUtilities(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
-    ) -> Optional[str]:
+    ) -> str | None:
         """Login to the utility website."""
         # Get cookies
         await session.get(
@@ -73,9 +71,7 @@ class COAUtilities(UtilityBase):
             raise_for_status=True,
         ) as response:
             await response.text()
-            if "PD-S-SESSION-ID-PCOAUT" not in session.cookie_jar.filter_cookies(
-                URL("https://coautilities.com")
-            ):
+            if "PD-S-SESSION-ID-PCOAUT" not in session.cookie_jar.filter_cookies(URL("https://coautilities.com")):
                 raise InvalidAuth("Username/Password are invalid")
 
         # Getting SAML Request from opower
@@ -137,8 +133,7 @@ class COAUtilities(UtilityBase):
 
         # Finally exchange this token to Auth token
         async with session.post(
-            "https://dss-coa.opower.com"
-            "/webcenter/edge/apis/identity-management-v1/cws/v1/auth/coa/saml/ott/confirm",
+            "https://dss-coa.opower.com/webcenter/edge/apis/identity-management-v1/cws/v1/auth/coa/saml/ott/confirm",
             headers={"User-Agent": USER_AGENT},
             data={"token": token},
             raise_for_status=True,

@@ -7,7 +7,7 @@ import json
 import logging
 import secrets
 import ssl
-from typing import Any, Optional, TypedDict
+from typing import Any, TypedDict
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
@@ -30,15 +30,11 @@ async def async_auth_oidc(
     scope_access: str,
     self_asserted_endpoint: str,
     policy_confirm_endpoint: str,
-) -> Optional[str]:
+) -> str | None:
     """Perform the login process and return an access token."""
-    ssl_context = await asyncio.get_running_loop().run_in_executor(
-        None, ssl.create_default_context
-    )
+    ssl_context = await asyncio.get_running_loop().run_in_executor(None, ssl.create_default_context)
     connector = aiohttp.TCPConnector(ssl=ssl_context)
-    secure_session = aiohttp.ClientSession(
-        connector=connector, cookie_jar=create_cookie_jar()
-    )
+    secure_session = aiohttp.ClientSession(connector=connector, cookie_jar=create_cookie_jar())
     try:
         code_verifier = _generate_code_verifier()
         code_challenge = _generate_code_challenge(code_verifier)
@@ -76,13 +72,12 @@ async def async_auth_oidc(
         if tokens and "access_token" in tokens:
             _LOGGER.debug("Successfully obtained access token")
             return tokens["access_token"]
-        else:
-            _LOGGER.error("Failed to obtain access token")
-            raise CannotConnect("Failed to obtain access token")
+        _LOGGER.error("Failed to obtain access token")
+        raise CannotConnect("Failed to obtain access token")
 
     except aiohttp.ClientError as err:
-        _LOGGER.error("Connection error during login: %s", str(err))
-        raise CannotConnect(f"Connection error: {err}")
+        _LOGGER.exception("Connection error during login")
+        raise CannotConnect(f"Connection error: {err}") from err
     finally:
         await secure_session.close()
 
@@ -112,13 +107,9 @@ def _generate_code_challenge(code_verifier: str) -> str:
     return base64.urlsafe_b64encode(code_challenge_digest).decode("utf-8").rstrip("=")
 
 
-async def _get_config(
-    session: aiohttp.ClientSession, base_url: str, tenant_id: str, policy: str
-) -> ConfigDict:
+async def _get_config(session: aiohttp.ClientSession, base_url: str, tenant_id: str, policy: str) -> ConfigDict:
     """Get the configuration from the server."""
-    config_url = (
-        f"{base_url}/{tenant_id}/{policy}/v2.0/.well-known/openid-configuration"
-    )
+    config_url = f"{base_url}/{tenant_id}/{policy}/v2.0/.well-known/openid-configuration"
     _LOGGER.debug("Fetching OAuth configuration from: %s", config_url)
     config_text, _, status = await _fetch(session, config_url)
     if status != 200 or not config_text:
@@ -140,7 +131,7 @@ async def _get_auth(
     policy: str,
     self_asserted_endpoint: str,
     policy_confirm_endpoint: str,
-) -> Optional[str]:
+) -> str | None:
     """Get the authorization code."""
     auth_params = {
         "client_id": client_id,
@@ -151,9 +142,7 @@ async def _get_auth(
         "code_challenge_method": "S256",
     }
     _LOGGER.debug("Requesting authorization code")
-    auth_content, final_url, status = await _fetch(
-        session, config["authorization_endpoint"], params=auth_params
-    )
+    auth_content, final_url, status = await _fetch(session, config["authorization_endpoint"], params=auth_params)
     if status != 200 or not auth_content:
         _LOGGER.error("Failed to get authorization. Status: %s", status)
         raise CannotConnect("Failed to get authorization")
@@ -178,9 +167,7 @@ async def _get_auth(
         self_asserted_endpoint,
     )
     _LOGGER.debug("Confirming sign-in")
-    return await _confirm_signin(
-        session, config["issuer"], settings, policy, policy_confirm_endpoint
-    )
+    return await _confirm_signin(session, config["issuer"], settings, policy, policy_confirm_endpoint)
 
 
 async def _get_access(
@@ -191,7 +178,7 @@ async def _get_access(
     client_id: str,
     redirect_uri: str,
     scope_access: str,
-) -> Optional[TokenDict]:
+) -> TokenDict | None:
     """Get the access token."""
     token_data = {
         "client_id": client_id,
@@ -202,9 +189,7 @@ async def _get_access(
         "scope": scope_access,
     }
     _LOGGER.debug("Requesting access token")
-    token_content, _, status = await _fetch(
-        session, config["token_endpoint"], method="POST", data=token_data
-    )
+    token_content, _, status = await _fetch(session, config["token_endpoint"], method="POST", data=token_data)
     if status != 200 or not token_content:
         _LOGGER.error("Failed to get access token. Status: %s", status)
         raise CannotConnect("Failed to get access token")
@@ -212,9 +197,7 @@ async def _get_access(
     return tokens
 
 
-async def _fetch(
-    session: aiohttp.ClientSession, url: str, **kwargs: Any
-) -> tuple[Optional[str], Optional[str], int]:
+async def _fetch(session: aiohttp.ClientSession, url: str, **kwargs: Any) -> tuple[str | None, str | None, int]:
     """Fetch data from a URL."""
     method = kwargs.pop("method", "GET")
     timeout = aiohttp.ClientTimeout(total=30)
@@ -224,12 +207,12 @@ async def _fetch(
             content = await response.text()
             _LOGGER.debug("Fetch completed. Status: %s", response.status)
             return content, str(response.url), response.status
-    except aiohttp.ClientError as e:
-        _LOGGER.error("Network error occurred: %s", str(e))
+    except aiohttp.ClientError:
+        _LOGGER.exception("Network error occurred")
         return None, None, 0
 
 
-def _extract_settings(auth_content: str) -> Optional[dict[str, Any]]:
+def _extract_settings(auth_content: str) -> dict[str, Any] | None:
     """Extract settings from the authorization content."""
     _LOGGER.debug("Extracting settings from authorization content")
     settings_start = auth_content.find("var SETTINGS = ")
@@ -243,11 +226,12 @@ def _extract_settings(auth_content: str) -> Optional[dict[str, Any]]:
     settings_json = auth_content[settings_start + 15 : settings_end].strip()
     try:
         settings: dict[str, Any] = json.loads(settings_json)
+    except json.JSONDecodeError:
+        _LOGGER.exception("Failed to parse settings JSON")
+        return None
+    else:
         _LOGGER.debug("Settings successfully extracted")
         return settings
-    except json.JSONDecodeError:
-        _LOGGER.error("Failed to parse settings JSON")
-        return None
 
 
 async def _post_credentials(
@@ -287,7 +271,7 @@ async def _confirm_signin(
     settings: dict[str, Any],
     policy: str,
     policy_confirm_endpoint: str,
-) -> Optional[str]:
+) -> str | None:
     """Confirm the sign-in process."""
     base_url = issuer.rsplit("/", 2)[0]
     _LOGGER.debug("Confirming sign-in at %s", base_url)

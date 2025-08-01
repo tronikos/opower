@@ -1,17 +1,19 @@
+# ruff: noqa: T201, ASYNC230, PLR0912, PLR0915
 """Demo usage of Opower library."""
 
 import argparse
 import asyncio
 import csv
+import logging
 from datetime import datetime, timedelta
 from getpass import getpass
-import logging
-from typing import Optional
 
 import aiohttp
 
 from opower import (
     AggregateType,
+    InvalidAuth,
+    MfaChallenge,
     Opower,
     ReadResolution,
     create_cookie_jar,
@@ -21,9 +23,7 @@ from opower import (
 
 
 async def _main() -> None:
-    supported_utilities = [
-        utility.__name__.lower() for utility in get_supported_utilities()
-    ]
+    supported_utilities = [utility.__name__.lower() for utility in get_supported_utilities()]
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--utility",
@@ -33,17 +33,19 @@ async def _main() -> None:
     )
     parser.add_argument(
         "--username",
-        help="Username for logging into the utility's website. "
-        "If not provided, you will be asked for it",
+        help="Username for logging into the utility's website. If not provided, you will be asked for it",
     )
     parser.add_argument(
         "--password",
-        help="Password for logging into the utility's website. "
-        "If not provided, you will be asked for it",
+        help="Password for logging into the utility's website. If not provided, you will be asked for it",
     )
     parser.add_argument(
-        "--mfa_secret",
-        help="MFA secret for logging into the utility's website.",
+        "--totp_secret",
+        help="TOTP secret for logging into the utility's website (for TOTP-based MFA).",
+    )
+    parser.add_argument(
+        "--headless_login_service_url",
+        help="URL of the Opower Utility Headless Login service (for utilities that require it).",
     )
     parser.add_argument(
         "--aggregate_type",
@@ -73,47 +75,67 @@ async def _main() -> None:
         "--csv",
         help="csv file to store data",
     )
-    parser.add_argument(
-        "-v", "--verbose", help="enable verbose logging", action="count", default=0
-    )
+    parser.add_argument("-v", "--verbose", help="enable verbose logging", action="count", default=0)
     parser.add_argument(
         "--realtime",
-        help="If true, fetches usage-only data from the realtime API. "
-        "Not all utilities support the realtime API.",
+        help="If true, fetches usage-only data from the realtime API. Not all utilities support the realtime API.",
         action="store_true",
     )
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.DEBUG - args.verbose + 1 if args.verbose > 0 else logging.INFO
-    )
+    logging.basicConfig(level=logging.DEBUG - args.verbose + 1 if args.verbose > 0 else logging.INFO)
 
     utility = args.utility or input(f"Utility, one of {supported_utilities}: ")
+    utility_class = select_utility(utility)
+    headless_login_service_url = args.headless_login_service_url
+    if utility_class.requires_headless_login_service() and not headless_login_service_url:
+        headless_login_service_url = input("URL for the Opower Utility Headless Login service, e.g. http://localhost:7937 : ")
     username = args.username or input("Username: ")
     password = args.password or getpass("Password: ")
-    mfa_secret = args.mfa_secret or (
-        input("2FA secret: ") if select_utility(utility).accepts_mfa() else None
-    )
+    totp_secret = args.totp_secret or (input("TOTP secret: ") if utility_class.accepts_totp_secret() else None)
 
     async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
-        opower = Opower(session, utility, username, password, mfa_secret)
-        await opower.async_login()
-        if not args.csv:
-            # Re-login to make sure code handles already logged in sessions.
+        opower = Opower(
+            session,
+            utility,
+            username,
+            password,
+            totp_secret,
+            headless_login_service_url,
+        )
+        try:
             await opower.async_login()
+        except MfaChallenge as e:
+            handler = e.handler
+            print(f"MFA Challenge: {e}")
+            try:
+                options = await handler.async_get_mfa_options()
+                print("Please select an MFA option:")
+                for i, (_, value) in enumerate(options.items()):
+                    print(f"  [{i + 1}] {value}")
+                choice_index = int(input("Enter the number for your choice: ")) - 1
+                choice_key = list(options.keys())[choice_index]
+                await handler.async_select_mfa_option(choice_key)
+                print(f"A security code has been sent via {options[choice_key]}.")
+                code = input("Enter the security code: ")
+                token = await handler.async_submit_mfa_code(code)
+                opower.access_token = token
+                print("MFA validation successful.")
+            except (InvalidAuth, ValueError, IndexError):
+                logging.exception("MFA failed")
+                return
+        except InvalidAuth:
+            logging.exception("Login failed")
+            return
+
+        if not args.csv:
             for forecast in await opower.async_get_forecast():
                 print("\nCurrent bill forecast:", forecast)
         for account in await opower.async_get_accounts():
             aggregate_type = args.aggregate_type
-            if (
-                aggregate_type == AggregateType.HOUR
-                and account.read_resolution == ReadResolution.DAY
-            ):
+            if aggregate_type == AggregateType.HOUR and account.read_resolution == ReadResolution.DAY:
                 aggregate_type = AggregateType.DAY
-            elif (
-                aggregate_type != AggregateType.BILL
-                and account.read_resolution == ReadResolution.BILLING
-            ):
+            elif aggregate_type != AggregateType.BILL and account.read_resolution == ReadResolution.BILLING:
                 aggregate_type = AggregateType.BILL
             if not args.csv:
                 print(
@@ -126,7 +148,7 @@ async def _main() -> None:
                     "end_date=",
                     args.end_date,
                 )
-            prev_end: Optional[datetime] = None
+            prev_end: datetime | None = None
             # Realtime data does not include cost data, so effectively --realtime implies --usage_only.
             if args.usage_only or args.realtime:
                 if args.realtime:
@@ -151,19 +173,10 @@ async def _main() -> None:
                                 ]
                             )
                 else:
-                    print(
-                        "start_time\tend_time\tconsumption"
-                        "\tstart_minus_prev_end\tend_minus_prev_end"
-                    )
+                    print("start_time\tend_time\tconsumption\tstart_minus_prev_end\tend_minus_prev_end")
                     for usage_read in usage_data:
-                        start_minus_prev_end = (
-                            None
-                            if prev_end is None
-                            else usage_read.start_time - prev_end
-                        )
-                        end_minus_prev_end = (
-                            None if prev_end is None else usage_read.end_time - prev_end
-                        )
+                        start_minus_prev_end = None if prev_end is None else usage_read.start_time - prev_end
+                        end_minus_prev_end = None if prev_end is None else usage_read.end_time - prev_end
                         prev_end = usage_read.end_time
                         print(
                             f"{usage_read.start_time}"
@@ -183,9 +196,7 @@ async def _main() -> None:
                 if args.csv:
                     with open(args.csv, "w", newline="") as csv_file:
                         writer = csv.writer(csv_file)
-                        writer.writerow(
-                            ["start_time", "end_time", "consumption", "provided_cost"]
-                        )
+                        writer.writerow(["start_time", "end_time", "consumption", "provided_cost"])
                         for cost_read in cost_data:
                             writer.writerow(
                                 [
@@ -196,19 +207,10 @@ async def _main() -> None:
                                 ]
                             )
                 else:
-                    print(
-                        "start_time\tend_time\tconsumption\tprovided_cost"
-                        "\tstart_minus_prev_end\tend_minus_prev_end"
-                    )
+                    print("start_time\tend_time\tconsumption\tprovided_cost\tstart_minus_prev_end\tend_minus_prev_end")
                     for cost_read in cost_data:
-                        start_minus_prev_end = (
-                            None
-                            if prev_end is None
-                            else cost_read.start_time - prev_end
-                        )
-                        end_minus_prev_end = (
-                            None if prev_end is None else cost_read.end_time - prev_end
-                        )
+                        start_minus_prev_end = None if prev_end is None else cost_read.start_time - prev_end
+                        end_minus_prev_end = None if prev_end is None else cost_read.end_time - prev_end
                         prev_end = cost_read.end_time
                         print(
                             f"{cost_read.start_time}"

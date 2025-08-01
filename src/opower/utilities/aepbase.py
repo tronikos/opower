@@ -1,9 +1,8 @@
 """Base Abstract class for American Electric Power."""
 
-from abc import ABC
-from html.parser import HTMLParser
 import re
-from typing import Optional
+from abc import ABC, abstractmethod
+from html.parser import HTMLParser
 
 import aiohttp
 
@@ -22,7 +21,7 @@ class AEPLoginParser(HTMLParser):
         self.password = password
         self.password_field_found = False
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Try to extract the login input fields."""
         if tag == "input":
             name = ""
@@ -43,7 +42,7 @@ class AEPLoginParser(HTMLParser):
 class AEPBase(ABC):
     """Base Abstract class for American Electric Power."""
 
-    _subdomain: Optional[str] = None
+    _subdomain: str | None = None
 
     @classmethod
     def subdomain(cls) -> str:
@@ -57,9 +56,9 @@ class AEPBase(ABC):
         return "America/New_York"
 
     @staticmethod
+    @abstractmethod
     def hostname() -> str:
         """Return the hostname for login."""
-        raise NotImplementedError
 
     @classmethod
     async def async_login(
@@ -67,7 +66,6 @@ class AEPBase(ABC):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
     ) -> str:
         """Login in AEP using user/pass and return the Opower access token."""
         # Clear cookies before logging in again, in case old ones are still around
@@ -98,9 +96,7 @@ class AEPBase(ABC):
         ) as resp:
             html = await resp.text()
 
-        match = re.search(
-            r'<[^>]*?class="error"[^>]*?>.*?<p>(.*?)</p>', html, re.DOTALL
-        )
+        match = re.search(r'<[^>]*?class="error"[^>]*?>.*?<p>(.*?)</p>', html, re.DOTALL)
         if match:
             raise InvalidAuth(match.group(1).strip())
 

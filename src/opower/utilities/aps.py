@@ -2,7 +2,7 @@
 
 import logging
 import re
-from typing import Any, Optional
+from typing import Any
 
 import aiohttp
 
@@ -37,7 +37,6 @@ class Aps(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
     ) -> None:
         """Login to the utility website."""
         _LOGGER.debug("Starting login process for Arizona Public Service (APS)")
@@ -76,9 +75,7 @@ class Aps(UtilityBase):
             raise_for_status=True,
         ) as resp:
             user_details = await resp.json(content_type="application /json")
-            account_details = user_details["Details"]["AccountDetails"][
-                "getAccountDetailsResponse"
-            ]["getAccountDetailsRes"]
+            account_details = user_details["Details"]["AccountDetails"]["getAccountDetailsResponse"]["getAccountDetailsRes"]
             account_id = account_details["getPersonDetails"]["accountID"]
             service_address_id = find_first_service_address_id(account_details)
             if service_address_id is None:
@@ -108,30 +105,24 @@ def extract_rsa_key(js_content: str) -> str:
     if match:
         # Get and format the RSA key
         rsa_key = match.group(1)
-        formatted_key = re.sub(
+        return re.sub(
             r"(-----BEGIN PUBLIC KEY-----)(.*)(-----END PUBLIC KEY-----)",
             r"\1\n\2\n\3",
             rsa_key,
             flags=re.DOTALL,
         )
-        return formatted_key
-    else:
-        raise CannotConnect("The RSA public key was not found.")
+    raise CannotConnect("The RSA public key was not found.")
 
 
-def find_first_service_address_id(account_details: dict[str, Any]) -> Optional[str]:
+def find_first_service_address_id(account_details: dict[str, Any]) -> str | None:
     """Find the first service address ID from the account details."""
     try:
-        premise_details_list = account_details["getSASPListByAccountID"][
-            "premiseDetailsList"
-        ]
+        premise_details_list = account_details["getSASPListByAccountID"]["premiseDetailsList"]
         for premise in premise_details_list:
             sasp_details = premise.get("sASPDetails", [])
             for sasp in sasp_details:
                 if "sAID" in sasp:
                     return str(sasp["sAID"])
     except (KeyError, TypeError):
-        _LOGGER.warning(
-            "Could not find APS Service Address ID in the expected structure"
-        )
+        _LOGGER.warning("Could not find APS Service Address ID in the expected structure")
     return None

@@ -1,8 +1,7 @@
 """Evergy."""
 
-from html.parser import HTMLParser
 import logging
-from typing import Optional
+from html.parser import HTMLParser
 
 import aiohttp
 
@@ -19,9 +18,9 @@ class EvergyLoginParser(HTMLParser):
     def __init__(self) -> None:
         """Initialize."""
         super().__init__()
-        self.verification_token: Optional[str] = None
+        self.verification_token: str | None = None
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Try to extract the verification token from the login input."""
         if tag == "input" and ("name", "evrgaf") in attrs:
             _, token = next(filter(lambda attr: attr[0] == "value", attrs))
@@ -31,7 +30,7 @@ class EvergyLoginParser(HTMLParser):
 class Evergy(UtilityBase):
     """Evergy."""
 
-    _subdomain: Optional[str] = None
+    _subdomain: str | None = None
 
     @staticmethod
     def name() -> str:
@@ -54,7 +53,6 @@ class Evergy(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
     ) -> str:
         """Login to the utility website."""
         login_parser = EvergyLoginParser()
@@ -66,9 +64,7 @@ class Evergy(UtilityBase):
         ) as resp:
             login_parser.feed(await resp.text())
 
-            assert (
-                login_parser.verification_token
-            ), "Failed to parse login verification token"
+            assert login_parser.verification_token, "Failed to parse login verification token"
 
         login_payload = {
             "username": username,
@@ -91,7 +87,7 @@ class Evergy(UtilityBase):
             if resp.status == 200:
                 raise InvalidAuth("Username and password failed")
 
-        opower_access_token: Optional[str] = None
+        opower_access_token: str | None = None
 
         async with session.get(
             "https://www.evergy.com/api/sso/jwt",
@@ -115,7 +111,7 @@ class Evergy(UtilityBase):
             Evergy._subdomain = domain.split(".", 1)[0]
             _LOGGER.debug("detected Evergy subdomain: %s", Evergy._subdomain)
             if Evergy._subdomain not in {"kcpk", "kcpl"}:
-                _LOGGER.warn(
+                _LOGGER.warning(
                     "unexpected Evergy subdomain %s, continuing",
                     Evergy._subdomain,
                 )

@@ -1,8 +1,7 @@
 """Puget Sound Energy (PSE)."""
 
-from html.parser import HTMLParser
 import re
-from typing import Optional
+from html.parser import HTMLParser
 
 import aiohttp
 
@@ -17,9 +16,9 @@ class PSELoginParser(HTMLParser):
     def __init__(self) -> None:
         """Initialize."""
         super().__init__()
-        self.verification_token: Optional[str] = None
+        self.verification_token: str | None = None
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Try to extract the verification token from the login input."""
         if tag == "input" and ("name", "__RequestVerificationToken") in attrs:
             _, token = next(filter(lambda attr: attr[0] == "value", attrs))
@@ -34,15 +33,12 @@ class PSEUsageParser(HTMLParser):
     def __init__(self) -> None:
         """Initialize."""
         super().__init__()
-        self.opower_access_token: Optional[str] = None
+        self.opower_access_token: str | None = None
         self._in_inline_script = False
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Recognizes inline scripts."""
-        if (
-            tag == "script"
-            and next(filter(lambda attr: attr[0] == "src", attrs), None) is None
-        ):
+        if tag == "script" and next(filter(lambda attr: attr[0] == "src", attrs), None) is None:
             self._in_inline_script = True
 
     def handle_data(self, data: str) -> None:
@@ -81,7 +77,6 @@ class PSE(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
     ) -> str:
         """Login to the utility website."""
         # Double-logins are somewhat broken if cookies stay around.
@@ -96,9 +91,7 @@ class PSE(UtilityBase):
         ) as resp:
             login_parser.feed(await resp.text())
 
-            assert (
-                login_parser.verification_token
-            ), "Failed to parse __RequestVerificationToken"
+            assert login_parser.verification_token, "Failed to parse __RequestVerificationToken"
 
         await session.post(
             "https://www.pse.com/api/pseauthentication/AsyncSignIn",
@@ -133,8 +126,6 @@ class PSE(UtilityBase):
         ) as resp:
             usage_parser.feed(await resp.text())
 
-            assert (
-                usage_parser.opower_access_token
-            ), "Failed to parse OPower bearer token"
+            assert usage_parser.opower_access_token, "Failed to parse OPower bearer token"
 
         return usage_parser.opower_access_token

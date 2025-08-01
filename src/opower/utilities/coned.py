@@ -1,7 +1,5 @@
 """Consolidated Edison (ConEd)."""
 
-from typing import Optional
-
 import aiohttp
 from pyotp import TOTP
 
@@ -31,8 +29,8 @@ class ConEd(UtilityBase):
         return "America/New_York"
 
     @staticmethod
-    def accepts_mfa() -> bool:
-        """Check if Utility implementations supports MFA."""
+    def accepts_totp_secret() -> bool:
+        """Check if Utility accepts TOTP secret."""
         return True
 
     @staticmethod
@@ -51,15 +49,10 @@ class ConEd(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
     ) -> str:
         """Login to the utility website."""
         hostname = cls.hostname()
-        login_base = (
-            "https://www."
-            + hostname
-            + "/sitecore/api/ssc/ConEdWeb-Foundation-Login-Areas-LoginAPI/User/0"
-        )
+        login_base = "https://www." + hostname + "/sitecore/api/ssc/ConEdWeb-Foundation-Login-Areas-LoginAPI/User/0"
         login_headers = {
             "User-Agent": USER_AGENT,
             "Referer": "https://www." + hostname + "/",
@@ -67,10 +60,7 @@ class ConEd(UtilityBase):
 
         # Double-logins are somewhat broken if cookies stay around.
         # Let's clear everything except device tokens (which allow skipping 2FA)
-        session.cookie_jar.clear(
-            lambda cookie: cookie["domain"] == "www." + hostname
-            and cookie.key != "CE_DEVICE_ID"
-        )
+        session.cookie_jar.clear(lambda cookie: cookie["domain"] == "www." + hostname and cookie.key != "CE_DEVICE_ID")
 
         async with session.post(
             login_base + "/Login",
@@ -91,34 +81,29 @@ class ConEd(UtilityBase):
             redirectUrl = None
             if "authRedirectUrl" in result:
                 redirectUrl = result["authRedirectUrl"]
+            elif result["newDevice"]:
+                if not result["noMfa"]:
+                    if not cls._totp_secret:
+                        raise InvalidAuth("TOTP secret is required for MFA accounts")
+
+                    mfaCode = TOTP(cls._totp_secret).now()
+
+                    async with session.post(
+                        login_base + "/VerifyFactor",
+                        headers=login_headers,
+                        json={
+                            "MFACode": mfaCode,
+                            "ReturnUrl": RETURN_URL,
+                            "OpenIdRelayState": "",
+                        },
+                        raise_for_status=True,
+                    ) as resp:  # noqa: PLW2901
+                        mfaResult = await resp.json()
+                        if not mfaResult["code"]:
+                            raise InvalidAuth("2FA code was invalid. Is the secret wrong?")
+                        redirectUrl = mfaResult["authRedirectUrl"]
             else:
-                if result["newDevice"]:
-                    if not result["noMfa"]:
-                        if not optional_mfa_secret:
-                            raise InvalidAuth(
-                                "TOTP secret is required for MFA accounts"
-                            )
-
-                        mfaCode = TOTP(optional_mfa_secret.strip()).now()
-
-                        async with session.post(
-                            login_base + "/VerifyFactor",
-                            headers=login_headers,
-                            json={
-                                "MFACode": mfaCode,
-                                "ReturnUrl": RETURN_URL,
-                                "OpenIdRelayState": "",
-                            },
-                            raise_for_status=True,
-                        ) as resp:
-                            mfaResult = await resp.json()
-                            if not mfaResult["code"]:
-                                raise InvalidAuth(
-                                    "2FA code was invalid. Is the secret wrong?"
-                                )
-                            redirectUrl = mfaResult["authRedirectUrl"]
-                else:
-                    raise InvalidAuth("Login Failed")
+                raise InvalidAuth("Login Failed")
 
             assert redirectUrl
             async with session.get(
@@ -128,7 +113,7 @@ class ConEd(UtilityBase):
                 },
                 allow_redirects=True,
                 raise_for_status=True,
-            ) as resp:
+            ) as resp:  # noqa: PLW2901
                 pass
 
         async with session.get(

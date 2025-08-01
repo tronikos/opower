@@ -1,7 +1,6 @@
 """Enmax."""
 
 import logging
-from typing import Optional
 
 import aiohttp
 
@@ -35,7 +34,6 @@ class Enmax(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
     ) -> str:
         """Login to the utility website."""
         _LOGGER.debug("Starting enmax login")
@@ -58,8 +56,7 @@ class Enmax(UtilityBase):
                 # The following text will likely be displayed during maintenance periods
                 if ("an error occurred retrieving or updating data") in error_message:
                     raise CannotConnect(error_message)
-                else:
-                    raise InvalidAuth(error_message)
+                raise InvalidAuth(error_message)
             token = result["token"]
 
         async with session.post(
@@ -84,8 +81,7 @@ class Enmax(UtilityBase):
             active_accounts = [
                 account
                 for account in result["associated_account"]["accounts"]
-                if account["account"]["status"] == "active"
-                or account["account"]["is_plan_active"]
+                if account["account"]["status"] == "active" or account["account"]["is_plan_active"]
             ]
             if len(active_accounts) == 0:
                 raise InvalidAuth("No active accounts found")

@@ -20,9 +20,9 @@
 # Test with:
 # `python src/demo.py --utility smud --username mysmudloginemail@example.com --password "mypassword" -v`
 
-from html.parser import HTMLParser
 import logging
-from typing import Optional
+from html.parser import HTMLParser
+from typing import ClassVar
 from urllib.parse import parse_qs
 
 from aiohttp import ClientResponse, ClientSession
@@ -43,11 +43,11 @@ class SMUDLoginParser(HTMLParser):
     def __init__(self) -> None:
         """Initialize."""
         super().__init__()
-        self.verification_token: Optional[str] = None
-        self.ocis_req_sp: Optional[str] = None
-        self.relay_state: Optional[str] = None
+        self.verification_token: str | None = None
+        self.ocis_req_sp: str | None = None
+        self.relay_state: str | None = None
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Try to extract the verification token from the login input."""
         if tag == "input" and ("name", "__RequestVerificationToken") in attrs:
             _, token = next(filter(lambda attr: attr[0] == "value", attrs))
@@ -90,7 +90,7 @@ class SMUDOktaResponseSamlResponseValueParser(HTMLParser):
     """HTML parser to extract SAMLResponse token from OKTA response for Opower SSO."""
 
     # <input name="SAMLResponse" type="hidden" value="..."/>
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Try to extract the SAMLResponse value."""
         if tag == "input":
             for name, value in attrs:
@@ -121,14 +121,10 @@ class SMUD(UtilityBase):
         session: ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],  # Not used by SMUD.
     ) -> None:
         """Login to the utility website and authorize opower."""
         # If we already have a cookie, return early if it is valid.
-        if (
-            len(session.cookie_jar.filter_cookies(URL("https://smud.opower.com/ei")))
-            > 0
-        ):
+        if len(session.cookie_jar.filter_cookies(URL("https://smud.opower.com/ei"))) > 0:
             try:
                 async with session.get(
                     "https://smud.opower.com/ei/edge/apis/multi-account-v1/cws/smud/customers",
@@ -181,9 +177,7 @@ class SMUD(UtilityBase):
         if "could not be authenticated" in login_response_body:
             raise opower.InvalidAuth
 
-        smud_energyusage_page_url = (
-            "https://myaccount.smud.org/manage/opowerresidential/energyusage"
-        )
+        smud_energyusage_page_url = "https://myaccount.smud.org/manage/opowerresidential/energyusage"
 
         _LOGGER.debug("Opening SMUD energy usage page: %s", smud_energyusage_page_url)
 
@@ -196,9 +190,7 @@ class SMUD(UtilityBase):
 
         await SMUD.log_response(energyusage_response, session)
 
-        okta_login_2_url = SMUD.get_okta_url_from_response_redirect(
-            energyusage_response
-        )
+        okta_login_2_url = SMUD.get_okta_url_from_response_redirect(energyusage_response)
 
         _LOGGER.debug("Fetching second OKTA login page: %s", okta_login_2_url)
 
@@ -254,7 +246,9 @@ class SMUD(UtilityBase):
         login_parser.feed(await opower_sso_response.text())
         ocis_req_sp = login_parser.ocis_req_sp
 
-        identity_oraclecloud_login_url = "https://idcs-8d184356671642c58ea38b42e6420ed2.identity.oraclecloud.com/sso/v1/user/login"
+        identity_oraclecloud_login_url = (
+            "https://idcs-8d184356671642c58ea38b42e6420ed2.identity.oraclecloud.com/sso/v1/user/login"
+        )
 
         _LOGGER.debug(
             "POSTing opower sso login page with OCIS_REQ_SP: %s",
@@ -283,9 +277,7 @@ class SMUD(UtilityBase):
         return
 
     @classmethod
-    def get_okta_url_from_response_redirect(
-        cls, energyusage_response: ClientResponse
-    ) -> str:
+    def get_okta_url_from_response_redirect(cls, energyusage_response: ClientResponse) -> str:
         """Get the OKTA URL to open next from the last redirect of the previous response."""
         # https://smud.okta.com/login/sessionCookieRedirect
         #   ?token=20111...6QJMn
@@ -295,10 +287,10 @@ class SMUD(UtilityBase):
 
         query_parts = parse_qs(energyUsageResponseRedirectedFinalUrl.query_string)
 
-        return query_parts["redirectUrl"][0]
+        return str(query_parts["redirectUrl"][0])
 
     # Store cookies so we can log what is new after each request.
-    cookies: dict[str, list[str]] = {}
+    cookies: ClassVar[dict[str, list[str]]] = {}
 
     @staticmethod
     async def log_response(response: ClientResponse, session: ClientSession) -> None:
@@ -312,18 +304,12 @@ class SMUD(UtilityBase):
                 _LOGGER.debug("-> %s", redirect.__str__())
 
         if len(session.cookie_jar.filter_cookies(response.url)) > 0:
-            response_cookie_names = list(
-                session.cookie_jar.filter_cookies(response.url).keys()
-            )
+            response_cookie_names = list(session.cookie_jar.filter_cookies(response.url).keys())
             last_cookie_names = SMUD.cookies.get(host, [])
-            response_new_cookie_names = set(response_cookie_names) - set(
-                last_cookie_names
-            )
+            response_new_cookie_names = set(response_cookie_names) - set(last_cookie_names)
 
             if len(response_new_cookie_names) > 0:
-                _LOGGER.debug(
-                    "Set new cookies: `%s`", "`, `".join(response_new_cookie_names)
-                )
+                _LOGGER.debug("Set new cookies: `%s`", "`, `".join(response_new_cookie_names))
 
                 SMUD.cookies[host] = last_cookie_names + response_cookie_names
 

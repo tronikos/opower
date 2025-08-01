@@ -3,7 +3,7 @@
 import json
 import logging
 import re
-from typing import Any, Optional
+from typing import Any
 
 import aiohttp
 
@@ -16,7 +16,7 @@ _LOGGER = logging.getLogger(__file__)
 class Exelon:
     """Base class for Exelon subsidiaries."""
 
-    _subdomain: Optional[str] = None
+    _subdomain: str | None = None
 
     # Can find the opower.com subdomain using the GetConfiguration endpoint
     # e.g. https://secure.bge.com/api/Services/MyAccountService.svc/GetConfiguration
@@ -62,11 +62,7 @@ class Exelon:
         # "euApiUrl": "/.euapi",
         eu_api_url = "/.euapi"
         async with session.get(
-            "https://"
-            + cls.login_domain()
-            + eu_api_url
-            + eu_api_route_prefix
-            + "/auth/accounts",
+            "https://" + cls.login_domain() + eu_api_url + eu_api_route_prefix + "/auth/accounts",
             headers={
                 "User-Agent": USER_AGENT,
                 "Authorization": "Bearer " + bearer_token,
@@ -83,9 +79,7 @@ class Exelon:
         # NOTE: this logic currently assumes 1 active address per account, if multiple accounts found
         #      we default to taking the first in the list. Future enhancement is to support
         #      multiple accounts (which could result in different subdomain for each)
-        active_accounts = [
-            account for account in result["data"] if account["status"] == "Active"
-        ]
+        active_accounts = [account for account in result["data"] if account["status"] == "Active"]
 
         if len(active_accounts) == 0:
             raise InvalidAuth("No active accounts found")
@@ -98,7 +92,6 @@ class Exelon:
         session: aiohttp.ClientSession,
         username: str,
         password: str,
-        optional_mfa_secret: Optional[str],
     ) -> str:
         """Login to the utility website and authorize opower."""
         async with session.get(
@@ -122,10 +115,7 @@ class Exelon:
             assert login_post_domain
 
             async with session.post(
-                "https://"
-                + login_post_domain
-                + settings["hosts"]["tenant"]
-                + "/SelfAsserted",
+                "https://" + login_post_domain + settings["hosts"]["tenant"] + "/SelfAsserted",
                 params={
                     "tx": settings["transId"],
                     "p": settings["hosts"]["policy"],
@@ -147,12 +137,7 @@ class Exelon:
                 raise InvalidAuth(result_json["message"])
 
             async with session.get(
-                "https://"
-                + login_post_domain
-                + settings["hosts"]["tenant"]
-                + "/api/"
-                + settings["api"]
-                + "/confirmed",
+                "https://" + login_post_domain + settings["hosts"]["tenant"] + "/api/" + settings["api"] + "/confirmed",
                 params={
                     "rememberMe": settings["config"]["enableRememberMe"],
                     "csrf_token": settings["csrf"],
@@ -171,14 +156,12 @@ class Exelon:
             ) as resp:
                 result = await resp.text(encoding="utf-8")
 
-            if resp.request_info.url.path.endswith(
-                "/accounts/login/select-account"
-            ) or resp.request_info.url.path.endswith("Pages/ChangeAccount.aspx"):
+            if resp.request_info.url.path.endswith("/accounts/login/select-account") or resp.request_info.url.path.endswith(
+                "Pages/ChangeAccount.aspx"
+            ):
                 # we probably need to select an account as we didn't automatically go to the dashboard
                 async with session.get(
-                    "https://"
-                    + cls.login_domain()
-                    + "/api/Services/MyAccountService.svc/GetSession",
+                    "https://" + cls.login_domain() + "/api/Services/MyAccountService.svc/GetSession",
                     headers={"User-Agent": USER_AGENT},
                     raise_for_status=True,
                 ) as resp:
@@ -195,9 +178,7 @@ class Exelon:
                     account_number = account["accountNumber"]
 
                     async with session.post(
-                        "https://"
-                        + cls.login_domain()
-                        + "/api/Services/AccountList.svc/ViewAccount",
+                        "https://" + cls.login_domain() + "/api/Services/AccountList.svc/ViewAccount",
                         json={
                             "accountNumber": account_number,
                         },
@@ -207,9 +188,7 @@ class Exelon:
                         result = await resp.text(encoding="utf-8")
 
         async with session.post(
-            "https://"
-            + cls.login_domain()
-            + "/api/Services/OpowerService.svc/GetOpowerToken",
+            "https://" + cls.login_domain() + "/api/Services/OpowerService.svc/GetOpowerToken",
             json={},
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
@@ -223,9 +202,7 @@ class Exelon:
                 account = await cls.async_account(session, result_json["access_token"])
 
             isResidential = account["isResidential"]
-            state = account["PremiseInfo"][0]["mainAddress"]["townDetail"][
-                "stateOrProvince"
-            ]
+            state = account["PremiseInfo"][0]["mainAddress"]["townDetail"]["stateOrProvince"]
             _LOGGER.debug("found exelon account isResidential: %s", isResidential)
             _LOGGER.debug("found exelon account state: %s", state)
 
