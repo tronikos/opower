@@ -43,6 +43,7 @@ This library is used by the [Opower integration in Home Assistant](https://www.h
 - Puget Sound Energy (PSE)
 - Sacramento Municipal Utility District (SMUD)
 - Seattle City Light (SCL)
+- Southern Maryland Electric Cooperative (SMECO)
 
 **Note:** Utilities marked with an asterisk require the **[tronikos/opower-login-service](https://github.com/tronikos/opower-login-service)**. This service handles complex login flows (e.g. heavy JavaScript) that cannot be managed by this library directly. It can be run as a Home Assistant Add-on or a Docker container.
 
