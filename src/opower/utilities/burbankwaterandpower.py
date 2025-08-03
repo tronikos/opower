@@ -1,5 +1,7 @@
 """Burbank Water and Power (BWP)."""
 
+from typing import Any
+
 import aiohttp
 
 from ..const import USER_AGENT
@@ -29,6 +31,7 @@ class BurbankWaterAndPower(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
+        login_data: dict[str, Any],
     ) -> None:
         """Login to the utility website."""
         async with session.post(

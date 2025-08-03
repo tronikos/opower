@@ -37,6 +37,7 @@ class Aps(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
+        login_data: dict[str, Any],
     ) -> None:
         """Login to the utility website."""
         _LOGGER.debug("Starting login process for Arizona Public Service (APS)")

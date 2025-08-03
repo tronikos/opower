@@ -16,8 +16,6 @@ if TYPE_CHECKING:
 @pytest.mark.asyncio
 async def test_invalid_auth(utility: type["UtilityBase"]) -> None:
     """Test invalid username/password raises InvalidAuth."""
-    if utility.requires_headless_login_service():
-        pytest.skip(f"Skipping test for {utility.name()} because it requires a headless login service")
     if utility.name() in ("Evergy"):
         pytest.skip(f"Skipping test for {utility.name()}")
     async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:

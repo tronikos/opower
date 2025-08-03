@@ -1,5 +1,7 @@
 """Consolidated Edison (ConEd)."""
 
+from typing import Any
+
 import aiohttp
 from pyotp import TOTP
 
@@ -49,6 +51,7 @@ class ConEd(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
+        login_data: dict[str, Any],
     ) -> str:
         """Login to the utility website."""
         hostname = cls.hostname()

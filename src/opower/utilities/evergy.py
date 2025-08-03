@@ -2,6 +2,7 @@
 
 import logging
 from html.parser import HTMLParser
+from typing import Any
 
 import aiohttp
 
@@ -53,6 +54,7 @@ class Evergy(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
+        login_data: dict[str, Any],
     ) -> str:
         """Login to the utility website."""
         login_parser = EvergyLoginParser()

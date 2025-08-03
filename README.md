@@ -38,14 +38,12 @@ This library is used by the [Opower integration in Home Assistant](https://www.h
   - National Grid NY Long Island
   - National Grid NY Metro
   - National Grid NY Upstate
-- Pacific Gas & Electric (PG&E) (\*)
+- Pacific Gas & Electric (PG&E)
 - Portland General Electric (PGE)
 - Puget Sound Energy (PSE)
 - Sacramento Municipal Utility District (SMUD)
 - Seattle City Light (SCL)
 - Southern Maryland Electric Cooperative (SMECO)
-
-**Note:** Utilities marked with an asterisk require the **[tronikos/opower-login-service](https://github.com/tronikos/opower-login-service)**. This service handles complex login flows (e.g. heavy JavaScript) that cannot be managed by this library directly. It can be run as a Home Assistant Add-on or a Docker container.
 
 ## Contributing
 
@@ -59,7 +57,6 @@ To add support for a new Opower-based utility, follow these steps:
 2. **Create a utility file:** Add a new file in `src/opower/utilities` that inherits from `UtilityBase`. Name the file after the utility's website (e.g., `newutility.py` for `newutility.com`).
 3. **Respect scraping limitations:** This library is used by Home Assistant and must adhere to its [architecture rules](https://github.com/home-assistant/architecture/blob/master/adr/0004-webscraping.md). A headless browser cannot be a dependency, and HTML parsing is only allowed for the authentication phase.
     > An exception is made for the authentication phase. An integration is allowed to extract fields from forms. To make it more robust, data should not be gathered by scraping individual fields but instead scrape all fields at once.
-4. **Login with a headless browser:** If the utility's login requires a headless browser, you will need to add support to the **[tronikos/opower-login-service](https://github.com/tronikos/opower-login-service)**. See the implementation for Pacific Gas & Electric (PG&E) as an example.
 
 ## Development environment
 

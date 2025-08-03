@@ -3,6 +3,7 @@
 import re
 from abc import ABC, abstractmethod
 from html.parser import HTMLParser
+from typing import Any
 
 import aiohttp
 
@@ -66,6 +67,7 @@ class AEPBase(ABC):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
+        login_data: dict[str, Any],
     ) -> str:
         """Login in AEP using user/pass and return the Opower access token."""
         # Clear cookies before logging in again, in case old ones are still around

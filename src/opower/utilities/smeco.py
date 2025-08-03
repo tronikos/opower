@@ -1,5 +1,7 @@
 """Southern Maryland Electric Cooperative (SMECO)."""
 
+from typing import Any
+
 import aiohttp
 
 from ..const import USER_AGENT
@@ -45,6 +47,7 @@ class SMECO(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
+        login_data: dict[str, Any],
     ) -> str | None:
         """Authenticate against the SMECO DSS portal and return a session token.
 

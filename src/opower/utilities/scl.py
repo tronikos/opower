@@ -2,6 +2,7 @@
 
 import json
 import re
+from typing import Any
 
 import aiohttp
 
@@ -60,6 +61,7 @@ class SCL(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
+        login_data: dict[str, Any],
     ) -> str:
         """Login to the utility website."""
         # GET https://myutilities.seattle.gov/rest/auth/ssologin

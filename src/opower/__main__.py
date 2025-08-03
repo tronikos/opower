@@ -4,6 +4,7 @@
 import argparse
 import asyncio
 import csv
+import json
 import logging
 from datetime import datetime, timedelta
 from getpass import getpass
@@ -44,8 +45,8 @@ async def _main() -> None:
         help="TOTP secret for logging into the utility's website (for TOTP-based MFA).",
     )
     parser.add_argument(
-        "--headless_login_service_url",
-        help="URL of the Opower Utility Headless Login service (for utilities that require it).",
+        "--login_data_file",
+        help="Where to store login data from MFA. If not provided, login data will not be saved.",
     )
     parser.add_argument(
         "--aggregate_type",
@@ -87,12 +88,16 @@ async def _main() -> None:
 
     utility = args.utility or input(f"Utility, one of {supported_utilities}: ")
     utility_class = select_utility(utility)
-    headless_login_service_url = args.headless_login_service_url
-    if utility_class.requires_headless_login_service() and not headless_login_service_url:
-        headless_login_service_url = input("URL for the Opower Utility Headless Login service, e.g. http://localhost:7937 : ")
     username = args.username or input("Username: ")
     password = args.password or getpass("Password: ")
     totp_secret = args.totp_secret or (input("TOTP secret: ") if utility_class.accepts_totp_secret() else None)
+    login_data = None
+    if args.login_data_file:
+        try:
+            with open(args.login_data_file) as file:
+                login_data = json.load(file)
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
 
     async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
         opower = Opower(
@@ -101,29 +106,34 @@ async def _main() -> None:
             username,
             password,
             totp_secret,
-            headless_login_service_url,
+            login_data,
         )
         try:
             await opower.async_login()
         except MfaChallenge as e:
             handler = e.handler
             print(f"MFA Challenge: {e}")
+            options = await handler.async_get_mfa_options()
+            print("Please select an MFA option:")
+            for i, (_, value) in enumerate(options.items()):
+                print(f"  [{i + 1}] {value}")
+            choice_index = int(input("Enter the number for your choice: ")) - 1
+            choice_key = list(options.keys())[choice_index]
+            await handler.async_select_mfa_option(choice_key)
+            print(f"A security code has been sent via {options[choice_key]}.")
+            code = input("Enter the security code: ")
             try:
-                options = await handler.async_get_mfa_options()
-                print("Please select an MFA option:")
-                for i, (_, value) in enumerate(options.items()):
-                    print(f"  [{i + 1}] {value}")
-                choice_index = int(input("Enter the number for your choice: ")) - 1
-                choice_key = list(options.keys())[choice_index]
-                await handler.async_select_mfa_option(choice_key)
-                print(f"A security code has been sent via {options[choice_key]}.")
-                code = input("Enter the security code: ")
-                token = await handler.async_submit_mfa_code(code)
-                opower.access_token = token
-                print("MFA validation successful.")
-            except (InvalidAuth, ValueError, IndexError):
+                login_data = await handler.async_submit_mfa_code(code)
+            except InvalidAuth:
                 logging.exception("MFA failed")
                 return
+            else:
+                print("MFA validation successful.")
+                if args.login_data_file:
+                    with open(args.login_data_file, "w") as file:
+                        json.dump(login_data, file, indent=4)
+                opower.login_data = login_data
+                await opower.async_login()
         except InvalidAuth:
             logging.exception("Login failed")
             return

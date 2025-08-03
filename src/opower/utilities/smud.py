@@ -22,7 +22,7 @@
 
 import logging
 from html.parser import HTMLParser
-from typing import ClassVar
+from typing import Any, ClassVar
 from urllib.parse import parse_qs
 
 from aiohttp import ClientResponse, ClientSession
@@ -121,6 +121,7 @@ class SMUD(UtilityBase):
         session: ClientSession,
         username: str,
         password: str,
+        login_data: dict[str, Any],
     ) -> None:
         """Login to the utility website and authorize opower."""
         # If we already have a cookie, return early if it is valid.

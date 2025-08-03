@@ -6,8 +6,8 @@
       "name": "Launch Opower",
       "module": "src.opower",
       "args": [
-        "--headless_login_service_url",
-        "http://localhost:7937",
+        "--login_data",
+        "login_data.txt",
         "--verbose"
       ],
       "console": "integratedTerminal",

@@ -92,6 +92,7 @@ class Exelon:
         session: aiohttp.ClientSession,
         username: str,
         password: str,
+        login_data: dict[str, Any],
     ) -> str:
         """Login to the utility website and authorize opower."""
         async with session.get(

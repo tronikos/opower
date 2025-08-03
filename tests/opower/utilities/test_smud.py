@@ -53,7 +53,7 @@ class TestSMUD(unittest.IsolatedAsyncioTestCase):
         session = aiohttp.ClientSession()
         self.addCleanup(session.close)
 
-        await smud.async_login(session, username, password)
+        await smud.async_login(session, username, password, {})
 
         # Confirm opower cookies have been set.
         self.assertTrue(len(session.cookie_jar.filter_cookies(URL("https://smud.opower.com/ei"))) > 0)

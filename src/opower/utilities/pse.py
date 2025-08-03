@@ -2,6 +2,7 @@
 
 import re
 from html.parser import HTMLParser
+from typing import Any
 
 import aiohttp
 
@@ -77,6 +78,7 @@ class PSE(UtilityBase):
         session: aiohttp.ClientSession,
         username: str,
         password: str,
+        login_data: dict[str, Any],
     ) -> str:
         """Login to the utility website."""
         # Double-logins are somewhat broken if cookies stay around.
