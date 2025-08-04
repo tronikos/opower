@@ -27,8 +27,8 @@ async def _aura_apex_action_execute(session: aiohttp.ClientSession, body: dict[s
             "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
         },
         data=urlencode(payload),
+        raise_for_status=True,
     )
-    resp.raise_for_status()
     return await resp.json()
 
 
@@ -83,12 +83,13 @@ class PgeMfaHandler(MfaHandlerBase):
         }
         try:
             res = await _aura_apex_action_execute(self._session, body)
+        except aiohttp.ClientError as err:
+            raise CannotConnect(f"MFA option selection failed: {err}") from err
+        else:
             returnValue = res["actions"][0]["returnValue"]["returnValue"]
             if returnValue.get("retMessage", "").lower() != "success":
                 raise CannotConnect(f"Failed to select MFA option: {returnValue.get('retMessage', 'Unknown error')}")
             _LOGGER.debug("Successfully selected MFA option")
-        except aiohttp.ClientError as err:
-            raise CannotConnect(f"MFA option selection failed: {err}") from err
 
     async def async_submit_mfa_code(self, code: str) -> dict[str, Any]:
         """Submit the user-provided code."""
@@ -122,6 +123,9 @@ class PgeMfaHandler(MfaHandlerBase):
         }
         try:
             res = await _aura_apex_action_execute(self._session, body)
+        except aiohttp.ClientError as err:
+            raise CannotConnect(f"MFA code submission failed: {err}") from err
+        else:
             returnValue = res["actions"][0]["returnValue"]["returnValue"]
             if returnValue.get("returnResponse", "").lower() != "success":
                 raise InvalidAuth(f"Invalid MFA code: {returnValue.get('returnResponse', 'Unknown error')}")
@@ -135,8 +139,6 @@ class PgeMfaHandler(MfaHandlerBase):
                 "validationCookie": wrapperObj.get("encryptedKey"),
                 "expiryDateTime": wrapperObj.get("expiryDateTime"),
             }
-        except aiohttp.ClientError as err:
-            raise CannotConnect(f"MFA code submission failed: {err}") from err
 
 
 class PGE(UtilityBase):
@@ -205,15 +207,18 @@ class PGE(UtilityBase):
             raise InvalidAuth(f"Login failed: {retMessage}")
 
         _LOGGER.debug("Following redirect")
-        resp = await session.get(retMessage, headers={"User-Agent": USER_AGENT})
-        resp.raise_for_status()
+        resp = await session.get(
+            retMessage,
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+        )
 
         _LOGGER.debug("Accessing main account page to set cookies")
         resp = await session.get(
             "https://myaccount.pge.com/myaccount/s/",
             headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
         )
-        resp.raise_for_status()
 
         aura_token = None
         for cookie in session.cookie_jar:
@@ -248,8 +253,8 @@ class PGE(UtilityBase):
         resp = await session.get(
             "https://myaccount.pge.com/myaccount/apex/MyAcct_VF_BillInsights_OpowerDataBrowser",
             headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
         )
-        resp.raise_for_status()
         res_text = await resp.text()
 
         if not (m := re.search(r"let tokenFromApex = '([^']*)'", res_text)):
@@ -259,7 +264,8 @@ class PGE(UtilityBase):
         token = m.group(1)
         if not token:
             _LOGGER.error("Opower token is empty.")
-            raise InvalidAuth("Opower token is empty")
+            # Raise a retryable exception because this might be a temporary issue
+            raise CannotConnect("Opower token is empty")
 
         _LOGGER.debug("Successfully retrieved Opower token")
         return token

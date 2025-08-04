@@ -73,6 +73,8 @@ class UtilityBase:
 
         :raises InvalidAuth: if login information is incorrect
         :raises MfaChallenge: if interactive MFA is required
+        :raises CannotConnect: if there is a retryable connection exception
+        :raises aiohttp.ClientError: if there is a network error
         """
         raise NotImplementedError
 
