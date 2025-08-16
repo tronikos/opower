@@ -79,7 +79,7 @@ class COAUtilities(UtilityBase):
         # Getting SSO URL from opower
         url = "https://dss-coa.opower.com/webcenter/edge/apis/identity-management-v1/cws/v1/auth/coa/user-details"
         TargetResource = "https%3A%2F%2Fdss-coa.opower.com%2Fwebcenter%2Fedge%2Fapis%2Fidentity-management-v1%2Fcws%2Fv1%2Fauth%2Fcoa%2Fsso%2Flogin%2Fcallback"
-        
+
         async with session.get(
             url,
             headers={
@@ -88,7 +88,7 @@ class COAUtilities(UtilityBase):
             },
         ) as response:
             content = await response.json()
-            location = content['error']['location']
+            location = content["error"]["location"]
             action_url = location.replace("${TargetResource}", TargetResource)
 
         # Getting SAML Request from opower
