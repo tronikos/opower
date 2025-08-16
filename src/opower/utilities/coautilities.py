@@ -76,30 +76,37 @@ class COAUtilities(UtilityBase):
             if "PD-S-SESSION-ID-PCOAUT" not in session.cookie_jar.filter_cookies(URL("https://coautilities.com")):
                 raise InvalidAuth("Username/Password are invalid")
 
-        # Getting SAML Request from opower
-        url = (
-            "https://sso.opower.com/sp/startSSO.ping?"
-            "PartnerIdpId=https://coautilities.com/isam/sps/OPowerIDP_DSS/saml20&"
-            "TargetResource=https%3A%2F%2Fdss-coa.opower.com%2Fwebcenter%2Fedge%2Fapis%2Fidentity-management-v1%2Fcws"
-            "%2Fv1%2Fauth%2Fcoa%2Fsaml%2Flogin%2Fcallback%3FsuccessUrl%3Dhttps%253A%252F%252Fdss-coa.opower.com%252Fdss"
-            "%252Flogin-success%253Ftoken%253D%2525s%2526nextPathname%253DL2Rzcy8%253D%26failureUrl%3Dhttps%253A%252F"
-            "%252Fdss-coa.opower.com%252Fdss%252Flogin-error%253Freason%253D%2525s"
-        )
+        # Getting SSO URL from opower
+        url = "https://dss-coa.opower.com/webcenter/edge/apis/identity-management-v1/cws/v1/auth/coa/user-details"
+        TargetResource = "https%3A%2F%2Fdss-coa.opower.com%2Fwebcenter%2Fedge%2Fapis%2Fidentity-management-v1%2Fcws%2Fv1%2Fauth%2Fcoa%2Fsso%2Flogin%2Fcallback"
+        
+        async with session.get(
+            url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "opower-auth-mode": "sso",
+            },
+        ) as response:
+            content = await response.json()
+            location = content['error']['location']
+            action_url = location.replace("${TargetResource}", TargetResource)
 
-        async with session.post(url, raise_for_status=True) as response:
-            html = await response.text()
-            action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(html)
-            assert set(hidden_inputs.keys()) == {"RelayState", "SAMLRequest"}
+        # Getting SAML Request from opower
+        auth_response = await session.get(
+            action_url,
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+        )
+        action_url = auth_response.url
 
         # Getting SAML Response from coautilities
         headers = {
-            "Referer": "https://sso.opower.com/",
+            "Referer": "https://dss-coa.opower.com/",
             "User-Agent": USER_AGENT,
         }
-        async with session.post(
+        async with session.get(
             action_url,
             headers=headers,
-            data=hidden_inputs,
             raise_for_status=True,
         ) as response:
             html = await response.text()
@@ -115,7 +122,7 @@ class COAUtilities(UtilityBase):
         ) as response:
             html = await response.text()
             action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(html)
-            assert set(hidden_inputs.keys()) == {"opentoken"}
+            assert set(hidden_inputs.keys()) == {"OCIS_REQ_SP"}
 
         session.cookie_jar.update_cookies({"dssPortalCW": "1"})
 
@@ -124,18 +131,17 @@ class COAUtilities(UtilityBase):
             action_url,
             headers={"User-Agent": USER_AGENT},
             data=hidden_inputs,
-            allow_redirects=False,
             raise_for_status=True,
         ) as response:
             await response.text()
-            parsed_url = urlparse(response.headers["Location"])
+            parsed_url = urlparse(str(response.url))
             parsed_query = parse_qs(parsed_url.query)
             assert "token" in parsed_query
             token = parsed_query["token"][0]
 
         # Finally exchange this token to Auth token
         async with session.post(
-            "https://dss-coa.opower.com/webcenter/edge/apis/identity-management-v1/cws/v1/auth/coa/saml/ott/confirm",
+            "https://dss-coa.opower.com/webcenter/edge/apis/identity-management-v1/cws/v1/auth/coa/sso/ott/confirm",
             headers={"User-Agent": USER_AGENT},
             data={"token": token},
             raise_for_status=True,
