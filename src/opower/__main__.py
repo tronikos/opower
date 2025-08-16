@@ -99,7 +99,7 @@ async def _main() -> None:
         except (FileNotFoundError, json.JSONDecodeError):
             pass
 
-    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar(), requote_redirect_url=False) as session:
         opower = Opower(
             session,
             utility,
