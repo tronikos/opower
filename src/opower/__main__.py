@@ -114,13 +114,14 @@ async def _main() -> None:
             handler = e.handler
             print(f"MFA Challenge: {e}")
             options = await handler.async_get_mfa_options()
-            print("Please select an MFA option:")
-            for i, (_, value) in enumerate(options.items()):
-                print(f"  [{i + 1}] {value}")
-            choice_index = int(input("Enter the number for your choice: ")) - 1
-            choice_key = list(options.keys())[choice_index]
-            await handler.async_select_mfa_option(choice_key)
-            print(f"A security code has been sent via {options[choice_key]}.")
+            if options:
+                print("Please select an MFA option:")
+                for i, (_, value) in enumerate(options.items()):
+                    print(f"  [{i + 1}] {value}")
+                choice_index = int(input("Enter the number for your choice: ")) - 1
+                choice_key = list(options.keys())[choice_index]
+                await handler.async_select_mfa_option(choice_key)
+                print(f"A security code has been sent via {options[choice_key]}.")
             code = input("Enter the security code: ")
             try:
                 login_data = await handler.async_submit_mfa_code(code)
