@@ -1,7 +1,7 @@
 """City of Austin Utilities."""
 
 from typing import Any
-from urllib.parse import parse_qs, urlparse, quote
+from urllib.parse import parse_qs, quote, urlparse
 
 import aiohttp
 from yarl import URL
@@ -104,8 +104,8 @@ class COAUtilities(UtilityBase):
 
         # Fix encoding since can't set requote_redirect_url to False
         index = action_url.index("?")
-        url_slice1 = action_url[:index+1]
-        url_slice2 = quote(action_url[index+1:], safe="%&=")
+        url_slice1 = action_url[: index + 1]
+        url_slice2 = quote(action_url[index + 1 :], safe="%&=")
         action_url = url_slice1 + url_slice2
 
         # Getting SAML Response from coautilities
