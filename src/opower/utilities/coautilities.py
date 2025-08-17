@@ -84,7 +84,7 @@ class COAUtilities(UtilityBase):
             url,
             headers={
                 "User-Agent": USER_AGENT,
-                "opower-auth-mode": "sso",
+                "Opower-Auth-Mode": "sso",
             },
         ) as response:
             content = await response.json()
