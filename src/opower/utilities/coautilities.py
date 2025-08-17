@@ -1,7 +1,7 @@
 """City of Austin Utilities."""
 
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, quote
 
 import aiohttp
 from yarl import URL
@@ -78,7 +78,10 @@ class COAUtilities(UtilityBase):
 
         # Getting SSO URL from opower
         url = "https://dss-coa.opower.com/webcenter/edge/apis/identity-management-v1/cws/v1/auth/coa/user-details"
-        TargetResource = "https%3A%2F%2Fdss-coa.opower.com%2Fwebcenter%2Fedge%2Fapis%2Fidentity-management-v1%2Fcws%2Fv1%2Fauth%2Fcoa%2Fsso%2Flogin%2Fcallback"
+        TargetResource = (
+            "https%3A%2F%2Fdss-coa.opower.com%2Fwebcenter%2Fedge%2Fapis%2F"
+            "identity-management-v1%2Fcws%2Fv1%2Fauth%2Fcoa%2Fsso%2Flogin%2Fcallback"
+        )
 
         async with session.get(
             url,
@@ -97,7 +100,13 @@ class COAUtilities(UtilityBase):
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         )
-        action_url = auth_response.url
+        action_url = str(auth_response.url)
+
+        # Fix encoding since can't set requote_redirect_url to False
+        index = action_url.index("?")
+        url_slice1 = action_url[:index+1]
+        url_slice2 = quote(action_url[index+1:], safe="%&=")
+        action_url = url_slice1 + url_slice2
 
         # Getting SAML Response from coautilities
         headers = {
@@ -105,7 +114,7 @@ class COAUtilities(UtilityBase):
             "User-Agent": USER_AGENT,
         }
         async with session.get(
-            action_url,
+            URL(action_url, encoded=True),
             headers=headers,
             raise_for_status=True,
         ) as response:
