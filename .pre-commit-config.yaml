@@ -40,7 +40,6 @@ repos:
           - aiohttp
           - aiozoneinfo
           - arrow
-          - cryptography
           - pyotp
           - pytest-mypy
           - python-dotenv

@@ -32,7 +32,6 @@ This library is used by the [Opower integration in Home Assistant](https://www.h
   - PECO Energy Company (PECO)
   - Potomac Electric Power Company (Pepco)
 - Glendale Water and Power (GWP)
-- Mercury NZ Limited
 - National Grid subsidiaries
   - National Grid Massachusetts
   - National Grid NY Long Island
