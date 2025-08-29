@@ -3,7 +3,7 @@
 import json
 import logging
 from html.parser import HTMLParser
-from typing import Any, ClassVar
+from typing import Any
 
 import aiohttp
 
@@ -17,10 +17,10 @@ _LOGGER = logging.getLogger(__file__)
 class EvergyDavinciWidgetParser(HTMLParser):
     """HTML parser to extract Davinci api and flow data for PingOne Authentication."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize."""
         super().__init__()
-        self.data = {}
+        self.data: = dict[str, str]
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Recognizes data-davinci attrs from davinci-widget-wrapper class."""
@@ -40,17 +40,16 @@ class EvergyDavinciWidgetParser(HTMLParser):
 
 
 class EvergyLoginHandler:
-    """Handle davinci widget authenticaion for Evergy Login page."""
+    """Handle davinci widget authentication for Evergy Login page."""
 
-    def __init__(self, session: aiohttp.ClientSession):
+    def __init__(self, session: aiohttp.ClientSession) -> None:
         """Initialize."""
         self.session = session
-        self.cookies: ClassVar[dict[str, list[str]]] = {}
-        self.auth_data: dict | None = None
-        self.access_token: str | None = None
-        self.connectionId: str | None = None
-        self.interactionId: str | None = None
-        self.ID: str | None = None
+        self.auth_data: dict[str, str]
+        self.access_token: str
+        self.connectionId: str
+        self.interactionId: str
+        self.ID: str
 
     async def get_auth_data(self) -> None:
         """Parse davinci widget for api data."""
@@ -299,7 +298,7 @@ class EvergyLoginHandler:
             data=json.dumps({"Token": self.access_token, "DataSourceItemId": self.auth_data["datasource_item_id"]}),
             raise_for_status=True,
         ) as resp:
-            data = await resp.json(content_type=None)
+            await resp.json(content_type=None)
 
     async def login(self, username: str, password: str) -> None:
         """First parse davinci widget for api data."""
