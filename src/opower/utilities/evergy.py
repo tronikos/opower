@@ -1,11 +1,11 @@
 """Evergy."""
 
+import json
 import logging
 from html.parser import HTMLParser
 from typing import Any, ClassVar
 
 import aiohttp
-import json
 
 from ..const import USER_AGENT
 from ..exceptions import InvalidAuth
@@ -16,6 +16,7 @@ _LOGGER = logging.getLogger(__file__)
 
 class EvergyDavinciWidgetParser(HTMLParser):
     """HTML parser to extract Davinci api and flow data for PingOne Authentication."""
+
     def __init__(self):
         """Initialize."""
         super().__init__()
@@ -23,7 +24,7 @@ class EvergyDavinciWidgetParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Recognizes data-davinci attrs from davinci-widget-wrapper class."""
-        if tag == "div" and ("class","davinci-widget-wrapper") in attrs:
+        if tag == "div" and ("class", "davinci-widget-wrapper") in attrs:
             _, token = next(filter(lambda attr: attr[0] == "data-davinci-company-id", attrs))
             self.data["company_id"] = token
             _, token = next(filter(lambda attr: attr[0] == "data-davinci-sk-api-key", attrs))
@@ -40,6 +41,7 @@ class EvergyDavinciWidgetParser(HTMLParser):
 
 class EvergyLoginHandler:
     """Handle davinci widget authenticaion for Evergy Login page."""
+
     def __init__(self, session: aiohttp.ClientSession):
         self.session = session
         self.cookies: ClassVar[dict[str, list[str]]] = {}
@@ -59,7 +61,7 @@ class EvergyLoginHandler:
 
         async with self.session.get(
             login_page_url,
-            headers = {"User-Agent": USER_AGENT},
+            headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         ) as resp:
             parse_auth_data.feed(await resp.text())
@@ -69,17 +71,18 @@ class EvergyLoginHandler:
 
     async def get_sdktoken(self) -> None:
         """First get the access_token"""
-        login_sdktoken_url = (self.auth_data["api_root"].replace("auth","orchestrate-api") +
-                              "/v1/company/" + self.auth_data["company_id"] + "/sdktoken")
+        login_sdktoken_url = (
+            self.auth_data["api_root"].replace("auth", "orchestrate-api")
+            + "/v1/company/"
+            + self.auth_data["company_id"]
+            + "/sdktoken"
+        )
 
         _LOGGER.debug("Fetching Evergy login page: %s", login_sdktoken_url)
 
         async with self.session.get(
             login_sdktoken_url,
-            headers = {
-                "User-Agent": USER_AGENT,
-                "x-sk-api-key": self.auth_data["sk_api_key"]
-            },
+            headers={"User-Agent": USER_AGENT, "x-sk-api-key": self.auth_data["sk_api_key"]},
             raise_for_status=True,
         ) as resp:
             data = await resp.json()
@@ -87,14 +90,20 @@ class EvergyLoginHandler:
 
     async def start_flow(self) -> None:
         """Start the davinci widget flow"""
-        login_start_url = (self.auth_data["api_root"] + "/" + self.auth_data["company_id"] +
-                           "/davinci/policy/" + self.auth_data["policy_id"] + "/start")
+        login_start_url = (
+            self.auth_data["api_root"]
+            + "/"
+            + self.auth_data["company_id"]
+            + "/davinci/policy/"
+            + self.auth_data["policy_id"]
+            + "/start"
+        )
 
         _LOGGER.debug("Fetching start page for davinci flow: %s", login_start_url)
 
         async with self.session.get(
             login_start_url,
-            headers = {
+            headers={
                 "User-Agent": USER_AGENT,
                 "Authorization": "Bearer " + self.access_token,
             },
@@ -107,22 +116,30 @@ class EvergyLoginHandler:
 
     async def get_login_form(self) -> None:
         """Retrieve submit form"""
-        login_template_url = (self.auth_data["api_root"] + "/" + self.auth_data["company_id"] +
-                              "/davinci/connections/" + self.connectionId + "/capabilities/customHTMLTemplate")
+        login_template_url = (
+            self.auth_data["api_root"]
+            + "/"
+            + self.auth_data["company_id"]
+            + "/davinci/connections/"
+            + self.connectionId
+            + "/capabilities/customHTMLTemplate"
+        )
 
         _LOGGER.debug("Fetching login template page: %s", login_template_url)
         async with self.session.post(
             login_template_url,
-            headers = {
+            headers={
                 "User-Agent": USER_AGENT,
                 "Content-Type": "application/json",
                 "interactionId": self.interactionId,
                 "Origin": "https://www.evergy.com",
             },
-            data=json.dumps({
-                "id": self.ID,
-                "eventName": "continue",
-            }),
+            data=json.dumps(
+                {
+                    "id": self.ID,
+                    "eventName": "continue",
+                }
+            ),
             raise_for_status=True,
         ) as resp:
             data = await resp.json()
@@ -130,36 +147,43 @@ class EvergyLoginHandler:
 
     async def submit_login_form(self, username: str, password: str) -> None:
         """Login to the utility website."""
-        login_template_url = (self.auth_data["api_root"] + "/" + self.auth_data["company_id"] +
-                              "/davinci/connections/" + self.connectionId + "/capabilities/customHTMLTemplate")
+        login_template_url = (
+            self.auth_data["api_root"]
+            + "/"
+            + self.auth_data["company_id"]
+            + "/davinci/connections/"
+            + self.connectionId
+            + "/capabilities/customHTMLTemplate"
+        )
 
         _LOGGER.debug("Submit login data to template page: %s", login_template_url)
 
         async with self.session.post(
             login_template_url,
-            headers = {
+            headers={
                 "User-Agent": USER_AGENT,
                 "Content-Type": "application/json",
                 "Origin": "https://www.evergy.com",
             },
-            data = json.dumps({
-                "id": self.ID,
-                "nextEvent":
+            data=json.dumps(
                 {
-                    "constructType":"skEvent",
-                    "eventName":"continue",
-                    "params":[],
-                    "eventType":"post",
-                    "postProcess":{}
-                },
-                "parameters":
-                {
-                    "buttonType":"form-submit",
-                    "buttonValue":"submit",
-                    "username":username,
-                    "password":password
-                },
-                "eventName":"continue"}),
+                    "id": self.ID,
+                    "nextEvent": {
+                        "constructType": "skEvent",
+                        "eventName": "continue",
+                        "params": [],
+                        "eventType": "post",
+                        "postProcess": {},
+                    },
+                    "parameters": {
+                        "buttonType": "form-submit",
+                        "buttonValue": "submit",
+                        "username": username,
+                        "password": password,
+                    },
+                    "eventName": "continue",
+                }
+            ),
             allow_redirects=False,
             raise_for_status=True,
         ) as resp:
@@ -167,27 +191,29 @@ class EvergyLoginHandler:
             """ If the submitted login form returns the same flow ID, then the login failed """
             if data["id"] == self.ID:
                 raise InvalidAuth("Username/password failed")
-            else:
-                self.ID = data["id"]
+            self.ID = data["id"]
 
     async def get_new_connection_id(self) -> None:
         """Retrieve new connection id"""
-        login_template_url = (self.auth_data["api_root"] + "/" + self.auth_data["company_id"] +
-                              "/davinci/connections/" + self.connectionId + "/capabilities/customHTMLTemplate")
+        login_template_url = (
+            self.auth_data["api_root"]
+            + "/"
+            + self.auth_data["company_id"]
+            + "/davinci/connections/"
+            + self.connectionId
+            + "/capabilities/customHTMLTemplate"
+        )
 
         _LOGGER.debug("Fetching login template page: %s", login_template_url)
-       
+
         async with self.session.post(
             login_template_url,
-            headers = {
+            headers={
                 "User-Agent": USER_AGENT,
                 "Content-Type": "application/json",
                 "Origin": "https://www.evergy.com",
             },
-            data=json.dumps({
-                "id": self.ID,
-                "eventName": "continue"
-            }),
+            data=json.dumps({"id": self.ID, "eventName": "continue"}),
             raise_for_status=True,
         ) as resp:
             data = await resp.json()
@@ -196,22 +222,30 @@ class EvergyLoginHandler:
 
     async def get_new_connection_cookie(self) -> None:
         """Set complete to generate cookie"""
-        login_set_cookie_url = (self.auth_data["api_root"] + "/" + self.auth_data["company_id"] +
-                                "/davinci/connections/" + self.connectionId + "/capabilities/setCookieWithoutUser")
+        login_set_cookie_url = (
+            self.auth_data["api_root"]
+            + "/"
+            + self.auth_data["company_id"]
+            + "/davinci/connections/"
+            + self.connectionId
+            + "/capabilities/setCookieWithoutUser"
+        )
 
         _LOGGER.debug("Start setCookieWithoutUser processing with new connectionId: %s", login_set_cookie_url)
 
         async with self.session.post(
             login_set_cookie_url,
-            headers = {
+            headers={
                 "User-Agent": USER_AGENT,
                 "Content-Type": "application/json",
             },
-            data = json.dumps({
-                "eventName": "complete",
-                "parameters": {},
-                "id": self.ID,
-            }),
+            data=json.dumps(
+                {
+                    "eventName": "complete",
+                    "parameters": {},
+                    "id": self.ID,
+                }
+            ),
             raise_for_status=True,
         ) as resp:
             data = await resp.json()
@@ -219,22 +253,30 @@ class EvergyLoginHandler:
 
     async def get_new_access_token(self) -> None:
         """Set cookie and generate new access_token"""
-        login_set_cookie_url = (self.auth_data["api_root"] + "/" + self.auth_data["company_id"] +
-                                "/davinci/connections/" + self.connectionId + "/capabilities/setCookieWithoutUser")
+        login_set_cookie_url = (
+            self.auth_data["api_root"]
+            + "/"
+            + self.auth_data["company_id"]
+            + "/davinci/connections/"
+            + self.connectionId
+            + "/capabilities/setCookieWithoutUser"
+        )
 
         _LOGGER.debug("Fetch new access_token with new connectionId: %s", login_set_cookie_url)
 
         async with self.session.post(
             login_set_cookie_url,
-            headers = {
+            headers={
                 "User-Agent": USER_AGENT,
                 "Content-Type": "application/json",
             },
-            data = json.dumps({
-                "eventName": "complete",
-                "parameters": {},
-                "id": self.ID,
-            }),
+            data=json.dumps(
+                {
+                    "eventName": "complete",
+                    "parameters": {},
+                    "id": self.ID,
+                }
+            ),
             raise_for_status=True,
         ) as resp:
             data = await resp.json()
@@ -249,14 +291,11 @@ class EvergyLoginHandler:
 
         async with self.session.post(
             login_postprocess_url,
-            headers = {
+            headers={
                 "User-Agent": USER_AGENT,
                 "Content-Type": "application/json",
             },
-            data = json.dumps({
-                "Token": self.access_token,
-                "DataSourceItemId": self.auth_data["datasource_item_id"]
-            }),
+            data=json.dumps({"Token": self.access_token, "DataSourceItemId": self.auth_data["datasource_item_id"]}),
             raise_for_status=True,
         ) as resp:
             data = await resp.json(content_type=None)
@@ -271,7 +310,7 @@ class EvergyLoginHandler:
         """Retrieve submit form"""
         await EvergyLoginHandler.get_login_form(self)
         """Submit login form"""
-        await EvergyLoginHandler.submit_login_form(self,username,password)
+        await EvergyLoginHandler.submit_login_form(self, username, password)
         """Retrieve new connection id"""
         await EvergyLoginHandler.get_new_connection_id(self)
         """Set complete to generate cookie"""
@@ -312,7 +351,7 @@ class Evergy(UtilityBase):
     ) -> str:
         """Evergy log-in flow with davinci widget."""
         login_evergy = EvergyLoginHandler(session)
-        await login_evergy.login(username,password)
+        await login_evergy.login(username, password)
 
         opower_access_token: str | None = None
 
