@@ -43,6 +43,7 @@ class EvergyLoginHandler:
     """Handle davinci widget authenticaion for Evergy Login page."""
 
     def __init__(self, session: aiohttp.ClientSession):
+        """Initialize."""
         self.session = session
         self.cookies: ClassVar[dict[str, list[str]]] = {}
         self.auth_data: dict | None = None
@@ -52,7 +53,7 @@ class EvergyLoginHandler:
         self.ID: str | None = None
 
     async def get_auth_data(self) -> None:
-        """Parse davinci widget for api data"""
+        """Parse davinci widget for api data."""
         parse_auth_data = EvergyDavinciWidgetParser()
 
         login_page_url = "https://www.evergy.com/log-in"
@@ -70,7 +71,7 @@ class EvergyLoginHandler:
             assert self.auth_data, "Failed to get davinci widget data"
 
     async def get_sdktoken(self) -> None:
-        """First get the access_token"""
+        """First get the access_token."""
         login_sdktoken_url = (
             self.auth_data["api_root"].replace("auth", "orchestrate-api")
             + "/v1/company/"
@@ -89,7 +90,7 @@ class EvergyLoginHandler:
             self.access_token = data["access_token"]
 
     async def start_flow(self) -> None:
-        """Start the davinci widget flow"""
+        """Start the davinci widget flow."""
         login_start_url = (
             self.auth_data["api_root"]
             + "/"
@@ -115,7 +116,7 @@ class EvergyLoginHandler:
             self.interactionId = data["interactionId"]
 
     async def get_login_form(self) -> None:
-        """Retrieve submit form"""
+        """Retrieve submit form."""
         login_template_url = (
             self.auth_data["api_root"]
             + "/"
@@ -188,13 +189,13 @@ class EvergyLoginHandler:
             raise_for_status=True,
         ) as resp:
             data = await resp.json()
-            """ If the submitted login form returns the same flow ID, then the login failed """
+            """If the submitted login form returns the same flow ID, then the login failed."""
             if data["id"] == self.ID:
                 raise InvalidAuth("Username/password failed")
             self.ID = data["id"]
 
     async def get_new_connection_id(self) -> None:
-        """Retrieve new connection id"""
+        """Retrieve new connection id."""
         login_template_url = (
             self.auth_data["api_root"]
             + "/"
@@ -221,7 +222,7 @@ class EvergyLoginHandler:
             self.connectionId = data["connectionId"]
 
     async def get_new_connection_cookie(self) -> None:
-        """Set complete to generate cookie"""
+        """Set complete to generate cookie."""
         login_set_cookie_url = (
             self.auth_data["api_root"]
             + "/"
@@ -252,7 +253,7 @@ class EvergyLoginHandler:
             self.ID = data["id"]
 
     async def get_new_access_token(self) -> None:
-        """Set cookie and generate new access_token"""
+        """Set cookie and generate new access_token."""
         login_set_cookie_url = (
             self.auth_data["api_root"]
             + "/"
@@ -284,7 +285,7 @@ class EvergyLoginHandler:
             self.access_token = data["access_token"]
 
     async def postprocessing_api(self) -> None:
-        """Postprocess url to get access by cookie"""
+        """Postprocess url to get access by cookie."""
         login_postprocess_url = "https://www.evergy.com" + self.auth_data["post_processing_api"]
 
         _LOGGER.debug("Set cookie with new token for login access: %s", login_postprocess_url)
@@ -301,23 +302,23 @@ class EvergyLoginHandler:
             data = await resp.json(content_type=None)
 
     async def login(self, username: str, password: str) -> None:
-        """First parse davinci widget for api data"""
+        """First parse davinci widget for api data."""
         await EvergyLoginHandler.get_auth_data(self)
-        """Get the access_token"""
+        """Get the access_token."""
         await EvergyLoginHandler.get_sdktoken(self)
-        """Start the flow"""
+        """Start the flow."""
         await EvergyLoginHandler.start_flow(self)
-        """Retrieve submit form"""
+        """Retrieve submit form."""
         await EvergyLoginHandler.get_login_form(self)
-        """Submit login form"""
+        """Submit login form."""
         await EvergyLoginHandler.submit_login_form(self, username, password)
-        """Retrieve new connection id"""
+        """Retrieve new connection id."""
         await EvergyLoginHandler.get_new_connection_id(self)
-        """Set complete to generate cookie"""
+        """Set complete to generate cookie."""
         await EvergyLoginHandler.get_new_connection_cookie(self)
-        """Set cookie and generate new access_token"""
+        """Set cookie and generate new access_token."""
         await EvergyLoginHandler.get_new_access_token(self)
-        """Postprocess url at Evergy to get access by cookie"""
+        """Postprocess url at Evergy to get access by cookie."""
         await EvergyLoginHandler.postprocessing_api(self)
 
 
