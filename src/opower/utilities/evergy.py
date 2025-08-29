@@ -26,17 +26,17 @@ class EvergyDavinciWidgetParser(HTMLParser):
         """Recognizes data-davinci attrs from davinci-widget-wrapper class."""
         if tag == "div" and ("class", "davinci-widget-wrapper") in attrs:
             _, token = next(filter(lambda attr: attr[0] == "data-davinci-company-id", attrs))
-            self.data["company_id"] = token
+            self.data["company_id"] = str(token)
             _, token = next(filter(lambda attr: attr[0] == "data-davinci-sk-api-key", attrs))
-            self.data["sk_api_key"] = token
+            self.data["sk_api_key"] = str(token)
             _, token = next(filter(lambda attr: attr[0] == "data-davinci-api-root", attrs))
-            self.data["api_root"] = token
+            self.data["api_root"] = str(token)
             _, token = next(filter(lambda attr: attr[0] == "data-davinci-policy-id", attrs))
-            self.data["policy_id"] = token
+            self.data["policy_id"] = str(token)
             _, token = next(filter(lambda attr: attr[0] == "data-davinci-post-processing-api", attrs))
-            self.data["post_processing_api"] = token
+            self.data["post_processing_api"] = str(token)
             _, token = next(filter(lambda attr: attr[0] == "data-davinci-datasource-item-id", attrs))
-            self.data["datasource_item_id"] = token
+            self.data["datasource_item_id"] = str(token)
 
 
 class EvergyLoginHandler:
