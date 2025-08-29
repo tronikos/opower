@@ -20,7 +20,7 @@ class EvergyDavinciWidgetParser(HTMLParser):
     def __init__(self) -> None:
         """Initialize."""
         super().__init__()
-        self.data: = dict[str, str]
+        self.data: dict[str, str]
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Recognizes data-davinci attrs from davinci-widget-wrapper class."""
