@@ -191,7 +191,7 @@ class EvergyLoginHandler:
         ) as resp:
             data = await resp.json()
             """If the submitted login form returns a different flowId, then the username doesn't exist."""
-            if data["flowId"] != self.flowId :
+            if data["flowId"] != self.flowId:
                 raise InvalidAuth("No such username. Login failed.")
             """If the submitted login form returns the same ID, then the password isn't correct."""
             if data["id"] == self.ID:
