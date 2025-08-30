@@ -49,6 +49,7 @@ class EvergyLoginHandler:
         self.access_token: str
         self.connectionId: str
         self.interactionId: str
+        self.flowId: str
         self.ID: str
 
     async def get_auth_data(self) -> None:
@@ -113,6 +114,7 @@ class EvergyLoginHandler:
             self.ID = data["id"]
             self.connectionId = data["connectionId"]
             self.interactionId = data["interactionId"]
+            self.flowId = data["flowId"]
 
     async def get_login_form(self) -> None:
         """Retrieve submit form."""
@@ -188,9 +190,12 @@ class EvergyLoginHandler:
             raise_for_status=True,
         ) as resp:
             data = await resp.json()
-            """If the submitted login form returns the same flow ID, then the login failed."""
+            """If the submitted login form returns a different flowId, then the username doesn't exist."""
+            if data["flowId"] != self.flowId :
+                raise InvalidAuth("No such username. Login failed.")
+            """If the submitted login form returns the same ID, then the password isn't correct."""
             if data["id"] == self.ID:
-                raise InvalidAuth("Username/password failed")
+                raise InvalidAuth("Wrong password. Login failed.")
             self.ID = data["id"]
 
     async def get_new_connection_id(self) -> None:
