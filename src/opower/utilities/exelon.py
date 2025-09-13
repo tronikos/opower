@@ -91,7 +91,7 @@ class ExelonURLHandler:
             raise CannotConnect(f"Failed to post during {error_msg} with error: {err}") from err
         else:
             if result_json["status"] != "200":
-                raise InvalidAuth(f"Failed to authenticate during {error_msg} with error: {result_json["message"]}")
+                raise InvalidAuth(f"Failed to authenticate during {error_msg} with error: {result_json['message']}")
         return result_json
 
     async def get_token(self) -> tuple[str, dict[str, Any]]:
