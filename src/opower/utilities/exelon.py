@@ -70,22 +70,29 @@ class ExelonURLHandler:
             result = await resp.text(encoding="utf-8")
             return result, resp.request_info.url.path, resp.real_url.host
 
-    async def post(self, url: str, data: dict[str, Any]) -> dict[str, Any]:
+    async def post(self, url: str, data: dict[str, Any], error_msg: str = "") -> dict[str, Any]:
         """Return the result of a post command containing CSRF tokens in the header."""
-        async with self._session.post(
-            f"https://{self._base_url}/{url}",
-            params={
-                "tx": self._settings["transId"],
-                "p": self._settings["hosts"]["policy"],
-            },
-            data=data,
-            headers={
-                "X-CSRF-TOKEN": self._settings["csrf"],
-                "User-Agent": USER_AGENT,
-            },
-            raise_for_status=True,
-        ) as resp:
-            return dict(json.loads(await resp.text(encoding="utf-8")))
+        try:
+            async with self._session.post(
+                f"https://{self._base_url}/{url}",
+                params={
+                    "tx": self._settings["transId"],
+                    "p": self._settings["hosts"]["policy"],
+                },
+                data=data,
+                headers={
+                    "X-CSRF-TOKEN": self._settings["csrf"],
+                    "User-Agent": USER_AGENT,
+                },
+                raise_for_status=True,
+            ) as resp:
+                result_json = dict(json.loads(await resp.text(encoding="utf-8")))
+        except aiohttp.ClientError as err:
+            raise CannotConnect(f"Failed to post during {error_msg} with error: {err}") from err
+        else:
+            if result_json["status"] != "200":
+                raise InvalidAuth(f"Failed to authenticate during {error_msg} with error: {result_json["message"]}")
+        return result_json
 
     async def get_token(self) -> tuple[str, dict[str, Any]]:
         """Return the the first account and the associated bearer token."""
@@ -190,7 +197,7 @@ class ExelonMfaHandler(MfaHandlerBase):
                 if field.get("ID") == "displayEmailAddress":
                     mfa_options["Email"] = field.get("PRE")
                 if field.get("ID") == "displayPhoneNumber":
-                    mfa_options["Phone"] = field.get("PRE")
+                    mfa_options["Text"] = field.get("PRE")
         self._mfa_options = mfa_options
         return mfa_options
 
@@ -198,102 +205,73 @@ class ExelonMfaHandler(MfaHandlerBase):
         """Select an MFA option and trigger the code delivery."""
         _LOGGER.debug("Selecting MFA option %s", option_id)
         self._option_id = option_id
-        phone_id = "1"
-        # TODO code in the call option if it becomes really necessary
-        mode = "Text" if option_id == "Phone" else "Email"
-        try:
-            result_json = await self._exelon_handler.post(
-                "SelfAsserted",
-                {
-                    "displayEmailAddress": self._mfa_options["Email"],
-                    "displayPhoneNumber": self._mfa_options["Phone"],
-                    "mfaEnabledRadio": mode,
-                    "request_type": "RESPONSE",
-                },
-            )
-        except aiohttp.ClientError as err:
-            raise CannotConnect(f"MFA option selection failed: {err}") from err
+        # NOTE MFA supports Text, Email, and Call
+        # Call requires polling, which is outside
+        # the scope of supporting this type of flow
+        _ = await self._exelon_handler.post(
+            "SelfAsserted",
+            {
+                "displayEmailAddress": self._mfa_options["Email"],
+                "displayPhoneNumber": self._mfa_options["Text"],
+                "mfaEnabledRadio": self._option_id,
+                "request_type": "RESPONSE",
+            },
+            "MFA setup",
+        )
+
+        result, *_ = await self._exelon_handler.get(f"api/{self._exelon_handler.get_api()}/confirmed")
+        settings = _load_javascript(result, "SETTINGS")
+        if settings is None:
+            raise InvalidAuth(f"Failed to confirm MFA option: {self._option_id}")
+        self._exelon_handler.update_settings(settings)
+
+        if self._option_id == "Text":
+            uv_phone = _load_javascript(result, "UV_PHONE")
+            if uv_phone is None:
+                raise InvalidAuth("Failed to select phone MFA")
+            phone_id = uv_phone.get("PhoneNumbers", [{"Id": "0"}])[0].get("Id", "0")
+            verify_url = f"{self._exelon_handler.get_api()}/verify"
+            verify_data = {"request_type": "VERIFICATION_REQUEST", "auth_type": "onewaysms", "id": phone_id}
         else:
-            if result_json["status"] != "200":
-                raise InvalidAuth(result_json["message"])
+            verify_url = "SelfAsserted/DisplayControlAction/vbeta/emailVerificationControl/SendCode"
+            verify_data = {"displayEmailAddress": self._mfa_options["Email"]}
 
-            result, *_ = await self._exelon_handler.get(f"api/{self._exelon_handler.get_api()}/confirmed")
-            settings = _load_javascript(result, "SETTINGS")
-            if settings is None:
-                raise InvalidAuth(f"Failed to confirm MFA option: {self._option_id}")
-            self._exelon_handler.update_settings(settings)
-
-            if self._option_id == "Phone":
-                uv_phone = _load_javascript(result, "UV_PHONE")
-                if uv_phone is None:
-                    raise InvalidAuth("Failed to select phone MFA")
-                phone_id = uv_phone.get("PhoneNumbers", [{"Id": "0"}])[0].get("Id", "0")
-
-        try:
-            if self._option_id == "Phone":
-                result_json = await self._exelon_handler.post(
-                    f"{self._exelon_handler.get_api()}/verify",
-                    {"request_type": "VERIFICATION_REQUEST", "auth_type": "onewaysms", "id": phone_id},
-                )
-            else:
-                result_json = await self._exelon_handler.post(
-                    "SelfAsserted/DisplayControlAction/vbeta/emailVerificationControl/SendCode",
-                    {"displayEmailAddress": self._mfa_options["Email"]},
-                )
-        except aiohttp.ClientError as err:
-            raise CannotConnect(f"MFA verify selection failed: {err}") from err
-        else:
-            if result_json["status"] != "200":
-                raise InvalidAuth(result_json["message"])
+        _ = await self._exelon_handler.post(verify_url, verify_data, "MFA verify")
 
         _LOGGER.debug("Successfully selected MFA option")
 
     async def async_submit_mfa_code(self, code: str) -> dict[str, Any]:
         """Submit the user-provided code."""
         _LOGGER.debug("Submitting MFA code")
-        try:
-            if self._option_id == "Phone":
-                result_json = await self._exelon_handler.post(
-                    f"{self._exelon_handler.get_api()}/verify",
-                    {"request_type": "VALIDATION_REQUEST", "verification_code": code},
-                )
-            else:
-                result_json = await self._exelon_handler.post(
-                    "SelfAsserted/DisplayControlAction/vbeta/emailVerificationControl/VerifyCode",
-                    {"displayEmailAddress": self._mfa_options["Email"], "verificationCode": code},
-                )
-
-        except aiohttp.ClientError as err:
-            raise CannotConnect(f"MFA code submission failed: {err}") from err
+        if self._option_id == "Text":
+            submit_url = f"{self._exelon_handler.get_api()}/verify"
+            submit_data = {"request_type": "VALIDATION_REQUEST", "verification_code": code}
         else:
-            if result_json["status"] != "200":
-                raise InvalidAuth("Invalid MFA code")
+            submit_url = "SelfAsserted/DisplayControlAction/vbeta/emailVerificationControl/VerifyCode"
+            submit_data = {"displayEmailAddress": self._mfa_options["Email"], "verificationCode": code}
 
-            # Email and phone have different flows and nothing may come back but we still have to send it
-            if self._option_id == "Email":
-                try:
-                    result_json = await self._exelon_handler.post(
-                        "SelfAsserted",
-                        {
-                            "displayEmailAddress": self._mfa_options["Email"],
-                            "verificationCode": code,
-                            "extension_isMFAEnabled": "True",
-                            "request_type": "RESPONSE",
-                        },
-                    )
-                except aiohttp.ClientError as err:
-                    raise CannotConnect(f"MFA email submission failed: {err}") from err
-                else:
-                    if result_json["status"] != "200":
-                        raise InvalidAuth(result_json["message"])
+        _ = await self._exelon_handler.post(submit_url, submit_data, "MFA code")
 
-            _ = await self._exelon_handler.get(f"api/{self._exelon_handler.get_api()}/confirmed")
-            token, account = await self._exelon_handler.get_token()
+        # Email and phone have different flows and nothing may come back but we still have to send it
+        if self._option_id == "Email":
+            _ = await self._exelon_handler.post(
+                "SelfAsserted",
+                {
+                    "displayEmailAddress": self._mfa_options["Email"],
+                    "verificationCode": code,
+                    "extension_isMFAEnabled": "True",
+                    "request_type": "RESPONSE",
+                },
+            )
 
-            if token and account:
-                _LOGGER.debug("MFA code accepted, received login data")
-                return {"token": token, "account": account}
-            raise InvalidAuth("Authentication flow failed")
+        _ = await self._exelon_handler.get(f"api/{self._exelon_handler.get_api()}/confirmed")
+        token, account = await self._exelon_handler.get_token()
+
+        if token and account:
+            _LOGGER.debug("MFA code accepted, received login data")
+            return {"token": token, "account": account}
+
+        raise InvalidAuth("Authentication flow failed")
 
 
 class Exelon:
