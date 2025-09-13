@@ -8,9 +8,292 @@ from typing import Any
 import aiohttp
 
 from ..const import USER_AGENT
-from ..exceptions import InvalidAuth
+from ..exceptions import CannotConnect, InvalidAuth, MfaChallenge
+from .base import MfaHandlerBase
 
 _LOGGER = logging.getLogger(__file__)
+
+
+def _load_javascript(text: str, var: str) -> dict[str, Any] | None:
+    """Return json from a javascript variable in the html text."""
+    var_match = re.search(r"var " + var + r" = ({.*});", text)
+    if var_match:
+        return dict(json.loads(var_match.group(1)))
+    return None
+
+
+class ExelonURLHandler:
+    """Centralizes and handles all web communication with Exelon."""
+
+    def __init__(self, session: aiohttp.ClientSession, settings: dict[str, Any], base_url: str, login_domain: str):
+        """Initialize the handler."""
+        self._session = session
+        self._login_domain = login_domain
+        self.update_base_url(base_url)
+        self.update_settings(settings)
+
+    def update_settings(self, settings: dict[str, Any]) -> None:
+        """Update settings whenever it is returned as it maintains a history."""
+        self._settings = settings
+
+    def update_base_url(self, base_url: str) -> None:
+        """Subsidiaries will have a new base URL."""
+        self._base_url = base_url
+
+    def get_api(self) -> str:
+        """Return the current page (api) for next command evaluation."""
+        return str(self._settings.get("api", ""))
+
+    async def get(self, url: str) -> tuple[str, str, str | None]:
+        """Return the result of a get command containing CSRF tokens."""
+        params = {}
+        if self._settings:  #  Handle initial login which will not have a settings
+            params = {
+                "csrf_token": self._settings["csrf"],
+                "tx": self._settings["transId"],
+                "p": self._settings["hosts"]["policy"],
+                "diags": json.dumps(
+                    {
+                        "pageViewId": self._settings["pageViewId"],
+                        "pageId": self.get_api(),
+                        "trace": [],
+                    }
+                ),
+            }
+
+        async with self._session.get(
+            f"https://{self._base_url}/{url}",
+            params=params,
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+        ) as resp:
+            result = await resp.text(encoding="utf-8")
+            return result, resp.request_info.url.path, resp.real_url.host
+
+    async def post(self, url: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Return the result of a post command containing CSRF tokens in the header."""
+        async with self._session.post(
+            f"https://{self._base_url}/{url}",
+            params={
+                "tx": self._settings["transId"],
+                "p": self._settings["hosts"]["policy"],
+            },
+            data=data,
+            headers={
+                "X-CSRF-TOKEN": self._settings["csrf"],
+                "User-Agent": USER_AGENT,
+            },
+            raise_for_status=True,
+        ) as resp:
+            return dict(json.loads(await resp.text(encoding="utf-8")))
+
+    async def get_token(self) -> tuple[str, dict[str, Any]]:
+        """Return the the first account and the associated bearer token."""
+        # we probably need to select an account as we didn't automatically go to the dashboard
+        # so we store these details, always looking up the account
+
+        account = {}
+
+        async with self._session.get(
+            f"https://{self._login_domain}/api/Services/MyAccountService.svc/GetSession",
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+        ) as resp:
+            result_json = await resp.json()
+
+        if not result_json["token"]:
+            _LOGGER.error("No token provided, authentication flow likely failed")
+            return "", {}
+
+        # confirm no account number is set otherwise we can use this account
+        if result_json["accountNumber"] is None:
+            bearer_token = result_json["token"]
+
+            # this path comes from GetConfiguration, unsure if its different
+            # per utility, if so, would need to add it to the subtypes:
+            # "euApiRoutePrefix": "/mobile/custom",
+            eu_api_route_prefix = "mobile/custom"
+            # "euApiUrl": "/.euapi",
+            eu_api_url = ".euapi"
+            async with self._session.get(
+                f"https://{self._login_domain}/{eu_api_url}/{eu_api_route_prefix}/auth/accounts",
+                headers={
+                    "User-Agent": USER_AGENT,
+                    "Authorization": "Bearer " + bearer_token,
+                },
+                raise_for_status=True,
+            ) as resp:
+                # this has the wrong mime type for some reason
+                result = await resp.json(content_type="text/html")
+
+            if result["success"] is not True:
+                raise InvalidAuth("Unable to list accounts")
+
+            # Only include active accounts (after moving, old accounts have status: "Inactive")
+            # NOTE: this logic currently assumes 1 active address per account, if multiple accounts found
+            #      we default to taking the first in the list. Future enhancement is to support
+            #      multiple accounts (which could result in different subdomain for each)
+            active_accounts = [account for account in result["data"] if account["status"] == "Active"]
+
+            if len(active_accounts) == 0:
+                raise InvalidAuth("No active accounts found")
+
+            account = active_accounts[0]
+
+            # set the first active one
+            account_number = account["accountNumber"]
+
+            async with self._session.post(
+                f"https://{self._login_domain}/api/Services/AccountList.svc/ViewAccount",
+                json={
+                    "accountNumber": account_number,
+                },
+                headers={"User-Agent": USER_AGENT},
+                raise_for_status=True,
+            ) as resp:
+                result = await resp.text(encoding="utf-8")
+        else:
+            account = result_json
+
+        async with self._session.post(
+            f"https://{self._login_domain}/api/Services/OpowerService.svc/GetOpowerToken",
+            json={},
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+        ) as resp:
+            result_json = await resp.json()
+
+        return str(result_json["access_token"]), account
+
+
+class ExelonMfaHandler(MfaHandlerBase):
+    """Handles interactive MFA for Exelon."""
+
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        password: str,
+        data: dict[str, Any],
+    ):
+        """Initialize the MFA handler."""
+        self._session = session
+        self._password = password  #  Not used in Exelon
+        self._exelon_handler: ExelonURLHandler = data.get("handler", ExelonURLHandler(self._session, {}, "", ""))
+        self._sa_fields = data.get("sa_fields", {})
+        self._mfa_options: dict[str, str] = {}
+
+    async def async_get_mfa_options(self) -> dict[str, str]:
+        """Return a dictionary of MFA options available to the user."""
+        mfa_options: dict[str, str] = {}
+        if fields := self._sa_fields.get("AttributeFields", []):
+            for field in fields:
+                if field.get("ID") == "displayEmailAddress":
+                    mfa_options["Email"] = field.get("PRE")
+                if field.get("ID") == "displayPhoneNumber":
+                    mfa_options["Phone"] = field.get("PRE")
+        self._mfa_options = mfa_options
+        return mfa_options
+
+    async def async_select_mfa_option(self, option_id: str) -> None:
+        """Select an MFA option and trigger the code delivery."""
+        _LOGGER.debug("Selecting MFA option %s", option_id)
+        self._option_id = option_id
+        phone_id = "1"
+        # TODO code in the call option if it becomes really necessary
+        mode = "Text" if option_id == "Phone" else "Email"
+        try:
+            result_json = await self._exelon_handler.post(
+                "SelfAsserted",
+                {
+                    "displayEmailAddress": self._mfa_options["Email"],
+                    "displayPhoneNumber": self._mfa_options["Phone"],
+                    "mfaEnabledRadio": mode,
+                    "request_type": "RESPONSE",
+                },
+            )
+        except aiohttp.ClientError as err:
+            raise CannotConnect(f"MFA option selection failed: {err}") from err
+        else:
+            if result_json["status"] != "200":
+                raise InvalidAuth(result_json["message"])
+
+            result, *_ = await self._exelon_handler.get(f"api/{self._exelon_handler.get_api()}/confirmed")
+            settings = _load_javascript(result, "SETTINGS")
+            if settings is None:
+                raise InvalidAuth(f"Failed to confirm MFA option: {self._option_id}")
+            self._exelon_handler.update_settings(settings)
+
+            if self._option_id == "Phone":
+                uv_phone = _load_javascript(result, "UV_PHONE")
+                if uv_phone is None:
+                    raise InvalidAuth("Failed to select phone MFA")
+                phone_id = uv_phone.get("PhoneNumbers", [{"Id": "0"}])[0].get("Id", "0")
+
+        try:
+            if self._option_id == "Phone":
+                result_json = await self._exelon_handler.post(
+                    f"{self._exelon_handler.get_api()}/verify",
+                    {"request_type": "VERIFICATION_REQUEST", "auth_type": "onewaysms", "id": phone_id},
+                )
+            else:
+                result_json = await self._exelon_handler.post(
+                    "SelfAsserted/DisplayControlAction/vbeta/emailVerificationControl/SendCode",
+                    {"displayEmailAddress": self._mfa_options["Email"]},
+                )
+        except aiohttp.ClientError as err:
+            raise CannotConnect(f"MFA verify selection failed: {err}") from err
+        else:
+            if result_json["status"] != "200":
+                raise InvalidAuth(result_json["message"])
+
+        _LOGGER.debug("Successfully selected MFA option")
+
+    async def async_submit_mfa_code(self, code: str) -> dict[str, Any]:
+        """Submit the user-provided code."""
+        _LOGGER.debug("Submitting MFA code")
+        try:
+            if self._option_id == "Phone":
+                result_json = await self._exelon_handler.post(
+                    f"{self._exelon_handler.get_api()}/verify",
+                    {"request_type": "VALIDATION_REQUEST", "verification_code": code},
+                )
+            else:
+                result_json = await self._exelon_handler.post(
+                    "SelfAsserted/DisplayControlAction/vbeta/emailVerificationControl/VerifyCode",
+                    {"displayEmailAddress": self._mfa_options["Email"], "verificationCode": code},
+                )
+
+        except aiohttp.ClientError as err:
+            raise CannotConnect(f"MFA code submission failed: {err}") from err
+        else:
+            if result_json["status"] != "200":
+                raise InvalidAuth("Invalid MFA code")
+
+            # Email and phone have different flows and nothing may come back but we still have to send it
+            if self._option_id == "Email":
+                try:
+                    result_json = await self._exelon_handler.post(
+                        "SelfAsserted",
+                        {
+                            "displayEmailAddress": self._mfa_options["Email"],
+                            "verificationCode": code,
+                            "extension_isMFAEnabled": "True",
+                            "request_type": "RESPONSE",
+                        },
+                    )
+                except aiohttp.ClientError as err:
+                    raise CannotConnect(f"MFA email submission failed: {err}") from err
+                else:
+                    if result_json["status"] != "200":
+                        raise InvalidAuth(result_json["message"])
+
+            _ = await self._exelon_handler.get(f"api/{self._exelon_handler.get_api()}/confirmed")
+            token, account = await self._exelon_handler.get_token()
+
+            if token and account:
+                _LOGGER.debug("MFA code accepted, received login data")
+                return {"token": token, "account": account}
+            raise InvalidAuth("Authentication flow failed")
 
 
 class Exelon:
@@ -49,44 +332,6 @@ class Exelon:
         raise NotImplementedError
 
     @classmethod
-    async def async_account(
-        cls,
-        session: aiohttp.ClientSession,
-        bearer_token: str,
-    ) -> Any:
-        """Return the accounts for the current session."""
-        # this path comes from GetConfiguration, unsure if its different
-        # per utility, if so, would need to add it to the subtypes:
-        # "euApiRoutePrefix": "/mobile/custom",
-        eu_api_route_prefix = "/mobile/custom"
-        # "euApiUrl": "/.euapi",
-        eu_api_url = "/.euapi"
-        async with session.get(
-            "https://" + cls.login_domain() + eu_api_url + eu_api_route_prefix + "/auth/accounts",
-            headers={
-                "User-Agent": USER_AGENT,
-                "Authorization": "Bearer " + bearer_token,
-            },
-            raise_for_status=True,
-        ) as resp:
-            # this has the wrong mime type for some reason
-            result = await resp.json(content_type="text/html")
-
-        if result["success"] is not True:
-            raise InvalidAuth("Unable to list accounts")
-
-        # Only include active accounts (after moving, old accounts have status: "Inactive")
-        # NOTE: this logic currently assumes 1 active address per account, if multiple accounts found
-        #      we default to taking the first in the list. Future enhancement is to support
-        #      multiple accounts (which could result in different subdomain for each)
-        active_accounts = [account for account in result["data"] if account["status"] == "Active"]
-
-        if len(active_accounts) == 0:
-            raise InvalidAuth("No active accounts found")
-
-        return active_accounts[0]
-
-    @classmethod
     async def async_login(
         cls,
         session: aiohttp.ClientSession,
@@ -95,112 +340,60 @@ class Exelon:
         login_data: dict[str, Any],
     ) -> str:
         """Login to the utility website and authorize opower."""
-        async with session.get(
-            "https://" + cls.login_domain() + "/Pages/Login.aspx?/login",
-            headers={"User-Agent": USER_AGENT},
-            raise_for_status=True,
-        ) as resp:
-            result = await resp.text(encoding="utf-8")
+        account = login_data.get("account", {})
+        token: str = str(login_data.get("token", ""))
+        # Initial URL is the login_domain, but it will change if we are redirected
+        exelon_handler = ExelonURLHandler(session, {}, cls.login_domain(), cls.login_domain())
 
-        account = None
-        # if we don't go to /accounts/dashboard, we need to perform some authorization steps
-        if resp.request_info.url.path.endswith("/authorize"):
-            # transId = "StateProperties=..."
-            # policy = "B2C_1A_SignIn"
-            # tenant = "/euazurebge.onmicrosoft.com/B2C_1A_SignIn"
-            # api = "CombinedSigninAndSignup"
-            settings_match = re.search(r"var SETTINGS = ({.*});", result)
-            assert settings_match
-            settings = json.loads(settings_match.group(1))
-            login_post_domain = resp.real_url.host
-            assert login_post_domain
+        if not token or not account:
+            result, path, login_post_domain = await exelon_handler.get("Pages/Login.aspx?/login")
 
-            async with session.post(
-                "https://" + login_post_domain + settings["hosts"]["tenant"] + "/SelfAsserted",
-                params={
-                    "tx": settings["transId"],
-                    "p": settings["hosts"]["policy"],
-                },
-                data={
-                    "request_type": "RESPONSE",
-                    "signInName": username,
-                    "password": password,
-                },
-                headers={
-                    "X-CSRF-TOKEN": settings["csrf"],
-                    "User-Agent": USER_AGENT,
-                },
-                raise_for_status=True,
-            ) as resp:
-                result_json = json.loads(await resp.text(encoding="utf-8"))
+            # if we don't go to /accounts/dashboard, we need to perform some authorization steps
+            if path.endswith("/authorize"):
+                # transId = "StateProperties=..."
+                # policy = "B2C_1A_SignIn"
+                # tenant = "/euazurebge.onmicrosoft.com/B2C_1A_SignIn"
+                # api = "CombinedSigninAndSignup"
+                assert login_post_domain, "no real host found"
+                settings = _load_javascript(result, "SETTINGS")
+                assert settings is not None, "settings not found"
+                base_url = login_post_domain + settings["hosts"]["tenant"]
+                exelon_handler.update_base_url(base_url)
+                exelon_handler.update_settings(settings)
 
-            if result_json["status"] != "200":
-                raise InvalidAuth(result_json["message"])
+                result_json = await exelon_handler.post(
+                    "SelfAsserted",
+                    {
+                        "request_type": "RESPONSE",
+                        "signInName": username,
+                        "password": password,
+                    },
+                )
 
-            async with session.get(
-                "https://" + login_post_domain + settings["hosts"]["tenant"] + "/api/" + settings["api"] + "/confirmed",
-                params={
-                    "rememberMe": settings["config"]["enableRememberMe"],
-                    "csrf_token": settings["csrf"],
-                    "tx": settings["transId"],
-                    "p": settings["hosts"]["policy"],
-                    "diags": json.dumps(
-                        {
-                            "pageViewId": settings["pageViewId"],
-                            "pageId": settings["api"],
-                            "trace": [],
-                        }
-                    ),
-                },
-                headers={"User-Agent": USER_AGENT},
-                raise_for_status=True,
-            ) as resp:
-                result = await resp.text(encoding="utf-8")
+                if result_json["status"] != "200":
+                    raise InvalidAuth(result_json["message"])
 
-            if resp.request_info.url.path.endswith("/accounts/login/select-account") or resp.request_info.url.path.endswith(
-                "Pages/ChangeAccount.aspx"
-            ):
-                # we probably need to select an account as we didn't automatically go to the dashboard
-                async with session.get(
-                    "https://" + cls.login_domain() + "/api/Services/MyAccountService.svc/GetSession",
-                    headers={"User-Agent": USER_AGENT},
-                    raise_for_status=True,
-                ) as resp:
-                    result_json = await resp.json()
+                result, path, _ = await exelon_handler.get(f"api/{exelon_handler.get_api()}/confirmed")
 
-                # confirm no account number is set
-                if result_json["accountNumber"] is None:
-                    bearer_token = result_json["token"]
-                    # if we don't yet have an account, look one up and set it
-                    if account is None:
-                        account = await cls.async_account(session, bearer_token)
+                sa_fields = _load_javascript(result, "SA_FIELDS")
+                settings = _load_javascript(result, "SETTINGS")
+                if settings is None:
+                    raise InvalidAuth("Failed to initiate authorization")
+                if sa_fields is not None:
+                    _LOGGER.debug("MFA challenge received")
+                    exelon_handler.update_settings(settings)
+                    challenge = {
+                        "sa_fields": sa_fields,
+                        "handler": exelon_handler,
+                    }
+                    raise MfaChallenge("Exelon MFA required", ExelonMfaHandler(session, password, challenge))
 
-                    # set the first active one
-                    account_number = account["accountNumber"]
-
-                    async with session.post(
-                        "https://" + cls.login_domain() + "/api/Services/AccountList.svc/ViewAccount",
-                        json={
-                            "accountNumber": account_number,
-                        },
-                        headers={"User-Agent": USER_AGENT},
-                        raise_for_status=True,
-                    ) as resp:
-                        result = await resp.text(encoding="utf-8")
-
-        async with session.post(
-            "https://" + cls.login_domain() + "/api/Services/OpowerService.svc/GetOpowerToken",
-            json={},
-            headers={"User-Agent": USER_AGENT},
-            raise_for_status=True,
-        ) as resp:
-            result_json = await resp.json()
+                if path.endswith("/accounts/login/select-account") or path.endswith("Pages/ChangeAccount.aspx"):
+                    token, account = await exelon_handler.get_token()
 
         # If pepco or delmarva, determine if we should use secondary subdomain
         if cls.login_domain() in ["secure.pepco.com", "secure.delmarva.com"]:
             # Get the account type & state
-            if account is None:
-                account = await cls.async_account(session, result_json["access_token"])
 
             isResidential = account["isResidential"]
             state = account["PremiseInfo"][0]["mainAddress"]["townDetail"]["stateOrProvince"]
@@ -214,4 +407,4 @@ class Exelon:
 
             _LOGGER.debug("detected exelon subdomain to be: %s", Exelon._subdomain)
 
-        return str(result_json["access_token"])
+        return token
