@@ -339,17 +339,15 @@ class Exelon:
                 exelon_handler.update_base_url(base_url)
                 exelon_handler.update_settings(settings)
 
-                result_json = await exelon_handler.post(
+                _ = await exelon_handler.post(
                     "SelfAsserted",
                     {
                         "request_type": "RESPONSE",
                         "signInName": username,
                         "password": password,
                     },
+                    "Initial authorization",
                 )
-
-                if result_json["status"] != "200":
-                    raise InvalidAuth(result_json["message"])
 
                 result, path, _ = await exelon_handler.get(f"api/{exelon_handler.get_api()}/confirmed")
 
@@ -368,6 +366,8 @@ class Exelon:
 
                 if path.endswith("/accounts/login/select-account") or path.endswith("Pages/ChangeAccount.aspx"):
                     token, account = await exelon_handler.get_token()
+            else:
+                raise InvalidAuth("Site is down or has changed behavior")
 
         # If pepco or delmarva, determine if we should use secondary subdomain
         if cls.login_domain() in ["secure.pepco.com", "secure.delmarva.com"]:
