@@ -188,42 +188,72 @@ class ExelonMfaHandler(MfaHandlerBase):
         self._exelon_handler: ExelonURLHandler = data.get("handler", ExelonURLHandler(self._session, {}, "", ""))
         self._sa_fields = data.get("sa_fields", {})
         self._mfa_options: dict[str, str] = {}
+        self._option_id = "Unknown"
 
     async def async_get_mfa_options(self) -> dict[str, str]:
         """Return a dictionary of MFA options available to the user."""
+        # What is currently known are 2 forms of MFA:
+        # Forced and opted, where opted has a phone based MFA that no one
+        # knows how to remove.
+        # This results in two forms of logic handled, if this logic breaks
+        # check this section and review sa_fields as this is what is known:
+
         mfa_options: dict[str, str] = {}
+        phone_mfa_off = False
+        bypass_selection = False
         if fields := self._sa_fields.get("AttributeFields", []):
             for field in fields:
+                # Logic for forced MFA where there is only email
+                if field.get("ID") == "extension_isMFAEnabled":
+                    if field.get("PRE") == "False":
+                        _LOGGER.debug("Phone based MFA is off")
+                        phone_mfa_off = True
+                    else:
+                        _LOGGER.error("MFA condition is not mapped")
+                if field.get("ID") == "emailVerificationControl":
+                    for display in field.get("DISPLAY_FIELDS", []):
+                        if display.get("ID") == "displayEmailAddress":
+                            mfa_options["Email"] = display.get("PRE")
+                            bypass_selection = True
+
+                # Logic for MFA that was opted in with phone
                 if field.get("ID") == "displayEmailAddress":
                     mfa_options["Email"] = field.get("PRE")
                 if field.get("ID") == "displayPhoneNumber":
                     mfa_options["Text"] = field.get("PRE")
         self._mfa_options = mfa_options
+
+        # The user will have a choice since normal MFA flow offers
+        # this, however we need to designate between forced and opted
+        if phone_mfa_off and bypass_selection:
+            self._option_id = "Bypass"
         return mfa_options
 
     async def async_select_mfa_option(self, option_id: str) -> None:
         """Select an MFA option and trigger the code delivery."""
         _LOGGER.debug("Selecting MFA option %s", option_id)
-        self._option_id = option_id
-        # NOTE MFA supports Text, Email, and Call
-        # Call requires polling, which is outside
-        # the scope of supporting this type of flow
-        _ = await self._exelon_handler.post(
-            "SelfAsserted",
-            {
-                "displayEmailAddress": self._mfa_options["Email"],
-                "displayPhoneNumber": self._mfa_options["Text"],
-                "mfaEnabledRadio": self._option_id,
-                "request_type": "RESPONSE",
-            },
-            "MFA setup",
-        )
 
-        result, *_ = await self._exelon_handler.get(f"api/{self._exelon_handler.get_api()}/confirmed")
-        settings = _load_javascript(result, "SETTINGS")
-        if settings is None:
-            raise InvalidAuth(f"Failed to confirm MFA option: {self._option_id}")
-        self._exelon_handler.update_settings(settings)
+        if self._option_id != "Bypass":
+            self._option_id = option_id
+            # NOTE MFA supports Text, Email, and Call
+            # Call requires polling, which is outside
+            # the scope of supporting this type of flow
+            _ = await self._exelon_handler.post(
+                "SelfAsserted",
+                {
+                    "displayEmailAddress": self._mfa_options["Email"],
+                    "displayPhoneNumber": self._mfa_options["Text"],
+                    "mfaEnabledRadio": self._option_id,
+                    "request_type": "RESPONSE",
+                },
+                "MFA setup",
+            )
+
+            result, *_ = await self._exelon_handler.get(f"api/{self._exelon_handler.get_api()}/confirmed")
+            settings = _load_javascript(result, "SETTINGS")
+            if settings is None:
+                raise InvalidAuth(f"Failed to confirm MFA option: {self._option_id}")
+            self._exelon_handler.update_settings(settings)
 
         if self._option_id == "Text":
             uv_phone = _load_javascript(result, "UV_PHONE")
@@ -253,7 +283,7 @@ class ExelonMfaHandler(MfaHandlerBase):
         _ = await self._exelon_handler.post(submit_url, submit_data, "MFA code")
 
         # Email and phone have different flows and nothing may come back but we still have to send it
-        if self._option_id == "Email":
+        if self._option_id == "Email" or self._option_id == "Bypass":
             _ = await self._exelon_handler.post(
                 "SelfAsserted",
                 {
