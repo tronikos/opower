@@ -350,13 +350,12 @@ class Exelon:
         """Login to the utility website and authorize opower."""
         account = login_data.get("account", {})
         token: str = str(login_data.get("token", ""))
-        # Initial URL is the login_domain, but it will change if we are redirected
         exelon_handler = ExelonURLHandler(session, {}, cls.login_domain(), cls.login_domain())
 
         if not token or not account:
             result, path, login_post_domain = await exelon_handler.get("Pages/Login.aspx?/login")
 
-            # if we don't go to /accounts/dashboard, we need to perform some authorization steps
+            # If we are redirected to /authorize, we need to perform the B2C login flow
             if path.endswith("/authorize"):
                 # transId = "StateProperties=..."
                 # policy = "B2C_1A_SignIn"
@@ -379,14 +378,14 @@ class Exelon:
                     "Initial authorization",
                 )
 
-                result, path, _ = await exelon_handler.get(f"api/{exelon_handler.get_api()}/confirmed")
+                result, _, _ = await exelon_handler.get(f"api/{exelon_handler.get_api()}/confirmed")
 
                 sa_fields = _load_javascript(result, "SA_FIELDS")
-                settings = _load_javascript(result, "SETTINGS")
-                if settings is None:
-                    raise InvalidAuth("Failed to initiate authorization")
                 if sa_fields is not None:
                     _LOGGER.debug("MFA challenge received")
+                    settings = _load_javascript(result, "SETTINGS")
+                    if settings is None:
+                        raise InvalidAuth("Failed to get settings for MFA challenge")
                     exelon_handler.update_settings(settings)
                     challenge = {
                         "sa_fields": sa_fields,
@@ -394,14 +393,15 @@ class Exelon:
                     }
                     raise MfaChallenge("Exelon MFA required", ExelonMfaHandler(session, password, challenge))
 
-                if path.endswith("/accounts/login/select-account") or path.endswith("Pages/ChangeAccount.aspx"):
-                    token, account = await exelon_handler.get_token()
-            else:
-                raise InvalidAuth("Site is down or has changed behavior")
+            # If we reach here, login was successful (either via non-MFA B2C flow,
+            # or because we were already logged in). Now we get the token and account info.
+            token, account = await exelon_handler.get_token()
 
         # If pepco or delmarva, determine if we should use secondary subdomain
         if cls.login_domain() in ["secure.pepco.com", "secure.delmarva.com"]:
             # Get the account type & state
+            if not account:
+                raise InvalidAuth("Could not retrieve account details required for subdomain selection.")
 
             isResidential = account["isResidential"]
             state = account["PremiseInfo"][0]["mainAddress"]["townDetail"]["stateOrProvince"]
