@@ -95,11 +95,11 @@ class ExelonURLHandler:
         return result_json
 
     async def get_token(self) -> tuple[str, dict[str, Any]]:
-        """Return the the first account and the associated bearer token."""
+        """Return the first account and the associated bearer token."""
         # we probably need to select an account as we didn't automatically go to the dashboard
         # so we store these details, always looking up the account
 
-        account = {}
+        account: dict[str, Any] = {}
 
         async with self._session.get(
             f"https://{self._login_domain}/api/Services/MyAccountService.svc/GetSession",
@@ -108,12 +108,19 @@ class ExelonURLHandler:
         ) as resp:
             result_json = await resp.json()
 
-        if not result_json["token"]:
+        if not result_json.get("token"):
             _LOGGER.error("No token provided, authentication flow likely failed")
             return "", {}
 
-        # confirm no account number is set otherwise we can use this account
-        if result_json["accountNumber"] is None:
+        # If all necessary fields are present then we can use the Session data structure,
+        # otherwise we need to retrieve the accounts explicitly.
+        try:
+            state = result_json["PremiseInfo"][0]["mainAddress"]["townDetail"]["stateOrProvince"]
+        except (KeyError, IndexError):
+            state = None
+        if result_json.get("accountNumber") and result_json.get("isResidential") and state:
+            account = result_json
+        else:
             bearer_token = result_json["token"]
 
             # this path comes from GetConfiguration, unsure if its different
@@ -133,21 +140,20 @@ class ExelonURLHandler:
                 # this has the wrong mime type for some reason
                 result = await resp.json(content_type="text/html")
 
-            if result["success"] is not True:
+            if result.get("success") is not True:
                 raise InvalidAuth("Unable to list accounts")
 
             # Only include active accounts (after moving, old accounts have status: "Inactive")
             # NOTE: this logic currently assumes 1 active address per account, if multiple accounts found
             #      we default to taking the first in the list. Future enhancement is to support
             #      multiple accounts (which could result in different subdomain for each)
-            active_accounts = [account for account in result["data"] if account["status"] == "Active"]
+            active_accounts = [account for account in result.get("data", []) if account.get("status") == "Active"]
 
             if len(active_accounts) == 0:
                 raise InvalidAuth("No active accounts found")
 
-            account = active_accounts[0]
-
             # set the first active one
+            account = active_accounts[0]
             account_number = account["accountNumber"]
 
             async with self._session.post(
@@ -159,8 +165,6 @@ class ExelonURLHandler:
                 raise_for_status=True,
             ) as resp:
                 result = await resp.text(encoding="utf-8")
-        else:
-            account = result_json
 
         async with self._session.post(
             f"https://{self._login_domain}/api/Services/OpowerService.svc/GetOpowerToken",
