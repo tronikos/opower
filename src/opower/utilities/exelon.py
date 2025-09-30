@@ -440,4 +440,3 @@ class Exelon:
             _LOGGER.debug("detected exelon subdomain to be: %s", Exelon._subdomain)
 
         return token
-
