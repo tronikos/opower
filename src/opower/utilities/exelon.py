@@ -416,6 +416,9 @@ class Exelon:
                 raise InvalidAuth("Site is down or has changed behavior")
 
         token, account, _ = await exelon_handler.get_token()
+        if not token:
+            raise InvalidAuth("Reauthentication is needed")
+
         # If pepco or delmarva, determine if we should use secondary subdomain
         if cls.login_domain() in ["secure.pepco.com", "secure.delmarva.com"]:
             # Get the account type & state
@@ -433,3 +436,4 @@ class Exelon:
             _LOGGER.debug("detected exelon subdomain to be: %s", Exelon._subdomain)
 
         return token
+
