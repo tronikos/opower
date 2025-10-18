@@ -210,7 +210,8 @@ class ExelonURLHandler:
             ) as resp:
                 result_json = await resp.json()
         except aiohttp.ClientError as err:
-            raise InvalidAuth(f"Failed to obtain refresh token thus likely unauthorized due to error: {err}") from err
+            _LOGGER.warning("Failed to obtain refresh token thus likely unauthorized due to error: %s", err)
+            return {}
 
         return result_json
 
@@ -389,14 +390,13 @@ class ExelonMfaHandler(MfaHandlerBase):
         # Here we catch the redirect_uri which will contain our initial authorization code
         _, path, _ = await self._exelon_handler.getapi("confirmed", redirects=False)
 
-        token, refresh_token, account = await self._exelon_handler.get_token(account=None, code=path)
+        _, refresh_token, account = await self._exelon_handler.get_token(account=None, code=path)
 
-        if token and account and refresh_token:
+        if account and refresh_token:
             _LOGGER.debug("MFA code accepted, received all necessary login data")
             return {
-                "token": token,
+                "token": refresh_token,
                 "account": account,
-                "refresh_token": refresh_token,
                 "base_url": self._exelon_handler.get_base_url(),
             }
 
@@ -459,7 +459,6 @@ class Exelon:
         """Login to the utility website and authorize opower."""
         account: dict[str, Any] | None = login_data.get("account")
         token: str = str(login_data.get("token", ""))
-        refresh_token: str = str(login_data.get("refresh_token", ""))
         base_url: str = str(login_data.get("base_url", cls.login_domain()))
         # Initial URL is the login_domain, but it will change if we are redirected
 
@@ -469,12 +468,19 @@ class Exelon:
             base_url=base_url,
             eu_domain=cls.eu_domain(),
             login_domain=cls.login_domain(),
-            refresh_token=refresh_token,
+            refresh_token=token,
             client_id=client_id,
             mobile_id=mobile_id,
         )
 
-        if not account:
+        opower_token = ""
+        if account:  # We will always refresh the tokens
+            opower_token, _, account = await exelon_handler.get_token(account, "")
+
+        if not account or not opower_token:
+            # Either an unexpected auth connection or first time so we setup our mobile
+            # redirect stack to restart the MFA authentication flow cleanly
+            exelon_handler.update_base_url(cls.login_domain())
             result, path, login_post_domain = await exelon_handler.getapi("Pages/Login.aspx?/login")
 
             # Make sure we were redirected to an authorize endpoint which changes our base URL
@@ -511,18 +517,12 @@ class Exelon:
                         "handler": exelon_handler,
                     }
                     raise MfaChallenge(
-                        "Exelon MFA required",
+                        "Reauthentication required" if token else "Exelon MFA required",
                         ExelonMfaHandler(session, password, challenge),
                     )
                 raise InvalidAuth("This integration only supports MFA authentication")
 
             raise InvalidAuth("Site is down or has changed behavior")
-
-        # We will always refresh the tokens
-        token, _, account = await exelon_handler.get_token(account, "")
-
-        if not token:
-            raise InvalidAuth("Reauthentication is needed")
 
         # If pepco or delmarva, determine if we should use secondary subdomain
         if cls.login_domain() in ["secure.pepco.com", "secure.delmarva.com"]:
@@ -540,4 +540,4 @@ class Exelon:
 
             _LOGGER.debug("detected exelon subdomain to be: %s", Exelon._subdomain)
 
-        return token
+        return opower_token
