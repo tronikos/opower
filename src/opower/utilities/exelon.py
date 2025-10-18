@@ -241,11 +241,11 @@ class ExelonURLHandler:
 
             if len(active_accounts) == 0:
                 raise InvalidAuth("No active accounts found")
+            if len(active_accounts) > 1:
+                _LOGGER.info("Found multiple active accounts, using %s", active_accounts[0].get("accountNumber", ""))
+            return active_accounts[0]
         except aiohttp.ClientError as err:
             raise CannotConnect(f"Cannot obtain account information, unauthorized with error: {err}") from err
-
-        # set the first active one
-        return active_accounts[0]
 
     async def get_token(self, account: dict[str, Any] | None, code: str) -> tuple[str, str, dict[str, Any]]:
         """Return the the first account and the associated tokens for our authorization."""
@@ -528,14 +528,17 @@ class Exelon:
         if cls.login_domain() in ["secure.pepco.com", "secure.delmarva.com"]:
             # Get the account type & state
 
-            is_residential = account["isResidential"]
-            state = account["PremiseInfo"][0]["mainAddress"]["townDetail"]["stateOrProvince"]
+            is_residential = account.get("isResidential", False)
+            try:
+                state = account["PremiseInfo"][0]["mainAddress"]["townDetail"]["stateOrProvince"]
+            except (KeyError, IndexError):
+                state = None
             _LOGGER.debug("found exelon account isResidential: %s", is_residential)
             _LOGGER.debug("found exelon account state: %s", state)
 
             # Determine subdomain to use by matching logic found in https://cls.login_domain()/dist/app.js
             Exelon._subdomain = cls.primary_subdomain()
-            if not is_residential or state != "MD":
+            if not (is_residential and state == "MD"):
                 Exelon._subdomain = cls.secondary_subdomain()
 
             _LOGGER.debug("detected exelon subdomain to be: %s", Exelon._subdomain)
