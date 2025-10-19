@@ -12,8 +12,7 @@ class ComEd(Exelon, UtilityBase):
         """Distinct recognizable name of the utility."""
         return "Commonwealth Edison (ComEd)"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         return "cec"
 

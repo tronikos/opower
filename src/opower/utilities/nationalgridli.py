@@ -12,7 +12,6 @@ class NationalGridLI(NationalGrid, UtilityBase):
         """Return the name of the utility."""
         return "National Grid (Long Island)"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         return "ngli"

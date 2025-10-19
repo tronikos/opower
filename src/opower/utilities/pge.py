@@ -149,8 +149,7 @@ class PGE(UtilityBase):
         """Distinct recognizable name of the utility."""
         return "Pacific Gas and Electric Company (PG&E)"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         return "pge"
 
@@ -159,8 +158,8 @@ class PGE(UtilityBase):
         """Return the timezone."""
         return "America/Los_Angeles"
 
-    @staticmethod
     async def async_login(
+        self,
         session: aiohttp.ClientSession,
         username: str,
         password: str,

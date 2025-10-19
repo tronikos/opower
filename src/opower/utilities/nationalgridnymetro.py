@@ -12,12 +12,10 @@ class NationalGridNYMetro(NationalGrid, UtilityBase):
         """Distinct recognizable name of the utility."""
         return "National Grid (NY Metro)"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         return "ngny-gas"
 
-    @classmethod
-    def utilitycode(cls) -> str:
+    def utilitycode(self) -> str:
         """Return the utilitycode identifier for the utility."""
         return "ngbk"

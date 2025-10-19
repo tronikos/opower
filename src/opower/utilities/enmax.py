@@ -20,8 +20,7 @@ class Enmax(UtilityBase):
         """Distinct recognizable name of the utility."""
         return "Enmax Energy"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         return "enmx"
 
@@ -30,8 +29,8 @@ class Enmax(UtilityBase):
         """Return the timezone."""
         return "America/Edmonton"
 
-    @staticmethod
     async def async_login(
+        self,
         session: aiohttp.ClientSession,
         username: str,
         password: str,

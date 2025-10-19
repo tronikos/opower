@@ -24,8 +24,7 @@ class SMECO(UtilityBase):
         """Return a distinct, human-readable name for this utility."""
         return "Southern Maryland Electric Cooperative (SMECO)"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         # The SMECO DSS portal lives at dss-smcc.opower.com, so the subdomain is
         # ``smcc``.  Opower API calls will be made against ``smcc.opower.com``.
@@ -42,8 +41,8 @@ class SMECO(UtilityBase):
         """Indicate that this utility uses the DSS version of the portal."""
         return True
 
-    @staticmethod
     async def async_login(
+        self,
         session: aiohttp.ClientSession,
         username: str,
         password: str,

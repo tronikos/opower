@@ -33,8 +33,8 @@ class NationalGrid:
     SELF_ASSERTED_ENDPOINT = "SelfAsserted"
     POLICY_CONFIRM_ENDPOINT = "api/CombinedSigninAndSignup/confirmed"
 
-    @staticmethod
     async def async_login(
+        self,
         session: aiohttp.ClientSession,
         username: str,
         password: str,

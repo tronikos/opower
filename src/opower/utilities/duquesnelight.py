@@ -48,8 +48,7 @@ class DuquesneLight(UtilityBase):
         """Distinct recognizable name of the utility."""
         return "Duquesne Light Company (DQE)"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         return "duq"
 
@@ -58,8 +57,8 @@ class DuquesneLight(UtilityBase):
         """Return the timezone."""
         return "America/New_York"
 
-    @staticmethod
     async def async_login(
+        self,
         session: aiohttp.ClientSession,
         username: str,
         password: str,

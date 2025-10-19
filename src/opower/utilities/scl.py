@@ -35,8 +35,7 @@ class SCL(UtilityBase):
         """Distinct recognizable name of the utility."""
         return "Seattle City Light (SCL)"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         return "scl"
 
@@ -45,8 +44,8 @@ class SCL(UtilityBase):
         """Return the timezone."""
         return "America/Los_Angeles"
 
-    @staticmethod
     async def async_login(
+        self,
         session: aiohttp.ClientSession,
         username: str,
         password: str,

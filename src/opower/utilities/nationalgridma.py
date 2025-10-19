@@ -12,7 +12,6 @@ class NationalGridMA(NationalGrid, UtilityBase):
         """Distinct recognizable name of the utility."""
         return "National Grid (MA)"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         return "ngma"

@@ -20,8 +20,7 @@ class COAUtilities(UtilityBase):
         """Distinct recognizable name of the utility."""
         return "City of Austin Utilities"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         return "coa"
 
@@ -38,8 +37,8 @@ class COAUtilities(UtilityBase):
         """Check if Utility using DSS version of the portal."""
         return True
 
-    @staticmethod
     async def async_login(
+        self,
         session: aiohttp.ClientSession,
         username: str,
         password: str,

@@ -329,26 +329,28 @@ class EvergyLoginHandler:
 class Evergy(UtilityBase):
     """Evergy."""
 
-    _subdomain: str | None = None
+    def __init__(self) -> None:
+        """Initialize."""
+        super().__init__()
+        self._subdomain: str | None = None
 
     @staticmethod
     def name() -> str:
         """Distinct recognizable name of the utility."""
         return "Evergy"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
-        assert Evergy._subdomain, "async_login not called"
-        return Evergy._subdomain
+        assert self._subdomain, "async_login not called"
+        return self._subdomain
 
     @staticmethod
     def timezone() -> str:
         """Return the timezone."""
         return "America/Chicago"
 
-    @staticmethod
     async def async_login(
+        self,
         session: aiohttp.ClientSession,
         username: str,
         password: str,
@@ -379,12 +381,12 @@ class Evergy(UtilityBase):
             data = await resp.json(content_type=None)
             # shape is: [{"accountNumber": 123456789, "oPowerDomain": "kcpl.opower.com", ...}]
             domain: str = data[0]["oPowerDomain"]
-            Evergy._subdomain = domain.split(".", 1)[0]
-            _LOGGER.debug("detected Evergy subdomain: %s", Evergy._subdomain)
-            if Evergy._subdomain not in {"kcpk", "kcpl"}:
+            self._subdomain = domain.split(".", 1)[0]
+            _LOGGER.debug("detected Evergy subdomain: %s", self._subdomain)
+            if self._subdomain not in {"kcpk", "kcpl"}:
                 _LOGGER.warning(
                     "unexpected Evergy subdomain %s, continuing",
-                    Evergy._subdomain,
+                    self._subdomain,
                 )
 
         return opower_access_token

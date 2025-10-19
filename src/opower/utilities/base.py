@@ -6,28 +6,33 @@ from typing import Any, ClassVar
 import aiohttp
 
 
-class UtilityBase:
+class UtilityBase(abc.ABC):
     """Base class that each utility needs to extend."""
 
     subclasses: ClassVar[list[type["UtilityBase"]]] = []
-    _totp_secret: str | None = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Keep track of all subclass implementations."""
         super().__init_subclass__(**kwargs)
         cls.subclasses.append(cls)
 
+    def __init__(self) -> None:
+        """Initialize."""
+        self._totp_secret: str | None = None
+
     @staticmethod
+    @abc.abstractmethod
     def name() -> str:
         """Distinct recognizable name of the utility."""
         raise NotImplementedError
 
-    @staticmethod
-    def subdomain() -> str:
+    @abc.abstractmethod
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         raise NotImplementedError
 
     @staticmethod
+    @abc.abstractmethod
     def timezone() -> str:
         """Return the timezone.
 
@@ -45,23 +50,22 @@ class UtilityBase:
         """Check if Utility using DSS version of the portal."""
         return False
 
-    @classmethod
-    def utilitycode(cls) -> str:
+    def utilitycode(self) -> str:
         """Return the utilitycode identifier for the utility."""
-        return cls.subdomain()
+        return self.subdomain()
 
     @staticmethod
     def supports_realtime_usage() -> bool:
         """Check if Utility supports realtime usage reads."""
         return False
 
-    @classmethod
-    def set_totp_secret(cls, totp_secret: str) -> None:
+    def set_totp_secret(self, totp_secret: str) -> None:
         """Set the TOTP secret."""
-        cls._totp_secret = totp_secret
+        self._totp_secret = totp_secret
 
-    @staticmethod
+    @abc.abstractmethod
     async def async_login(
+        self,
         session: aiohttp.ClientSession,
         username: str,
         password: str,

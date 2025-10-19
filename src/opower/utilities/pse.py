@@ -63,8 +63,7 @@ class PSE(UtilityBase):
         """Distinct recognizable name of the utility."""
         return "Puget Sound Energy (PSE)"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         return "pse"
 
@@ -73,8 +72,8 @@ class PSE(UtilityBase):
         """Return the timezone."""
         return "America/Los_Angeles"
 
-    @staticmethod
     async def async_login(
+        self,
         session: aiohttp.ClientSession,
         username: str,
         password: str,

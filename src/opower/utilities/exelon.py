@@ -406,11 +406,13 @@ class ExelonMfaHandler(MfaHandlerBase):
 class Exelon:
     """Base class for Exelon subsidiaries."""
 
-    _subdomain: str | None = None
-
-    # Can find the opower.com subdomain using the GetConfiguration endpoint
-    # e.g. https://secure.bge.com/api/Services/MyAccountService.svc/GetConfiguration
-    # returns bgec.opower.com
+    def __init__(self) -> None:
+        """Initialize."""
+        super().__init__()
+        # Can find the opower.com subdomain using the GetConfiguration endpoint
+        # e.g. https://secure.bge.com/api/Services/MyAccountService.svc/GetConfiguration
+        # returns bgec.opower.com
+        self._subdomain: str | None = None
 
     @staticmethod
     def timezone() -> str:
@@ -422,11 +424,10 @@ class Exelon:
         """Return the domain that hosts the login page."""
         raise NotImplementedError
 
-    @classmethod
-    def subdomain(cls) -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
-        assert Exelon._subdomain, "async_login not called"
-        return Exelon._subdomain
+        assert self._subdomain, "async_login not called"
+        return self._subdomain
 
     @staticmethod
     def primary_subdomain() -> str:
@@ -448,9 +449,8 @@ class Exelon:
         """Return the client id and mobile id pair used by this utility."""
         raise NotImplementedError
 
-    @classmethod
     async def async_login(
-        cls,
+        self,
         session: aiohttp.ClientSession,
         username: str,
         password: str,
@@ -459,15 +459,15 @@ class Exelon:
         """Login to the utility website and authorize opower."""
         account: dict[str, Any] | None = login_data.get("account")
         token: str = str(login_data.get("token", ""))
-        base_url: str = str(login_data.get("base_url", cls.login_domain()))
+        base_url: str = str(login_data.get("base_url", self.login_domain()))
         # Initial URL is the login_domain, but it will change if we are redirected
 
-        client_id, mobile_id = cls.mobile_client()
+        client_id, mobile_id = self.mobile_client()
         exelon_handler = ExelonURLHandler(
             session=session,
             base_url=base_url,
-            eu_domain=cls.eu_domain(),
-            login_domain=cls.login_domain(),
+            eu_domain=self.eu_domain(),
+            login_domain=self.login_domain(),
             refresh_token=token,
             client_id=client_id,
             mobile_id=mobile_id,
@@ -480,7 +480,7 @@ class Exelon:
         if not account or not opower_token:
             # Either an unexpected auth connection or first time so we setup our mobile
             # redirect stack to restart the MFA authentication flow cleanly
-            exelon_handler.update_base_url(cls.login_domain())
+            exelon_handler.update_base_url(self.login_domain())
             result, path, login_post_domain = await exelon_handler.getapi("Pages/Login.aspx?/login")
 
             # Make sure we were redirected to an authorize endpoint which changes our base URL
@@ -525,7 +525,7 @@ class Exelon:
             raise InvalidAuth("Site is down or has changed behavior")
 
         # If pepco or delmarva, determine if we should use secondary subdomain
-        if cls.login_domain() in ["secure.pepco.com", "secure.delmarva.com"]:
+        if self.login_domain() in ["secure.pepco.com", "secure.delmarva.com"]:
             # Get the account type & state
 
             is_residential = account.get("isResidential", False)
@@ -537,10 +537,10 @@ class Exelon:
             _LOGGER.debug("found exelon account state: %s", state)
 
             # Determine subdomain to use by matching logic found in https://cls.login_domain()/dist/app.js
-            Exelon._subdomain = cls.primary_subdomain()
+            self._subdomain = self.primary_subdomain()
             if not (is_residential and state == "MD"):
-                Exelon._subdomain = cls.secondary_subdomain()
+                self._subdomain = self.secondary_subdomain()
 
-            _LOGGER.debug("detected exelon subdomain to be: %s", Exelon._subdomain)
+            _LOGGER.debug("detected exelon subdomain to be: %s", self._subdomain)
 
         return opower_token
