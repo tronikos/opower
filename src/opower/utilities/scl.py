@@ -14,7 +14,7 @@ from .helpers import get_form_action_url_and_hidden_inputs
 
 def _get_session_storage_values(html: str) -> dict[str, str]:
     """Return the items set in session storage on login.seattle.gov."""
-    items = {}
+    items: dict[str, str] = {}
     for match in re.finditer(r"sessionStorage\.setItem\(\"(.*?)\",\s*['\"](.*)['\"]\)", html):
         items[match.group(1)] = match.group(2)
     return items

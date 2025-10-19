@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import secrets
-import urllib
+import urllib.parse
 from typing import Any
 
 import aiohttp
@@ -104,7 +104,7 @@ class ExelonURLHandler:
 
         As such it will return the result and for redirects the path and the host
         """
-        params = {}
+        params: dict[str, Any] = {}
         final_url = url
         if self._settings:  # Case 2 or 3 else case 1
             final_url = f"api/{self._settings.get('api', '')}/{url}"
@@ -512,7 +512,7 @@ class Exelon:
                 sa_fields = _load_javascript(result, "SA_FIELDS")
                 if sa_fields is not None:
                     _LOGGER.debug("MFA challenge received")
-                    challenge = {
+                    challenge: dict[str, Any] = {
                         "sa_fields": sa_fields,
                         "handler": exelon_handler,
                     }

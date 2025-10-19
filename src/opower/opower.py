@@ -215,10 +215,10 @@ class Opower:
 
         Typically one account for electricity and one for gas.
         """
-        accounts = []
+        accounts: list[Account] = []
         for customer in await self._async_get_customers():
-            utility_accounts = []
-            utility_account_ids = []
+            utility_accounts: list[Any] = []
+            utility_account_ids: list[str] = []
             for account in customer["utilityAccounts"]:
                 utility_accounts.append(account)
                 utility_account_ids.append(account["preferredUtilityAccountId"])
@@ -243,7 +243,7 @@ class Opower:
 
         One forecast for each account, typically one for electricity, one for gas.
         """
-        forecasts = []
+        forecasts: list[Forecast] = []
         for customer in await self._async_get_customers():
             customer_uuid = customer["uuid"]
             url = (
@@ -266,8 +266,8 @@ class Opower:
                     result["totalMetadata"],
                 )
                 continue
-            account_forecasts = []
-            utility_account_ids = []
+            account_forecasts: list[Any] = []
+            utility_account_ids: list[str] = []
             for forecast in result["accountForecasts"]:
                 account_forecasts.append(forecast)
                 utility_account_ids.append(str(forecast["preferredUtilityAccountId"]))
@@ -352,7 +352,7 @@ class Opower:
         Opower typically keeps historical cost data for 3 years.
         """
         reads = await self._async_get_dated_data(account, aggregate_type, start_date, end_date, usage_only)
-        result = []
+        result: list[CostRead] = []
         for read in reads:
             result.append(
                 CostRead(
@@ -388,7 +388,7 @@ class Opower:
         Opower typically keeps historical usage data for a bit over 3 years.
         """
         reads = await self._async_get_dated_data(account, aggregate_type, start_date, end_date, usage_only=True)
-        result = []
+        result: list[UsageRead] = []
         for read in reads:
             result.append(
                 UsageRead(
@@ -549,7 +549,7 @@ class Opower:
         if self.access_token:
             headers["authorization"] = f"Bearer {self.access_token}"
 
-        opower_selected_entities = []
+        opower_selected_entities: list[str] = []
         if self.utility.is_dss() and self.user_accounts:
             # Required for DSS endpoints
             opower_selected_entities.append(f"urn:session:account:{self._get_account_id()}")

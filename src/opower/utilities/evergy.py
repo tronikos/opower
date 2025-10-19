@@ -50,7 +50,7 @@ class EvergyLoginHandler:
         self.connectionId: str
         self.interactionId: str
         self.flowId: str
-        self.ID: str
+        self.id: str
 
     async def get_auth_data(self) -> None:
         """Parse davinci widget for api data."""
@@ -111,7 +111,7 @@ class EvergyLoginHandler:
             raise_for_status=True,
         ) as resp:
             data = await resp.json()
-            self.ID = data["id"]
+            self.id = data["id"]
             self.connectionId = data["connectionId"]
             self.interactionId = data["interactionId"]
             self.flowId = data["flowId"]
@@ -138,14 +138,14 @@ class EvergyLoginHandler:
             },
             data=json.dumps(
                 {
-                    "id": self.ID,
+                    "id": self.id,
                     "eventName": "continue",
                 }
             ),
             raise_for_status=True,
         ) as resp:
             data = await resp.json()
-            self.ID = data["id"]
+            self.id = data["id"]
 
     async def submit_login_form(self, username: str, password: str) -> None:
         """Login to the utility website."""
@@ -169,7 +169,7 @@ class EvergyLoginHandler:
             },
             data=json.dumps(
                 {
-                    "id": self.ID,
+                    "id": self.id,
                     "nextEvent": {
                         "constructType": "skEvent",
                         "eventName": "continue",
@@ -194,9 +194,9 @@ class EvergyLoginHandler:
             if data["flowId"] != self.flowId:
                 raise InvalidAuth("No such username. Login failed.")
             """If the submitted login form returns the same ID, then the password isn't correct."""
-            if data["id"] == self.ID:
+            if data["id"] == self.id:
                 raise InvalidAuth("Wrong password. Login failed.")
-            self.ID = data["id"]
+            self.id = data["id"]
 
     async def get_new_connection_id(self) -> None:
         """Retrieve new connection id."""
@@ -218,11 +218,11 @@ class EvergyLoginHandler:
                 "Content-Type": "application/json",
                 "Origin": "https://www.evergy.com",
             },
-            data=json.dumps({"id": self.ID, "eventName": "continue"}),
+            data=json.dumps({"id": self.id, "eventName": "continue"}),
             raise_for_status=True,
         ) as resp:
             data = await resp.json()
-            self.ID = data["id"]
+            self.id = data["id"]
             self.connectionId = data["connectionId"]
 
     async def get_new_connection_cookie(self) -> None:
@@ -248,13 +248,13 @@ class EvergyLoginHandler:
                 {
                     "eventName": "complete",
                     "parameters": {},
-                    "id": self.ID,
+                    "id": self.id,
                 }
             ),
             raise_for_status=True,
         ) as resp:
             data = await resp.json()
-            self.ID = data["id"]
+            self.id = data["id"]
 
     async def get_new_access_token(self) -> None:
         """Set cookie and generate new access_token."""
@@ -279,13 +279,13 @@ class EvergyLoginHandler:
                 {
                     "eventName": "complete",
                     "parameters": {},
-                    "id": self.ID,
+                    "id": self.id,
                 }
             ),
             raise_for_status=True,
         ) as resp:
             data = await resp.json()
-            self.ID = data["id"]
+            self.id = data["id"]
             self.access_token = data["access_token"]
 
     async def postprocessing_api(self) -> None:
