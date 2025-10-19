@@ -90,7 +90,7 @@ async def _main() -> None:
     utility_class = select_utility(utility)
     username = args.username or input("Username: ")
     password = args.password or getpass("Password: ")
-    totp_secret = args.totp_secret or (input("TOTP secret: ") if utility_class.accepts_totp_secret() else None)
+    totp_secret = args.totp_secret or (getpass("TOTP secret: ") if utility_class.accepts_totp_secret() else None)
     login_data = None
     if args.login_data_file:
         try:
