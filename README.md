@@ -22,7 +22,6 @@ This library is used by the [Opower integration in Home Assistant](https://www.h
 - Consolidated Edison (ConEd)
   - Orange & Rockland Utilities (ORU)
 - Duquesne Light Company (DQE)
-- Enmax Energy
 - Evergy
 - Exelon subsidiaries
   - Atlantic City Electric
