@@ -16,7 +16,6 @@ This library is used by the [Opower integration in Home Assistant](https://www.h
   - Kentucky Power
   - Public Service Company of Oklahoma (PSO)
   - Southwestern Electric Power Company (SWEPCO)
-- Arizona Public Service (APS)
 - Burbank Water and Power (BWP)
 - City of Austin Utilities
 - Consolidated Edison (ConEd)
