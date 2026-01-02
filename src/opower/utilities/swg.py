@@ -42,15 +42,16 @@ class SouthwestGas(UtilityBase):
         login_data: dict[str, Any],
     ) -> str | None:
         """Authenticate against the SWG Opower portal."""
-        
         # 1. Define URLs
         base_url = f"https://{self.subdomain()}.opower.com"
         login_page_url = f"{base_url}/ei/x/sign-in-wall?source=intercepted"
         api_url = f"{base_url}/ei/edge/apis/user-account-control-v1/cws/v1/{self.subdomain()}/account/signin"
 
         # 2. Define Headers (Standard Chrome)
-        standard_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        
+        standard_ua = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+
         headers = {
             "User-Agent": standard_ua,
             "Accept": "application/json, text/plain, */*",
@@ -63,23 +64,24 @@ class SouthwestGas(UtilityBase):
 
         # 4. Prepare Login Headers
         login_headers = headers.copy()
-        login_headers.update({
-            "Content-Type": "application/json",
-            "Origin": base_url,
-            "Referer": login_page_url,
-            "X-Requested-With": "XMLHttpRequest",
-        })
+        login_headers.update(
+            {
+                "Content-Type": "application/json",
+                "Origin": base_url,
+                "Referer": login_page_url,
+                "X-Requested-With": "XMLHttpRequest",
+            }
+        )
 
         # 5. Execute Login
         payload = {"username": username, "password": password}
-        
+
         async with session.post(
             api_url,
             json=payload,
             headers=login_headers,
-            raise_for_status=False, 
+            raise_for_status=False,
         ) as resp:
-            
             # --- HANDLE 204 SUCCESS ---
             if resp.status == 204:
                 # 204 means success with no body. Authentication is stored in cookies.
@@ -99,7 +101,7 @@ class SouthwestGas(UtilityBase):
 
         # 6. Extract Token (Only if response was 200 JSON)
         token = result.get("sessionToken") or result.get("accessToken")
-        
+
         if not token:
             raise InvalidAuth(f"Login failed; token not found. Response keys: {list(result.keys())}")
 
