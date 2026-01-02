@@ -58,7 +58,7 @@ class SouthwestGas(UtilityBase):
         }
 
         # 3. Warm up the session
-        async with session.get(login_page_url, headers=headers) as warm_resp:
+        async with session.get(login_page_url, headers=headers):
             pass
 
         # 4. Prepare Login Headers
