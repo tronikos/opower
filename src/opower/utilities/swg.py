@@ -4,6 +4,8 @@ from typing import Any
 
 import aiohttp
 
+# --- FIX: Import the USER_AGENT constant ---
+from ..const import USER_AGENT
 from ..exceptions import InvalidAuth
 from .base import UtilityBase
 
@@ -42,36 +44,33 @@ class SouthwestGas(UtilityBase):
         login_data: dict[str, Any],
     ) -> str | None:
         """Authenticate against the SWG Opower portal."""
+
         # 1. Define URLs
         base_url = f"https://{self.subdomain()}.opower.com"
         login_page_url = f"{base_url}/ei/x/sign-in-wall?source=intercepted"
         api_url = f"{base_url}/ei/edge/apis/user-account-control-v1/cws/v1/{self.subdomain()}/account/signin"
 
-        # 2. Define Headers (Standard Chrome)
-        standard_ua = (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-
+        # 2. Define Headers
+        # --- FIX: Use the imported USER_AGENT constant instead of hardcoding one ---
         headers = {
-            "User-Agent": standard_ua,
+            "User-Agent": USER_AGENT,
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "en-US,en;q=0.9",
         }
 
         # 3. Warm up the session
+        # We just call the context manager to get the cookies
         async with session.get(login_page_url, headers=headers):
             pass
 
         # 4. Prepare Login Headers
         login_headers = headers.copy()
-        login_headers.update(
-            {
-                "Content-Type": "application/json",
-                "Origin": base_url,
-                "Referer": login_page_url,
-                "X-Requested-With": "XMLHttpRequest",
-            }
-        )
+        login_headers.update({
+            "Content-Type": "application/json",
+            "Origin": base_url,
+            "Referer": login_page_url,
+            "X-Requested-With": "XMLHttpRequest",
+        })
 
         # 5. Execute Login
         payload = {"username": username, "password": password}
@@ -82,11 +81,9 @@ class SouthwestGas(UtilityBase):
             headers=login_headers,
             raise_for_status=False,
         ) as resp:
+
             # --- HANDLE 204 SUCCESS ---
             if resp.status == 204:
-                # 204 means success with no body. Authentication is stored in cookies.
-                # We return a dummy string because the library expects a string.
-                # The session.cookie_jar now holds the real auth.
                 return "cookie-auth-success"
 
             # If it's not 200 or 204, fail.
