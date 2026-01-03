@@ -44,7 +44,6 @@ class SouthwestGas(UtilityBase):
         login_data: dict[str, Any],
     ) -> str | None:
         """Authenticate against the SWG Opower portal."""
-
         # 1. Define URLs
         base_url = f"https://{self.subdomain()}.opower.com"
         login_page_url = f"{base_url}/ei/x/sign-in-wall?source=intercepted"
@@ -65,12 +64,14 @@ class SouthwestGas(UtilityBase):
 
         # 4. Prepare Login Headers
         login_headers = headers.copy()
-        login_headers.update({
-            "Content-Type": "application/json",
-            "Origin": base_url,
-            "Referer": login_page_url,
-            "X-Requested-With": "XMLHttpRequest",
-        })
+        login_headers.update(
+            {
+                "Content-Type": "application/json",
+                "Origin": base_url,
+                "Referer": login_page_url,
+                "X-Requested-With": "XMLHttpRequest",
+            }
+        )
 
         # 5. Execute Login
         payload = {"username": username, "password": password}
@@ -81,7 +82,6 @@ class SouthwestGas(UtilityBase):
             headers=login_headers,
             raise_for_status=False,
         ) as resp:
-
             # --- HANDLE 204 SUCCESS ---
             if resp.status == 204:
                 return "cookie-auth-success"
