@@ -41,6 +41,7 @@ This library is used by the [Opower integration in Home Assistant](https://www.h
 - Sacramento Municipal Utility District (SMUD)
 - Seattle City Light (SCL)
 - Southern Maryland Electric Cooperative (SMECO)
+- Southwest Gas
 
 ## Contributing
 
