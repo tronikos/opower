@@ -244,61 +244,122 @@ class Opower:
         One forecast for each account, typically one for electricity, one for gas.
         """
         forecasts: list[Forecast] = []
+
+        # GraphQL query to fetch bill forecast data
+        query = """
+        query GetBillForecast {
+          billingAccountsConnection(first: 100) {
+            edges {
+              node {
+                utilityId
+                uuid
+                billForecast {
+                  timeInterval
+                  currentDateTime
+                  segments {
+                    serviceAgreement {
+                      serviceType
+                    }
+                    estimatedUsage { value, unit }
+                    estimatedUsageCharges { value }
+                    soFarUsage { value }
+                    soFarUsageCharges { value }
+                    priorYearUsage { value }
+                    priorYearUsageCharges { value }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+
         for customer in await self._async_get_customers():
             customer_uuid = customer["uuid"]
-            url = (
-                f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}"
-                f"/edge/apis/bill-forecast-cws-v1/cws/{self.utility.utilitycode()}"
-                f"/customers/{customer_uuid}/combined-forecast"
-            )
+            headers = self._get_headers(customer_uuid)
+
             try:
-                result = await self._async_get_request(url, {}, self._get_headers())
+                result = await self._async_post_graphql(query, headers)
             except ApiException as err:
-                # For some customers utilities don't provide forecast
-                _LOGGER.debug("Ignoring combined-forecast error: %s", err)
+                _LOGGER.debug("Ignoring GraphQL bill forecast error: %s", err)
                 continue
-            if (
-                all(x in result["totalMetadata"] for x in ["NO_FORECASTED_COST", "NO_FORECASTED_USAGE"])
-                and "DATA_COVERAGE_QUALITY_CHECK_FAILED" not in result["totalMetadata"]
-            ):
-                _LOGGER.debug(
-                    "Ignoring combined-forecast since there is no usage or cost. metadata: %s",
-                    result["totalMetadata"],
-                )
-                continue
-            account_forecasts: list[Any] = []
-            utility_account_ids: list[str] = []
-            for forecast in result["accountForecasts"]:
-                account_forecasts.append(forecast)
-                utility_account_ids.append(str(forecast["preferredUtilityAccountId"]))
-            for forecast in account_forecasts:
-                utility_account_id = str(forecast["preferredUtilityAccountId"])
-                if not forecast["accountUuids"]:
+
+            edges = (
+                result.get("data", {})
+                .get("billingAccountsConnection", {})
+                .get("edges", [])
+            )
+
+            for edge in edges:
+                node = edge.get("node", {})
+                bill_forecast = node.get("billForecast")
+
+                if not bill_forecast:
+                    _LOGGER.debug("No bill forecast for account %s", node.get("uuid"))
                     continue
-                account_uuid = forecast["accountUuids"][0]
-                account_id = utility_account_id if utility_account_ids.count(utility_account_id) == 1 else account_uuid
-                forecasts.append(
-                    Forecast(
-                        account=Account(
-                            customer=Customer(uuid=customer["uuid"]),
-                            uuid=account_uuid,
-                            utility_account_id=utility_account_id,
-                            id=account_id,
-                            meter_type=MeterType(forecast["meterType"]),
-                            read_resolution=None,
-                        ),
-                        start_date=date.fromisoformat(forecast["startDate"]),
-                        end_date=date.fromisoformat(forecast["endDate"]),
-                        current_date=date.fromisoformat(forecast["currentDate"]),
-                        unit_of_measure=UnitOfMeasure(forecast["unitOfMeasure"]),
-                        usage_to_date=float(forecast.get("usageToDate", 0)),
-                        cost_to_date=float(forecast.get("costToDate", 0)),
-                        forecasted_usage=float(forecast.get("forecastedUsage", 0)),
-                        forecasted_cost=float(forecast.get("forecastedCost", 0)),
-                        typical_usage=float(forecast.get("typicalUsage", 0)),
-                        typical_cost=float(forecast.get("typicalCost", 0)),
+
+                # Parse time interval (ISO 8601 format: "start/end")
+                time_interval = bill_forecast.get("timeInterval", "")
+                if "/" not in time_interval:
+                    _LOGGER.debug("Invalid time interval format: %s", time_interval)
+                    continue
+
+                start_str, end_str = time_interval.split("/", 1)
+                # Parse ISO 8601 datetime strings, extracting just the date portion
+                start_date = datetime.fromisoformat(start_str).date()
+                end_date = datetime.fromisoformat(end_str).date()
+                current_date = datetime.fromisoformat(
+                    bill_forecast.get("currentDateTime", start_str)
+                ).date()
+
+                # Get account identifiers from the node level
+                account_uuid = node.get("uuid", "")
+                utility_account_id = str(node.get("utilityId", ""))
+
+                # Process each segment (typically one per meter type)
+                for segment in bill_forecast.get("segments", []):
+                    service_type = segment.get("serviceAgreement", {}).get("serviceType", "")
+
+                    # Map GraphQL service type to MeterType
+                    service_type_map = {"ELECTRICITY": MeterType.ELEC, "GAS": MeterType.GAS}
+                    meter_type = service_type_map.get(service_type)
+                    if meter_type is None:
+                        _LOGGER.debug("Unknown service type: %s", service_type)
+                        continue
+
+                    # Get unit of measure from segment
+                    unit_str = segment.get("estimatedUsage", {}).get("unit", "KWH")
+                    try:
+                        unit_of_measure = UnitOfMeasure(unit_str)
+                    except ValueError:
+                        _LOGGER.debug("Unknown unit of measure: %s, defaulting to KWH", unit_str)
+                        unit_of_measure = UnitOfMeasure.KWH
+
+                    # Use utility_account_id as id if available, otherwise use uuid
+                    account_id = utility_account_id if utility_account_id else account_uuid
+
+                    forecasts.append(
+                        Forecast(
+                            account=Account(
+                                customer=Customer(uuid=customer_uuid),
+                                uuid=account_uuid,
+                                utility_account_id=utility_account_id,
+                                id=account_id,
+                                meter_type=meter_type,
+                                read_resolution=None,
+                            ),
+                            start_date=start_date,
+                            end_date=end_date,
+                            current_date=current_date,
+                            unit_of_measure=unit_of_measure,
+                            usage_to_date=float(segment.get("soFarUsage", {}).get("value", 0)),
+                            cost_to_date=float(segment.get("soFarUsageCharges", {}).get("value", 0)),
+                            forecasted_usage=float(segment.get("estimatedUsage", {}).get("value", 0)),
+                            forecasted_cost=float(segment.get("estimatedUsageCharges", {}).get("value", 0)),
+                            typical_usage=float(segment.get("priorYearUsage", {}).get("value", 0)),
+                            typical_cost=float(segment.get("priorYearUsageCharges", {}).get("value", 0)),
+                        )
                     )
-                )
         return forecasts
 
     async def _async_get_customers(self) -> list[Any]:
@@ -588,3 +649,34 @@ class Opower:
                 return result
         except ClientError as e:
             raise ApiException(f"Client Error: {e}", url=full_url) from e
+
+    async def _async_post_graphql(self, query: str, headers: dict[str, str]) -> Any:
+        """Execute a GraphQL query against the Opower API."""
+        url = (
+            f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}"
+            "/edge/apis/dsm-graphql-v1/cws/graphql"
+        )
+        _LOGGER.debug("GraphQL query to: %s", url)
+        try:
+            async with self.session.post(
+                url,
+                headers={**headers, "Content-Type": "application/json"},
+                json={"query": query},
+            ) as resp:
+                if not resp.ok:
+                    raise ApiException(
+                        f"HTTP Error: {resp.status}",
+                        url=url,
+                        status=resp.status,
+                        response_text=await resp.text(),
+                    )
+                result = await resp.json()
+                _LOGGER.log(logging.DEBUG - 1, "GraphQL response: %s", json.dumps(result, indent=2))
+                if "errors" in result:
+                    raise ApiException(
+                        f"GraphQL Error: {result['errors']}",
+                        url=url,
+                    )
+                return result
+        except ClientError as e:
+            raise ApiException(f"Client Error: {e}", url=url) from e
