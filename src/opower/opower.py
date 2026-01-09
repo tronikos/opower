@@ -284,11 +284,7 @@ class Opower:
                 _LOGGER.debug("Ignoring GraphQL bill forecast error: %s", err)
                 continue
 
-            edges = (
-                result.get("data", {})
-                .get("billingAccountsConnection", {})
-                .get("edges", [])
-            )
+            edges = result.get("data", {}).get("billingAccountsConnection", {}).get("edges", [])
 
             for edge in edges:
                 node = edge.get("node", {})
@@ -308,9 +304,7 @@ class Opower:
                 # Parse ISO 8601 datetime strings, extracting just the date portion
                 start_date = datetime.fromisoformat(start_str).date()
                 end_date = datetime.fromisoformat(end_str).date()
-                current_date = datetime.fromisoformat(
-                    bill_forecast.get("currentDateTime", start_str)
-                ).date()
+                current_date = datetime.fromisoformat(bill_forecast.get("currentDateTime", start_str)).date()
 
                 # Get account identifiers from the node level
                 account_uuid = node.get("uuid", "")
@@ -652,10 +646,7 @@ class Opower:
 
     async def _async_post_graphql(self, query: str, headers: dict[str, str]) -> Any:
         """Execute a GraphQL query against the Opower API."""
-        url = (
-            f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}"
-            "/edge/apis/dsm-graphql-v1/cws/graphql"
-        )
+        url = f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}/edge/apis/dsm-graphql-v1/cws/graphql"
         _LOGGER.debug("GraphQL query to: %s", url)
         try:
             async with self.session.post(
