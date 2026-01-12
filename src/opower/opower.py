@@ -671,4 +671,3 @@ class Opower:
                 return result
         except ClientError as e:
             raise ApiException(f"Client Error: {e}", url=url) from e
-
