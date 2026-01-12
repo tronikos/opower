@@ -312,7 +312,7 @@ class Opower:
 
                 # Process each segment (typically one per meter type)
                 for segment in bill_forecast.get("segments", []):
-                    service_type = segment.get("serviceAgreement", {}).get("serviceType", "")
+                    service_type = (segment.get("serviceAgreement") or {}).get("serviceType", "")
 
                     # Map GraphQL service type to MeterType
                     service_type_map = {"ELECTRICITY": MeterType.ELEC, "GAS": MeterType.GAS}
@@ -322,7 +322,7 @@ class Opower:
                         continue
 
                     # Get unit of measure from segment
-                    unit_str = segment.get("estimatedUsage", {}).get("unit", "KWH")
+                    unit_str = (segment.get("estimatedUsage") or {}).get("unit", "KWH")
                     try:
                         unit_of_measure = UnitOfMeasure(unit_str)
                     except ValueError:
@@ -346,12 +346,12 @@ class Opower:
                             end_date=end_date,
                             current_date=current_date,
                             unit_of_measure=unit_of_measure,
-                            usage_to_date=float(segment.get("soFarUsage", {}).get("value", 0)),
-                            cost_to_date=float(segment.get("soFarUsageCharges", {}).get("value", 0)),
-                            forecasted_usage=float(segment.get("estimatedUsage", {}).get("value", 0)),
-                            forecasted_cost=float(segment.get("estimatedUsageCharges", {}).get("value", 0)),
-                            typical_usage=float(segment.get("priorYearUsage", {}).get("value", 0)),
-                            typical_cost=float(segment.get("priorYearUsageCharges", {}).get("value", 0)),
+                            usage_to_date=float((segment.get("soFarUsage") or {}).get("value", 0)),
+                            cost_to_date=float((segment.get("soFarUsageCharges") or {}).get("value", 0)),
+                            forecasted_usage=float((segment.get("estimatedUsage") or {}).get("value", 0)),
+                            forecasted_cost=float((segment.get("estimatedUsageCharges") or {}).get("value", 0)),
+                            typical_usage=float((segment.get("priorYearUsage") or {}).get("value", 0)),
+                            typical_cost=float((segment.get("priorYearUsageCharges") or {}).get("value", 0)),
                         )
                     )
         return forecasts
@@ -671,3 +671,4 @@ class Opower:
                 return result
         except ClientError as e:
             raise ApiException(f"Client Error: {e}", url=url) from e
+
