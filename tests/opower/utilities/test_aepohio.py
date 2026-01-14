@@ -53,16 +53,13 @@ class TestAEPOhio(unittest.IsolatedAsyncioTestCase):
         # Verify we got a non-empty access token
         self.assertIsNotNone(access_token)
         self.assertTrue(len(access_token) > 0)
-        print(f"Successfully obtained access token: {access_token[:20]}...")
 
         # Verify subdomain was set
         subdomain = aep.subdomain()
         self.assertIsNotNone(subdomain)
         self.assertTrue(len(subdomain) > 0)
-        print(f"Subdomain: {subdomain}")
 
         # Confirm opower cookies have been set
         opower_url = f"https://{subdomain}.opower.com"
         cookies = session.cookie_jar.filter_cookies(URL(opower_url))
         self.assertTrue(len(cookies) > 0, "Expected opower cookies to be set")
-        print(f"Opower cookies set: {len(cookies)} cookies found")
