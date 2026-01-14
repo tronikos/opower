@@ -118,4 +118,9 @@ class AEPBase(ABC):
             raise_for_status=True,
         ) as token_resp:
             token_data = await token_resp.json()
-            return str(token_data[0]["data"]["AccessToken"])
+            if not token_data or not isinstance(token_data, list) or not token_data:
+                raise InvalidAuth("Failed to retrieve access token from AEP")
+            data = token_data[0].get("data")
+            if not data or not data.get("AccessToken"):
+                raise InvalidAuth("Invalid token response structure from AEP")
+            return str(data["AccessToken"])
