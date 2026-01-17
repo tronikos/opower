@@ -91,6 +91,17 @@ SUPPORTED_AGGREGATE_TYPES = {
     ],
 }
 
+# Map GraphQL service types to MeterType
+SERVICE_TYPE_MAP: dict[str, MeterType] = {
+    "ELECTRICITY": MeterType.ELEC,
+    "GAS": MeterType.GAS,
+}
+
+
+def _get_value(data: dict | None, default: float = 0) -> float:
+    """Extract 'value' from a dict, returning default if missing or None."""
+    return float((data or {}).get("value", default))
+
 
 @dataclasses.dataclass
 class Customer:
@@ -287,20 +298,23 @@ class Opower:
 
             edges = result.get("data", {}).get("billingAccountsConnection", {}).get("edges", [])
 
-            # First pass: collect all segments with their metadata
-            segments_data: list[tuple[dict, date, date, date]] = []
+            # First pass: collect segments with metadata and utility IDs for duplicate detection
+            segments_data: list[tuple[dict, str, date, date, date]] = []
+            utility_account_ids: list[str] = []
             for edge in edges:
                 bill_forecast = edge.get("node", {}).get("billForecast")
                 if not bill_forecast:
                     _LOGGER.debug("No bill forecast for billing account")
                     continue
 
+                # Parse time interval (ISO 8601 format: "start/end")
                 time_interval = bill_forecast.get("timeInterval", "")
                 if "/" not in time_interval:
                     _LOGGER.debug("Invalid time interval format: %s", time_interval)
                     continue
 
                 start_str, end_str = time_interval.split("/", 1)
+                # Parse ISO 8601 datetime strings, extracting just the date portion
                 start_date = datetime.fromisoformat(start_str).date()
                 end_date = datetime.fromisoformat(end_str).date()
                 current_date = datetime.fromisoformat(
@@ -308,33 +322,30 @@ class Opower:
                 ).date()
 
                 for segment in bill_forecast.get("segments", []):
-                    segments_data.append((segment, start_date, end_date, current_date))
+                    utility_account_id = str(
+                        (segment.get("serviceAgreement") or {}).get("utilityId", "")
+                    )
+                    utility_account_ids.append(utility_account_id)
+                    segments_data.append(
+                        (segment, utility_account_id, start_date, end_date, current_date)
+                    )
 
             # Count utility IDs to detect duplicates (matches async_get_accounts logic)
-            utility_id_counts = Counter(
-                str((seg.get("serviceAgreement") or {}).get("utilityId", ""))
-                for seg, *_ in segments_data
-            )
+            utility_id_counts = Counter(utility_account_ids)
 
             # Second pass: build forecasts
-            for segment, start_date, end_date, current_date in segments_data:
+            for segment, utility_account_id, start_date, end_date, current_date in segments_data:
                 service_agreement = segment.get("serviceAgreement") or {}
                 account_uuid = service_agreement.get("uuid", "")
-                utility_account_id = str(service_agreement.get("utilityId", ""))
 
                 # Use utility_account_id if unique, otherwise uuid (matches async_get_accounts)
                 account_id = utility_account_id if utility_id_counts[utility_account_id] == 1 else account_uuid
 
-                service_type = service_agreement.get("serviceType", "")
-
-                # Map GraphQL service type to MeterType
-                service_type_map = {"ELECTRICITY": MeterType.ELEC, "GAS": MeterType.GAS}
-                meter_type = service_type_map.get(service_type)
+                meter_type = SERVICE_TYPE_MAP.get(service_agreement.get("serviceType", ""))
                 if meter_type is None:
-                    _LOGGER.debug("Unknown service type: %s", service_type)
+                    _LOGGER.debug("Unknown service type: %s", service_agreement.get("serviceType"))
                     continue
 
-                # Get unit of measure from segment
                 unit_str = (segment.get("estimatedUsage") or {}).get("unit", "KWH")
                 try:
                     unit_of_measure = UnitOfMeasure(unit_str)
@@ -356,12 +367,12 @@ class Opower:
                         end_date=end_date,
                         current_date=current_date,
                         unit_of_measure=unit_of_measure,
-                        usage_to_date=float((segment.get("soFarUsage") or {}).get("value", 0)),
-                        cost_to_date=float((segment.get("soFarUsageCharges") or {}).get("value", 0)),
-                        forecasted_usage=float((segment.get("estimatedUsage") or {}).get("value", 0)),
-                        forecasted_cost=float((segment.get("estimatedUsageCharges") or {}).get("value", 0)),
-                        typical_usage=float((segment.get("priorYearUsage") or {}).get("value", 0)),
-                        typical_cost=float((segment.get("priorYearUsageCharges") or {}).get("value", 0)),
+                        usage_to_date=_get_value(segment.get("soFarUsage")),
+                        cost_to_date=_get_value(segment.get("soFarUsageCharges")),
+                        forecasted_usage=_get_value(segment.get("estimatedUsage")),
+                        forecasted_cost=_get_value(segment.get("estimatedUsageCharges")),
+                        typical_usage=_get_value(segment.get("priorYearUsage")),
+                        typical_cost=_get_value(segment.get("priorYearUsageCharges")),
                     )
                 )
         return forecasts
