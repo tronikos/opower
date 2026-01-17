@@ -3,6 +3,7 @@
 import dataclasses
 import json
 import logging
+from collections import Counter
 from datetime import date, datetime
 from enum import Enum
 from typing import Any
@@ -286,46 +287,45 @@ class Opower:
 
             edges = result.get("data", {}).get("billingAccountsConnection", {}).get("edges", [])
 
-            # First pass: collect all serviceAgreement data to check for duplicate utilityIds
-            segments_data: list[tuple[dict, dict, date, date, date]] = []
-            utility_account_ids: list[str] = []
-
+            # First pass: collect all segments with their metadata
+            segments_data: list[tuple[dict, date, date, date]] = []
             for edge in edges:
-                node = edge.get("node", {})
-                bill_forecast = node.get("billForecast")
-
+                bill_forecast = edge.get("node", {}).get("billForecast")
                 if not bill_forecast:
                     _LOGGER.debug("No bill forecast for billing account")
                     continue
 
-                # Parse time interval (ISO 8601 format: "start/end")
                 time_interval = bill_forecast.get("timeInterval", "")
                 if "/" not in time_interval:
                     _LOGGER.debug("Invalid time interval format: %s", time_interval)
                     continue
 
                 start_str, end_str = time_interval.split("/", 1)
-                # Parse ISO 8601 datetime strings, extracting just the date portion
                 start_date = datetime.fromisoformat(start_str).date()
                 end_date = datetime.fromisoformat(end_str).date()
-                current_date = datetime.fromisoformat(bill_forecast.get("currentDateTime", start_str)).date()
+                current_date = datetime.fromisoformat(
+                    bill_forecast.get("currentDateTime", start_str)
+                ).date()
 
                 for segment in bill_forecast.get("segments", []):
-                    service_agreement = segment.get("serviceAgreement") or {}
-                    utility_account_id = str(service_agreement.get("utilityId", ""))
-                    utility_account_ids.append(utility_account_id)
-                    segments_data.append((segment, service_agreement, start_date, end_date, current_date))
+                    segments_data.append((segment, start_date, end_date, current_date))
 
-            # Second pass: build forecasts with correct id (utilityId if unique, else uuid)
-            for segment, service_agreement, start_date, end_date, current_date in segments_data:
-                service_type = service_agreement.get("serviceType", "")
+            # Count utility IDs to detect duplicates (matches async_get_accounts logic)
+            utility_id_counts = Counter(
+                str((seg.get("serviceAgreement") or {}).get("utilityId", ""))
+                for seg, *_ in segments_data
+            )
 
-                # Get account identifiers from serviceAgreement to match REST API
+            # Second pass: build forecasts
+            for segment, start_date, end_date, current_date in segments_data:
+                service_agreement = segment.get("serviceAgreement") or {}
                 account_uuid = service_agreement.get("uuid", "")
                 utility_account_id = str(service_agreement.get("utilityId", ""))
 
-                # Use utility_account_id as id if unique, otherwise use uuid (matches async_get_accounts)
-                account_id = utility_account_id if utility_account_ids.count(utility_account_id) == 1 else account_uuid
+                # Use utility_account_id if unique, otherwise uuid (matches async_get_accounts)
+                account_id = utility_account_id if utility_id_counts[utility_account_id] == 1 else account_uuid
+
+                service_type = service_agreement.get("serviceType", "")
 
                 # Map GraphQL service type to MeterType
                 service_type_map = {"ELECTRICITY": MeterType.ELEC, "GAS": MeterType.GAS}
