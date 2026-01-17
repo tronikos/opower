@@ -286,6 +286,10 @@ class Opower:
 
             edges = result.get("data", {}).get("billingAccountsConnection", {}).get("edges", [])
 
+            # First pass: collect all serviceAgreement data to check for duplicate utilityIds
+            segments_data: list[tuple[dict, dict, date, date, date]] = []
+            utility_account_ids: list[str] = []
+
             for edge in edges:
                 node = edge.get("node", {})
                 bill_forecast = node.get("billForecast")
@@ -306,60 +310,60 @@ class Opower:
                 end_date = datetime.fromisoformat(end_str).date()
                 current_date = datetime.fromisoformat(bill_forecast.get("currentDateTime", start_str)).date()
 
-                # Process each segment (typically one per meter type)
                 for segment in bill_forecast.get("segments", []):
                     service_agreement = segment.get("serviceAgreement") or {}
-                    service_type = service_agreement.get("serviceType", "")
-
-                    # Get account identifiers from serviceAgreement to match REST API
-                    account_uuid = service_agreement.get("uuid", "")
                     utility_account_id = str(service_agreement.get("utilityId", ""))
+                    utility_account_ids.append(utility_account_id)
+                    segments_data.append((segment, service_agreement, start_date, end_date, current_date))
 
-                    # Skip segment if serviceAgreement data is missing
-                    if not account_uuid or not utility_account_id:
-                        _LOGGER.debug("Missing serviceAgreement identifiers for segment, skipping")
-                        continue
+            # Second pass: build forecasts with correct id (utilityId if unique, else uuid)
+            for segment, service_agreement, start_date, end_date, current_date in segments_data:
+                service_type = service_agreement.get("serviceType", "")
 
-                    # Map GraphQL service type to MeterType
-                    service_type_map = {"ELECTRICITY": MeterType.ELEC, "GAS": MeterType.GAS}
-                    meter_type = service_type_map.get(service_type)
-                    if meter_type is None:
-                        _LOGGER.debug("Unknown service type: %s", service_type)
-                        continue
+                # Get account identifiers from serviceAgreement to match REST API
+                account_uuid = service_agreement.get("uuid", "")
+                utility_account_id = str(service_agreement.get("utilityId", ""))
 
-                    # Get unit of measure from segment
-                    unit_str = (segment.get("estimatedUsage") or {}).get("unit", "KWH")
-                    try:
-                        unit_of_measure = UnitOfMeasure(unit_str)
-                    except ValueError:
-                        _LOGGER.debug("Unknown unit of measure: %s, defaulting to KWH", unit_str)
-                        unit_of_measure = UnitOfMeasure.KWH
+                # Use utility_account_id as id if unique, otherwise use uuid (matches async_get_accounts)
+                account_id = utility_account_id if utility_account_ids.count(utility_account_id) == 1 else account_uuid
 
-                    # Use utility_account_id as id if available, otherwise use uuid
-                    account_id = utility_account_id if utility_account_id else account_uuid
+                # Map GraphQL service type to MeterType
+                service_type_map = {"ELECTRICITY": MeterType.ELEC, "GAS": MeterType.GAS}
+                meter_type = service_type_map.get(service_type)
+                if meter_type is None:
+                    _LOGGER.debug("Unknown service type: %s", service_type)
+                    continue
 
-                    forecasts.append(
-                        Forecast(
-                            account=Account(
-                                customer=Customer(uuid=customer_uuid),
-                                uuid=account_uuid,
-                                utility_account_id=utility_account_id,
-                                id=account_id,
-                                meter_type=meter_type,
-                                read_resolution=None,
-                            ),
-                            start_date=start_date,
-                            end_date=end_date,
-                            current_date=current_date,
-                            unit_of_measure=unit_of_measure,
-                            usage_to_date=float((segment.get("soFarUsage") or {}).get("value", 0)),
-                            cost_to_date=float((segment.get("soFarUsageCharges") or {}).get("value", 0)),
-                            forecasted_usage=float((segment.get("estimatedUsage") or {}).get("value", 0)),
-                            forecasted_cost=float((segment.get("estimatedUsageCharges") or {}).get("value", 0)),
-                            typical_usage=float((segment.get("priorYearUsage") or {}).get("value", 0)),
-                            typical_cost=float((segment.get("priorYearUsageCharges") or {}).get("value", 0)),
-                        )
+                # Get unit of measure from segment
+                unit_str = (segment.get("estimatedUsage") or {}).get("unit", "KWH")
+                try:
+                    unit_of_measure = UnitOfMeasure(unit_str)
+                except ValueError:
+                    _LOGGER.debug("Unknown unit of measure: %s, defaulting to KWH", unit_str)
+                    unit_of_measure = UnitOfMeasure.KWH
+
+                forecasts.append(
+                    Forecast(
+                        account=Account(
+                            customer=Customer(uuid=customer_uuid),
+                            uuid=account_uuid,
+                            utility_account_id=utility_account_id,
+                            id=account_id,
+                            meter_type=meter_type,
+                            read_resolution=None,
+                        ),
+                        start_date=start_date,
+                        end_date=end_date,
+                        current_date=current_date,
+                        unit_of_measure=unit_of_measure,
+                        usage_to_date=float((segment.get("soFarUsage") or {}).get("value", 0)),
+                        cost_to_date=float((segment.get("soFarUsageCharges") or {}).get("value", 0)),
+                        forecasted_usage=float((segment.get("estimatedUsage") or {}).get("value", 0)),
+                        forecasted_cost=float((segment.get("estimatedUsageCharges") or {}).get("value", 0)),
+                        typical_usage=float((segment.get("priorYearUsage") or {}).get("value", 0)),
+                        typical_cost=float((segment.get("priorYearUsageCharges") or {}).get("value", 0)),
                     )
+                )
         return forecasts
 
     async def _async_get_customers(self) -> list[Any]:
