@@ -98,7 +98,7 @@ SERVICE_TYPE_MAP: dict[str, MeterType] = {
 }
 
 
-def _get_value(data: dict | None, default: float = 0) -> float:
+def _get_value(data: dict[str, Any] | None, default: float = 0) -> float:
     """Extract 'value' from a dict, returning default if missing or None."""
     return float((data or {}).get("value", default))
 
@@ -299,7 +299,7 @@ class Opower:
             edges = result.get("data", {}).get("billingAccountsConnection", {}).get("edges", [])
 
             # First pass: collect segments with metadata and utility IDs for duplicate detection
-            segments_data: list[tuple[dict, str, date, date, date]] = []
+            segments_data: list[tuple[dict[str, Any], str, date, date, date]] = []
             utility_account_ids: list[str] = []
             for edge in edges:
                 bill_forecast = edge.get("node", {}).get("billForecast")
