@@ -317,18 +317,12 @@ class Opower:
                 # Parse ISO 8601 datetime strings, extracting just the date portion
                 start_date = datetime.fromisoformat(start_str).date()
                 end_date = datetime.fromisoformat(end_str).date()
-                current_date = datetime.fromisoformat(
-                    bill_forecast.get("currentDateTime", start_str)
-                ).date()
+                current_date = datetime.fromisoformat(bill_forecast.get("currentDateTime", start_str)).date()
 
                 for segment in bill_forecast.get("segments", []):
-                    utility_account_id = str(
-                        (segment.get("serviceAgreement") or {}).get("utilityId", "")
-                    )
+                    utility_account_id = str((segment.get("serviceAgreement") or {}).get("utilityId", ""))
                     utility_account_ids.append(utility_account_id)
-                    segments_data.append(
-                        (segment, utility_account_id, start_date, end_date, current_date)
-                    )
+                    segments_data.append((segment, utility_account_id, start_date, end_date, current_date))
 
             # Count utility IDs to detect duplicates (matches async_get_accounts logic)
             utility_id_counts = Counter(utility_account_ids)
