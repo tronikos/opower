@@ -251,13 +251,13 @@ class Opower:
           billingAccountsConnection(first: 100) {
             edges {
               node {
-                utilityId
-                uuid
                 billForecast {
                   timeInterval
                   currentDateTime
                   segments {
                     serviceAgreement {
+                      uuid
+                      utilityId
                       serviceType
                     }
                     estimatedUsage { value, unit }
@@ -291,7 +291,7 @@ class Opower:
                 bill_forecast = node.get("billForecast")
 
                 if not bill_forecast:
-                    _LOGGER.debug("No bill forecast for account %s", node.get("uuid"))
+                    _LOGGER.debug("No bill forecast for billing account")
                     continue
 
                 # Parse time interval (ISO 8601 format: "start/end")
@@ -306,13 +306,19 @@ class Opower:
                 end_date = datetime.fromisoformat(end_str).date()
                 current_date = datetime.fromisoformat(bill_forecast.get("currentDateTime", start_str)).date()
 
-                # Get account identifiers from the node level
-                account_uuid = node.get("uuid", "")
-                utility_account_id = str(node.get("utilityId", ""))
-
                 # Process each segment (typically one per meter type)
                 for segment in bill_forecast.get("segments", []):
-                    service_type = (segment.get("serviceAgreement") or {}).get("serviceType", "")
+                    service_agreement = segment.get("serviceAgreement") or {}
+                    service_type = service_agreement.get("serviceType", "")
+
+                    # Get account identifiers from serviceAgreement to match REST API
+                    account_uuid = service_agreement.get("uuid", "")
+                    utility_account_id = str(service_agreement.get("utilityId", ""))
+
+                    # Skip segment if serviceAgreement data is missing
+                    if not account_uuid or not utility_account_id:
+                        _LOGGER.debug("Missing serviceAgreement identifiers for segment, skipping")
+                        continue
 
                     # Map GraphQL service type to MeterType
                     service_type_map = {"ELECTRICITY": MeterType.ELEC, "GAS": MeterType.GAS}
