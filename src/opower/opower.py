@@ -3,7 +3,6 @@
 import dataclasses
 import json
 import logging
-from collections import Counter
 from datetime import date, datetime
 from enum import Enum
 from typing import Any
@@ -91,16 +90,11 @@ SUPPORTED_AGGREGATE_TYPES = {
     ],
 }
 
-# Map GraphQL service types to MeterType
-SERVICE_TYPE_MAP: dict[str, MeterType] = {
-    "ELECTRICITY": MeterType.ELEC,
-    "GAS": MeterType.GAS,
-}
-
 
 def _get_value(data: dict[str, Any] | None, default: float = 0) -> float:
     """Extract 'value' from a dict, returning default if missing or None."""
-    return float((data or {}).get("value", default))
+    val = (data or {}).get("value")
+    return float(val) if val is not None else default
 
 
 @dataclasses.dataclass
@@ -255,6 +249,11 @@ class Opower:
 
         One forecast for each account, typically one for electricity, one for gas.
         """
+        # Fetch all accounts first to create a lookup map (UUID -> Account).
+        # This ensures we use the exact same IDs/MeterTypes as the rest of the library.
+        accounts = await self.async_get_accounts()
+        account_map = {account.uuid: account for account in accounts}
+
         forecasts: list[Forecast] = []
 
         # GraphQL query to fetch bill forecast data
@@ -269,8 +268,6 @@ class Opower:
                   segments {
                     serviceAgreement {
                       uuid
-                      utilityId
-                      serviceType
                     }
                     estimatedUsage { value, unit }
                     estimatedUsageCharges { value }
@@ -298,9 +295,6 @@ class Opower:
 
             edges = result.get("data", {}).get("billingAccountsConnection", {}).get("edges", [])
 
-            # First pass: collect segments with metadata and utility IDs for duplicate detection
-            segments_data: list[tuple[dict[str, Any], str, date, date, date]] = []
-            utility_account_ids: list[str] = []
             for edge in edges:
                 bill_forecast = edge.get("node", {}).get("billForecast")
                 if not bill_forecast:
@@ -320,55 +314,38 @@ class Opower:
                 current_date = datetime.fromisoformat(bill_forecast.get("currentDateTime", start_str)).date()
 
                 for segment in bill_forecast.get("segments", []):
-                    utility_account_id = str((segment.get("serviceAgreement") or {}).get("utilityId", ""))
-                    utility_account_ids.append(utility_account_id)
-                    segments_data.append((segment, utility_account_id, start_date, end_date, current_date))
+                    service_agreement: dict[str, Any] = segment.get("serviceAgreement") or {}
+                    account_uuid = str(service_agreement.get("uuid", ""))
 
-            # Count utility IDs to detect duplicates (matches async_get_accounts logic)
-            utility_id_counts = Counter(utility_account_ids)
+                    # Match the GraphQL data to an existing Account
+                    account = account_map.get(account_uuid)
+                    if not account:
+                        _LOGGER.debug("Forecast found for unknown account UUID: %s", account_uuid)
+                        continue
 
-            # Second pass: build forecasts
-            for segment, utility_account_id, start_date, end_date, current_date in segments_data:
-                service_agreement = segment.get("serviceAgreement") or {}
-                account_uuid = service_agreement.get("uuid", "")
+                    estimated_usage: dict[str, Any] = segment.get("estimatedUsage") or {}
+                    unit_str = str(estimated_usage.get("unit", "KWH"))
+                    try:
+                        unit_of_measure = UnitOfMeasure(unit_str)
+                    except ValueError:
+                        _LOGGER.debug("Unknown unit of measure: %s, defaulting to KWH", unit_str)
+                        unit_of_measure = UnitOfMeasure.KWH
 
-                # Use utility_account_id if unique, otherwise uuid (matches async_get_accounts)
-                account_id = utility_account_id if utility_id_counts[utility_account_id] == 1 else account_uuid
-
-                meter_type = SERVICE_TYPE_MAP.get(service_agreement.get("serviceType", ""))
-                if meter_type is None:
-                    _LOGGER.debug("Unknown service type: %s", service_agreement.get("serviceType"))
-                    continue
-
-                unit_str = (segment.get("estimatedUsage") or {}).get("unit", "KWH")
-                try:
-                    unit_of_measure = UnitOfMeasure(unit_str)
-                except ValueError:
-                    _LOGGER.debug("Unknown unit of measure: %s, defaulting to KWH", unit_str)
-                    unit_of_measure = UnitOfMeasure.KWH
-
-                forecasts.append(
-                    Forecast(
-                        account=Account(
-                            customer=Customer(uuid=customer_uuid),
-                            uuid=account_uuid,
-                            utility_account_id=utility_account_id,
-                            id=account_id,
-                            meter_type=meter_type,
-                            read_resolution=None,
-                        ),
-                        start_date=start_date,
-                        end_date=end_date,
-                        current_date=current_date,
-                        unit_of_measure=unit_of_measure,
-                        usage_to_date=_get_value(segment.get("soFarUsage")),
-                        cost_to_date=_get_value(segment.get("soFarUsageCharges")),
-                        forecasted_usage=_get_value(segment.get("estimatedUsage")),
-                        forecasted_cost=_get_value(segment.get("estimatedUsageCharges")),
-                        typical_usage=_get_value(segment.get("priorYearUsage")),
-                        typical_cost=_get_value(segment.get("priorYearUsageCharges")),
+                    forecasts.append(
+                        Forecast(
+                            account=account,
+                            start_date=start_date,
+                            end_date=end_date,
+                            current_date=current_date,
+                            unit_of_measure=unit_of_measure,
+                            usage_to_date=_get_value(segment.get("soFarUsage")),
+                            cost_to_date=_get_value(segment.get("soFarUsageCharges")),
+                            forecasted_usage=_get_value(segment.get("estimatedUsage")),
+                            forecasted_cost=_get_value(segment.get("estimatedUsageCharges")),
+                            typical_usage=_get_value(segment.get("priorYearUsage")),
+                            typical_cost=_get_value(segment.get("priorYearUsageCharges")),
+                        )
                     )
-                )
         return forecasts
 
     async def _async_get_customers(self) -> list[Any]:
