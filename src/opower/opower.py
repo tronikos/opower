@@ -91,6 +91,12 @@ SUPPORTED_AGGREGATE_TYPES = {
 }
 
 
+def _get_value(data: dict[str, Any] | None, default: float = 0) -> float:
+    """Extract 'value' from a dict, returning default if missing or None."""
+    val = (data or {}).get("value")
+    return float(val) if val is not None else default
+
+
 @dataclasses.dataclass
 class Customer:
     """Data about a customer."""
@@ -243,6 +249,11 @@ class Opower:
 
         One forecast for each account, typically one for electricity, one for gas.
         """
+        # Fetch all accounts first to create a lookup map (UUID -> Account).
+        # This ensures we use the exact same IDs/MeterTypes as the rest of the library.
+        accounts = await self.async_get_accounts()
+        account_map = {account.uuid: account for account in accounts}
+
         forecasts: list[Forecast] = []
 
         # GraphQL query to fetch bill forecast data
@@ -251,14 +262,12 @@ class Opower:
           billingAccountsConnection(first: 100) {
             edges {
               node {
-                utilityId
-                uuid
                 billForecast {
                   timeInterval
                   currentDateTime
                   segments {
                     serviceAgreement {
-                      serviceType
+                      uuid
                     }
                     estimatedUsage { value, unit }
                     estimatedUsageCharges { value }
@@ -287,11 +296,9 @@ class Opower:
             edges = result.get("data", {}).get("billingAccountsConnection", {}).get("edges", [])
 
             for edge in edges:
-                node = edge.get("node", {})
-                bill_forecast = node.get("billForecast")
-
+                bill_forecast = edge.get("node", {}).get("billForecast")
                 if not bill_forecast:
-                    _LOGGER.debug("No bill forecast for account %s", node.get("uuid"))
+                    _LOGGER.debug("No bill forecast for billing account")
                     continue
 
                 # Parse time interval (ISO 8601 format: "start/end")
@@ -306,52 +313,37 @@ class Opower:
                 end_date = datetime.fromisoformat(end_str).date()
                 current_date = datetime.fromisoformat(bill_forecast.get("currentDateTime", start_str)).date()
 
-                # Get account identifiers from the node level
-                account_uuid = node.get("uuid", "")
-                utility_account_id = str(node.get("utilityId", ""))
-
-                # Process each segment (typically one per meter type)
                 for segment in bill_forecast.get("segments", []):
-                    service_type = (segment.get("serviceAgreement") or {}).get("serviceType", "")
+                    service_agreement: dict[str, Any] = segment.get("serviceAgreement") or {}
+                    account_uuid = str(service_agreement.get("uuid", ""))
 
-                    # Map GraphQL service type to MeterType
-                    service_type_map = {"ELECTRICITY": MeterType.ELEC, "GAS": MeterType.GAS}
-                    meter_type = service_type_map.get(service_type)
-                    if meter_type is None:
-                        _LOGGER.debug("Unknown service type: %s", service_type)
+                    # Match the GraphQL data to an existing Account
+                    account = account_map.get(account_uuid)
+                    if not account:
+                        _LOGGER.debug("Forecast found for unknown account UUID: %s", account_uuid)
                         continue
 
-                    # Get unit of measure from segment
-                    unit_str = (segment.get("estimatedUsage") or {}).get("unit", "KWH")
+                    estimated_usage: dict[str, Any] = segment.get("estimatedUsage") or {}
+                    unit_str = str(estimated_usage.get("unit", "KWH"))
                     try:
                         unit_of_measure = UnitOfMeasure(unit_str)
                     except ValueError:
                         _LOGGER.debug("Unknown unit of measure: %s, defaulting to KWH", unit_str)
                         unit_of_measure = UnitOfMeasure.KWH
 
-                    # Use utility_account_id as id if available, otherwise use uuid
-                    account_id = utility_account_id if utility_account_id else account_uuid
-
                     forecasts.append(
                         Forecast(
-                            account=Account(
-                                customer=Customer(uuid=customer_uuid),
-                                uuid=account_uuid,
-                                utility_account_id=utility_account_id,
-                                id=account_id,
-                                meter_type=meter_type,
-                                read_resolution=None,
-                            ),
+                            account=account,
                             start_date=start_date,
                             end_date=end_date,
                             current_date=current_date,
                             unit_of_measure=unit_of_measure,
-                            usage_to_date=float((segment.get("soFarUsage") or {}).get("value", 0)),
-                            cost_to_date=float((segment.get("soFarUsageCharges") or {}).get("value", 0)),
-                            forecasted_usage=float((segment.get("estimatedUsage") or {}).get("value", 0)),
-                            forecasted_cost=float((segment.get("estimatedUsageCharges") or {}).get("value", 0)),
-                            typical_usage=float((segment.get("priorYearUsage") or {}).get("value", 0)),
-                            typical_cost=float((segment.get("priorYearUsageCharges") or {}).get("value", 0)),
+                            usage_to_date=_get_value(segment.get("soFarUsage")),
+                            cost_to_date=_get_value(segment.get("soFarUsageCharges")),
+                            forecasted_usage=_get_value(segment.get("estimatedUsage")),
+                            forecasted_cost=_get_value(segment.get("estimatedUsageCharges")),
+                            typical_usage=_get_value(segment.get("priorYearUsage")),
+                            typical_cost=_get_value(segment.get("priorYearUsageCharges")),
                         )
                     )
         return forecasts
