@@ -244,7 +244,9 @@ class ExelonURLHandler:
             if len(active_accounts) > 1:
                 for account in active_accounts:
                     if account.get("isDefaultProfile") is True:
-                        _LOGGER.info("Found multiple active accounts, using default account %s", account.get("accountNumber", ""))
+                        _LOGGER.info(
+                            "Found multiple active accounts, using default account %s", account.get("accountNumber", "")
+                        )
                         return account
                 _LOGGER.info("Found multiple active accounts, using first %s", active_accounts[0].get("accountNumber", ""))
             return active_accounts[0]
