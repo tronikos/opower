@@ -242,7 +242,13 @@ class ExelonURLHandler:
             if len(active_accounts) == 0:
                 raise InvalidAuth("No active accounts found")
             if len(active_accounts) > 1:
-                _LOGGER.info("Found multiple active accounts, using %s", active_accounts[0].get("accountNumber", ""))
+                for account in active_accounts:
+                    if account.get("isDefaultProfile") is True:
+                        _LOGGER.info(
+                            "Found multiple active accounts, using default account %s", account.get("accountNumber", "")
+                        )
+                        return account
+                _LOGGER.info("Found multiple active accounts, using first %s", active_accounts[0].get("accountNumber", ""))
             return active_accounts[0]
         except aiohttp.ClientError as err:
             raise CannotConnect(f"Cannot obtain account information, unauthorized with error: {err}") from err
