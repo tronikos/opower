@@ -22,6 +22,7 @@ This library is used by the [Opower integration in Home Assistant](https://www.h
   - Orange & Rockland Utilities (ORU)
 - Duquesne Light Company (DQE)
 - Evergy
+- Eversource
 - Exelon subsidiaries
   - Atlantic City Electric
   - Baltimore Gas and Electric (BGE)
