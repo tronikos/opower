@@ -8,6 +8,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from getpass import getpass
+from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
 
@@ -21,6 +22,52 @@ from opower import (
     get_supported_utilities,
     select_utility,
 )
+from opower.email_mfa import ConsoleMfaCodeSource, ImapMfaCodeSource
+
+if TYPE_CHECKING:
+    from opower.utilities.base import MfaHandlerBase
+
+
+async def _handle_mfa_challenge(
+    handler: "MfaHandlerBase", options: dict[str, str], args: argparse.Namespace
+) -> dict[str, Any] | None:
+    """Handle MFA challenge (IMAP or console). Returns login_data on success, None on InvalidAuth."""
+    choice_key = None
+    use_imap = bool(args.mfa_imap_host and args.mfa_imap_user)
+    if use_imap:
+        email_key = next((k for k in options if k.lower() == "email"), None)
+        if not email_key:
+            raise SystemExit(
+                "MFA by email (--mfa_imap_*) was set but this utility did not offer an Email option. "
+                f"Available: {list(options.keys())}"
+            ) from None
+        choice_key = email_key
+        await handler.async_select_mfa_option(choice_key)
+        print(f"Security code will be sent via {options[choice_key]}. Waiting for email, then checking inbox.")
+        await asyncio.sleep(5)
+        imap_password = args.mfa_imap_password or getpass("IMAP password: ")
+        mfa_source = ImapMfaCodeSource(
+            host=args.mfa_imap_host,
+            username=args.mfa_imap_user,
+            password=imap_password,
+            port=args.mfa_imap_port,
+        )
+        code = await mfa_source.get_mfa_code(option_sent_via=options[choice_key])
+    else:
+        if options:
+            print("Please select an MFA option:")
+            for i, (_, value) in enumerate(options.items()):
+                print(f"  [{i + 1}] {value}")
+            choice_index = int(input("Enter the number for your choice: ")) - 1
+            choice_key = list(options.keys())[choice_index]
+            await handler.async_select_mfa_option(choice_key)
+            print(f"A security code has been sent via {options[choice_key]}.")
+        code = await ConsoleMfaCodeSource().get_mfa_code(option_sent_via=options.get(choice_key) if choice_key else None)
+    try:
+        return cast("dict[str, Any] | None", await handler.async_submit_mfa_code(code))
+    except InvalidAuth:
+        logging.exception("MFA failed")
+        return None
 
 
 async def _main() -> None:
@@ -47,6 +94,27 @@ async def _main() -> None:
     parser.add_argument(
         "--login_data_file",
         help="Where to store login data from MFA. If not provided, login data will not be saved.",
+    )
+    parser.add_argument(
+        "--mfa_imap_host",
+        help=(
+            "IMAP host for MFA by email (e.g. imap.gmail.com). "
+            "If set with --mfa_imap_user, the code is read from your inbox; otherwise you are prompted."
+        ),
+    )
+    parser.add_argument(
+        "--mfa_imap_port",
+        type=int,
+        default=993,
+        help="IMAP port for MFA by email. Default: 993.",
+    )
+    parser.add_argument(
+        "--mfa_imap_user",
+        help="IMAP username for MFA by email. Use with --mfa_imap_host to read the code from email.",
+    )
+    parser.add_argument(
+        "--mfa_imap_password",
+        help="IMAP password for MFA by email.",
     )
     parser.add_argument(
         "--aggregate_type",
@@ -114,27 +182,15 @@ async def _main() -> None:
             handler = e.handler
             print(f"MFA Challenge: {e}")
             options = await handler.async_get_mfa_options()
-            if options:
-                print("Please select an MFA option:")
-                for i, (_, value) in enumerate(options.items()):
-                    print(f"  [{i + 1}] {value}")
-                choice_index = int(input("Enter the number for your choice: ")) - 1
-                choice_key = list(options.keys())[choice_index]
-                await handler.async_select_mfa_option(choice_key)
-                print(f"A security code has been sent via {options[choice_key]}.")
-            code = input("Enter the security code: ")
-            try:
-                login_data = await handler.async_submit_mfa_code(code)
-            except InvalidAuth:
-                logging.exception("MFA failed")
+            login_data = await _handle_mfa_challenge(handler, options, args)
+            if login_data is None:
                 return
-            else:
-                print("MFA validation successful.")
-                if args.login_data_file:
-                    with open(args.login_data_file, "w") as file:
-                        json.dump(login_data, file, indent=4)
-                opower.login_data = login_data
-                await opower.async_login()
+            print("MFA validation successful.")
+            if args.login_data_file:
+                with open(args.login_data_file, "w") as file:
+                    json.dump(login_data, file, indent=4)
+            opower.login_data = login_data
+            await opower.async_login()
         except InvalidAuth:
             logging.exception("Login failed")
             return
