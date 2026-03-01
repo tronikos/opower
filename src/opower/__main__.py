@@ -207,7 +207,9 @@ async def _main() -> None:
                 if args.csv:
                     with open(args.csv, "w", newline="") as csv_file:
                         writer = csv.writer(csv_file)
-                        writer.writerow(["start_time", "end_time", "consumption", "provided_cost"])
+                        writer.writerow(
+                            ["start_time", "end_time", "consumption", "provided_cost", "usage_charges", "current_amount"]
+                        )
                         for cost_read in cost_data:
                             writer.writerow(
                                 [
@@ -215,10 +217,14 @@ async def _main() -> None:
                                     cost_read.end_time,
                                     cost_read.consumption,
                                     cost_read.provided_cost,
+                                    cost_read.usage_charges,
+                                    cost_read.current_amount,
                                 ]
                             )
                 else:
-                    print("start_time\tend_time\tconsumption\tprovided_cost\tstart_minus_prev_end\tend_minus_prev_end")
+                    print(
+                        "start_time\tend_time\tconsumption\tprovided_cost\tusage_charges\tcurrent_amount\tstart_minus_prev_end\tend_minus_prev_end"
+                    )
                     for cost_read in cost_data:
                         start_minus_prev_end = None if prev_end is None else cost_read.start_time - prev_end
                         end_minus_prev_end = None if prev_end is None else cost_read.end_time - prev_end
@@ -228,6 +234,8 @@ async def _main() -> None:
                             f"\t{cost_read.end_time}"
                             f"\t{cost_read.consumption}"
                             f"\t{cost_read.provided_cost}"
+                            f"\t{cost_read.usage_charges}"
+                            f"\t{cost_read.current_amount}"
                             f"\t{start_minus_prev_end}"
                             f"\t{end_minus_prev_end}"
                         )
