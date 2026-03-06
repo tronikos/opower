@@ -36,6 +36,7 @@ class UnitOfMeasure(Enum):
 
     KWH = "KWH"
     THERM = "THERM"
+    TH = "TH"
     CCF = "CCF"
 
     def __str__(self) -> str:
