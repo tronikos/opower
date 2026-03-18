@@ -53,8 +53,8 @@ class RhodeIslandEnergy(UtilityBase):
         # --- FIX: Use the imported USER_AGENT constant instead of hardcoding one ---
         headers = {
             "User-Agent": USER_AGENT,
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "*/*",
+            "Accept-Language": "en-US",
         }
 
         # 3. Warm up the session
