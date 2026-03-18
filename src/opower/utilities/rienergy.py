@@ -24,6 +24,10 @@ class RhodeIslandEnergy(UtilityBase):
 
     def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
+        return "rienergy"
+
+    def utilitycode(self) -> str:
+        """Return the utilitycode identifier for the utility."""
         return "ngri"
 
     @staticmethod
@@ -45,7 +49,7 @@ class RhodeIslandEnergy(UtilityBase):
     ) -> str | None:
         """Authenticate against the RIEnergy Opower portal."""
         # 1. Define URLs
-        base_url = f"https://rienergy.opower.com"
+        base_url = f"https://{self.subdomain()}.opower.com"
         login_page_url = f"{base_url}/ei/x/sign-in-wall?source=intercepted"
         api_url = f"{base_url}/ei/edge/apis/user-account-control-v1/cws/v1/{self.subdomain()}/account/signin"
 
