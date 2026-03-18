@@ -51,14 +51,14 @@ class RhodeIslandEnergy(UtilityBase):
         # 1. Define URLs
         base_url = f"https://{self.subdomain()}.opower.com"
         login_page_url = f"{base_url}/ei/x/sign-in-wall?source=intercepted"
-        api_url = f"{base_url}/ei/edge/apis/user-account-control-v1/cws/v1/{self.subdomain()}/account/signin"
+        api_url = f"{base_url}/ei/edge/apis/user-account-control-v1/cws/v1/{self.utilitycode()}/account/signin"
 
         # 2. Define Headers
         # --- FIX: Use the imported USER_AGENT constant instead of hardcoding one ---
         headers = {
             "User-Agent": USER_AGENT,
-            "Accept": "*/*",
-            "Accept-Language": "en-US",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
         }
 
         # 3. Warm up the session
