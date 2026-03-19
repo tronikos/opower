@@ -324,12 +324,19 @@ class Opower:
                         continue
 
                     estimated_usage: dict[str, Any] = segment.get("estimatedUsage") or {}
-                    unit_str = str(estimated_usage.get("unit", "KWH"))
-                    try:
-                        unit_of_measure = UnitOfMeasure(unit_str)
-                    except ValueError:
-                        _LOGGER.debug("Unknown unit of measure: %s, defaulting to KWH", unit_str)
+                    unit_val = estimated_usage.get("unit")
+                    if not unit_val:
+                        _LOGGER.warning("Missing unit of measure, defaulting to KWH")
                         unit_of_measure = UnitOfMeasure.KWH
+                    else:
+                        unit_str = str(unit_val)
+                        if unit_str == "TH":
+                            unit_str = "THERM"
+                        try:
+                            unit_of_measure = UnitOfMeasure(unit_str)
+                        except ValueError:
+                            _LOGGER.warning("Unknown unit of measure: %s, defaulting to KWH", unit_str)
+                            unit_of_measure = UnitOfMeasure.KWH
 
                     forecasts.append(
                         Forecast(
