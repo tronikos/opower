@@ -1,4 +1,4 @@
-# ruff: noqa: T201, ASYNC230, PLR0912, PLR0915
+# ruff: noqa: T201, ASYNC230, ASYNC250, PLR0912, PLR0915
 """Demo usage of Opower library."""
 
 import argparse
@@ -58,13 +58,13 @@ async def _main() -> None:
     parser.add_argument(
         "--start_date",
         help="Start datetime for historical data. Defaults to 7 days ago",
-        type=lambda s: datetime.fromisoformat(s),
+        type=datetime.fromisoformat,
         default=datetime.now() - timedelta(days=7),
     )
     parser.add_argument(
         "--end_date",
         help="end datetime for historical data. Defaults to now",
-        type=lambda s: datetime.fromisoformat(s),
+        type=datetime.fromisoformat,
         default=datetime.now(),
     )
     parser.add_argument(
