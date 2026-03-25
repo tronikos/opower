@@ -1,10 +1,11 @@
 """NIPSCO (Northern Indiana Public Service Company)."""
+
 from typing import Any
 
 import aiohttp
 
-from .base import UtilityBase
 from ..exceptions import InvalidAuth
+from .base import UtilityBase
 
 
 class Nipsco(UtilityBase):
