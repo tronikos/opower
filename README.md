@@ -36,6 +36,7 @@ This library is used by the [Opower integration in Home Assistant](https://www.h
   - National Grid NY Long Island
   - National Grid NY Metro
   - National Grid NY Upstate
+- Northern Indiana Public Service Company (NIPSCO)
 - Pacific Gas & Electric (PG&E)
 - Portland General Electric (PGE)
 - Puget Sound Energy (PSE)
