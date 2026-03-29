@@ -475,8 +475,12 @@ class Opower:
                     continue
 
                 consumption = self._extract_segment_consumption(segment)
-                usage_charges = _get_value(segment.get("usageCharges"))
-                current_amount = _get_value(segment.get("currentAmount"))
+                raw_usage_charges = segment.get("usageCharges")
+                raw_current_amount = segment.get("currentAmount")
+                usage_charges = _get_value(raw_usage_charges) if raw_usage_charges else None
+                current_amount = _get_value(raw_current_amount) if raw_current_amount else None
+                # Use currentAmount (total bill) as provided_cost; fall back to usageCharges.
+                provided_cost = current_amount if current_amount else (usage_charges if usage_charges else 0.0)
 
                 segment_interval = self._extract_segment_interval(segment, time_interval)
                 if segment_interval is None:
@@ -489,7 +493,7 @@ class Opower:
                         start_time=datetime.fromisoformat(seg_start),
                         end_time=datetime.fromisoformat(seg_end),
                         consumption=consumption,
-                        provided_cost=current_amount,
+                        provided_cost=provided_cost,
                         usage_charges=usage_charges,
                         current_amount=current_amount,
                     )
@@ -669,9 +673,7 @@ class Opower:
             batch_start = start_arrow
             while batch_start < end_arrow:
                 batch_end = min(batch_start.shift(hours=24), end_arrow)
-                start_utc = batch_start.to("UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
-                end_utc = batch_end.to("UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
-                intervals.append(f"{start_utc}/{end_utc}")
+                intervals.append(f"{batch_start.isoformat()}/{batch_end.isoformat()}")
                 batch_start = batch_end
         else:
             intervals = [""]  # Single request without timeInterval
@@ -704,11 +706,7 @@ class Opower:
                         if "/" not in time_interval:
                             continue
                         measured = read.get("measuredAmount")
-                        if measured is None:
-                            continue
-                        value = measured.get("value")
-                        if value is None:
-                            continue
+                        value = float(measured["value"]) if measured and measured.get("value") is not None else 0.0
                         monetary = read.get("monetaryAmount")
                         provided_cost = float(monetary["value"]) if monetary and monetary.get("value") is not None else 0.0
                         start_str, end_str = time_interval.split("/", 1)
@@ -716,7 +714,7 @@ class Opower:
                             CostRead(
                                 start_time=datetime.fromisoformat(start_str),
                                 end_time=datetime.fromisoformat(end_str),
-                                consumption=float(value),
+                                consumption=value,
                                 provided_cost=provided_cost,
                             )
                         )

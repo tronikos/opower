@@ -6,6 +6,7 @@ import asyncio
 import csv
 import json
 import logging
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from getpass import getpass
 
@@ -21,6 +22,61 @@ from opower import (
     get_supported_utilities,
     select_utility,
 )
+from opower.opower import CostRead, UsageRead
+
+
+def _output_usage_reads(usage_data: Sequence[UsageRead], csv_file_path: str | None) -> None:
+    """Write usage reads to CSV or stdout."""
+    if csv_file_path:
+        with open(csv_file_path, "w", newline="") as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow(["start_time", "end_time", "consumption"])
+            for read in usage_data:
+                writer.writerow([read.start_time, read.end_time, read.consumption])
+    else:
+        print("start_time\tend_time\tconsumption\tstart_minus_prev_end\tend_minus_prev_end")
+        prev_end: datetime | None = None
+        for read in usage_data:
+            start_minus_prev_end = None if prev_end is None else read.start_time - prev_end
+            end_minus_prev_end = None if prev_end is None else read.end_time - prev_end
+            prev_end = read.end_time
+            print(f"{read.start_time}\t{read.end_time}\t{read.consumption}\t{start_minus_prev_end}\t{end_minus_prev_end}")
+        print()
+
+
+def _output_cost_reads(cost_data: Sequence[CostRead], csv_file_path: str | None, is_bill: bool) -> None:
+    """Write cost reads to CSV or stdout."""
+    if csv_file_path:
+        with open(csv_file_path, "w", newline="") as csv_file:
+            writer = csv.writer(csv_file)
+            if is_bill:
+                writer.writerow(["start_time", "end_time", "consumption", "provided_cost", "usage_charges", "current_amount"])
+            else:
+                writer.writerow(["start_time", "end_time", "consumption", "provided_cost"])
+            for read in cost_data:
+                row = [read.start_time, read.end_time, read.consumption, read.provided_cost]
+                if is_bill:
+                    row.extend([read.usage_charges, read.current_amount])
+                writer.writerow(row)
+    else:
+        if is_bill:
+            print(
+                "start_time\tend_time\tconsumption\tprovided_cost"
+                "\tusage_charges\tcurrent_amount\tstart_minus_prev_end\tend_minus_prev_end"
+            )
+        else:
+            print("start_time\tend_time\tconsumption\tprovided_cost\tstart_minus_prev_end\tend_minus_prev_end")
+        prev_end: datetime | None = None
+        for read in cost_data:
+            start_minus_prev_end = None if prev_end is None else read.start_time - prev_end
+            end_minus_prev_end = None if prev_end is None else read.end_time - prev_end
+            prev_end = read.end_time
+            line = f"{read.start_time}\t{read.end_time}\t{read.consumption}\t{read.provided_cost}"
+            if is_bill:
+                line += f"\t{read.usage_charges}\t{read.current_amount}"
+            line += f"\t{start_minus_prev_end}\t{end_minus_prev_end}"
+            print(line)
+        print()
 
 
 async def _main() -> None:
@@ -159,7 +215,6 @@ async def _main() -> None:
                     "end_date=",
                     args.end_date,
                 )
-            prev_end: datetime | None = None
             # Realtime data does not include cost data, so effectively --realtime implies --usage_only.
             if args.usage_only or args.realtime:
                 if args.realtime:
@@ -171,32 +226,7 @@ async def _main() -> None:
                         args.start_date,
                         args.end_date,
                     )
-                if args.csv:
-                    with open(args.csv, "w", newline="") as csv_file:
-                        writer = csv.writer(csv_file)
-                        writer.writerow(["start_time", "end_time", "consumption"])
-                        for usage_read in usage_data:
-                            writer.writerow(
-                                [
-                                    usage_read.start_time,
-                                    usage_read.end_time,
-                                    usage_read.consumption,
-                                ]
-                            )
-                else:
-                    print("start_time\tend_time\tconsumption\tstart_minus_prev_end\tend_minus_prev_end")
-                    for usage_read in usage_data:
-                        start_minus_prev_end = None if prev_end is None else usage_read.start_time - prev_end
-                        end_minus_prev_end = None if prev_end is None else usage_read.end_time - prev_end
-                        prev_end = usage_read.end_time
-                        print(
-                            f"{usage_read.start_time}"
-                            f"\t{usage_read.end_time}"
-                            f"\t{usage_read.consumption}"
-                            f"\t{start_minus_prev_end}"
-                            f"\t{end_minus_prev_end}"
-                        )
-                    print()
+                _output_usage_reads(usage_data, args.csv)
             else:
                 cost_data = await opower.async_get_cost_reads(
                     account,
@@ -204,42 +234,7 @@ async def _main() -> None:
                     args.start_date,
                     args.end_date,
                 )
-                if args.csv:
-                    with open(args.csv, "w", newline="") as csv_file:
-                        writer = csv.writer(csv_file)
-                        writer.writerow(
-                            ["start_time", "end_time", "consumption", "provided_cost", "usage_charges", "current_amount"]
-                        )
-                        for cost_read in cost_data:
-                            writer.writerow(
-                                [
-                                    cost_read.start_time,
-                                    cost_read.end_time,
-                                    cost_read.consumption,
-                                    cost_read.provided_cost,
-                                    cost_read.usage_charges,
-                                    cost_read.current_amount,
-                                ]
-                            )
-                else:
-                    print(
-                        "start_time\tend_time\tconsumption\tprovided_cost\tusage_charges\tcurrent_amount\tstart_minus_prev_end\tend_minus_prev_end"
-                    )
-                    for cost_read in cost_data:
-                        start_minus_prev_end = None if prev_end is None else cost_read.start_time - prev_end
-                        end_minus_prev_end = None if prev_end is None else cost_read.end_time - prev_end
-                        prev_end = cost_read.end_time
-                        print(
-                            f"{cost_read.start_time}"
-                            f"\t{cost_read.end_time}"
-                            f"\t{cost_read.consumption}"
-                            f"\t{cost_read.provided_cost}"
-                            f"\t{cost_read.usage_charges}"
-                            f"\t{cost_read.current_amount}"
-                            f"\t{start_minus_prev_end}"
-                            f"\t{end_minus_prev_end}"
-                        )
-                    print()
+                _output_cost_reads(cost_data, args.csv, aggregate_type == AggregateType.BILL)
 
 
 if __name__ == "__main__":

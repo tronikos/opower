@@ -241,10 +241,11 @@ async def test_graphql_interval_reads_discovery_and_fetch(monkeypatch: pytest.Mo
 
         # Discovery (1) + reads (1) = 2 GraphQL calls
         assert call_count == 2
-        # 5th read has measuredAmount=None, should be skipped
-        assert len(reads) == 4
+        # 5th read has measuredAmount=None, should be included with consumption=0
+        assert len(reads) == 5
         assert reads[0].consumption == 0.1
         assert reads[3].consumption == 0.4
+        assert reads[4].consumption == 0.0
 
         # Second call should use cache (no extra discovery call)
         await opower._async_get_graphql_interval_reads(account)
@@ -411,9 +412,11 @@ async def test_interval_reads_24h_batching(monkeypatch: pytest.MonkeyPatch) -> N
         await opower._async_get_graphql_interval_reads(account, start, end)
 
         assert len(requested_intervals) == 3
-        # Each interval should be 24 hours
+        # Each interval should use local time with offset (not UTC "Z" suffix)
         for interval in requested_intervals:
-            assert "Z/" in interval  # UTC format
+            parts = interval.split("/")
+            for part in parts:
+                assert not part.endswith("Z"), f"Expected local time with offset, got UTC: {part}"
 
 
 @pytest.mark.asyncio
@@ -644,3 +647,129 @@ async def test_async_get_cost_reads_non_bill_with_monetary_amount(monkeypatch: p
         assert isinstance(cost_reads[0], CostRead)
         assert cost_reads[0].consumption == 1.0
         assert cost_reads[0].provided_cost == pytest.approx(2.25)  # 0.50 + 0.75 + 0 + 1.00
+
+
+@pytest.mark.asyncio
+async def test_graphql_bill_reads_provided_cost_falls_back_to_usage_charges(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bill provided_cost uses currentAmount when available, else usageCharges."""
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(session, "coned", username="test", password="test", optional_totp_secret=None)  # noqa: S106
+        account = Account(
+            customer=Customer(uuid="customer-1"),
+            uuid="account-1",
+            utility_account_id="utility-1",
+            id="utility-1",
+            meter_type=MeterType.ELEC,
+            read_resolution=ReadResolution.QUARTER_HOUR,
+        )
+
+        async def fake_post_graphql(
+            query: str, headers: dict[str, str], variables: dict[str, object] | None = None
+        ) -> dict[str, object]:
+            return {
+                "data": {
+                    "billingAccountByAuthContext": {
+                        "bills": [
+                            {
+                                "timeInterval": "2026-01-01T00:00:00+00:00/2026-02-01T00:00:00+00:00",
+                                "segments": [
+                                    {
+                                        "serviceAgreement": {"serviceType": "ELECTRICITY"},
+                                        "serviceQuantities": [
+                                            {
+                                                "serviceQuantityIdentifier": "consumption",
+                                                "serviceQuantity": {"value": 500.0},
+                                            }
+                                        ],
+                                        "usageCharges": {"value": 75.00},
+                                        "currentAmount": {"value": 120.00},
+                                    },
+                                    {
+                                        "serviceAgreement": {"serviceType": "ELECTRICITY"},
+                                        "serviceQuantities": [
+                                            {
+                                                "serviceQuantityIdentifier": "consumption",
+                                                "serviceQuantity": {"value": 300.0},
+                                            }
+                                        ],
+                                        "usageCharges": {"value": 45.00},
+                                        "currentAmount": None,
+                                    },
+                                    {
+                                        "serviceAgreement": {"serviceType": "ELECTRICITY"},
+                                        "serviceQuantities": [
+                                            {
+                                                "serviceQuantityIdentifier": "consumption",
+                                                "serviceQuantity": {"value": 200.0},
+                                            }
+                                        ],
+                                        "usageCharges": None,
+                                        "currentAmount": None,
+                                    },
+                                ],
+                            }
+                        ]
+                    }
+                }
+            }
+
+        monkeypatch.setattr(opower, "_async_post_graphql", fake_post_graphql)
+        monkeypatch.setattr(opower, "_get_headers", lambda customer_uuid=None: {})
+
+        reads = await opower._async_get_bill_cost_reads(account)
+
+        assert len(reads) == 3
+        # Segment 1: currentAmount available → provided_cost = currentAmount
+        assert reads[0].provided_cost == 120.00
+        assert reads[0].usage_charges == 75.00
+        assert reads[0].current_amount == 120.00
+        # Segment 2: currentAmount null → provided_cost falls back to usageCharges
+        assert reads[1].provided_cost == 45.00
+        assert reads[1].usage_charges == 45.00
+        assert reads[1].current_amount is None
+        # Segment 3: both null → provided_cost = 0
+        assert reads[2].provided_cost == 0.0
+        assert reads[2].usage_charges is None
+        assert reads[2].current_amount is None
+
+
+@pytest.mark.asyncio
+async def test_null_measured_amount_included_as_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Interval reads with null measuredAmount are included with consumption=0."""
+    reads_data = [
+        {"timeInterval": "2026-02-24T05:00:00Z/2026-02-24T05:15:00Z", "measuredAmount": {"value": 0.5}},
+        {"timeInterval": "2026-02-24T05:15:00Z/2026-02-24T05:30:00Z", "measuredAmount": None},
+        {"timeInterval": "2026-02-24T05:30:00Z/2026-02-24T05:45:00Z", "measuredAmount": {"value": None}},
+        {"timeInterval": "2026-02-24T05:45:00Z/2026-02-24T06:00:00Z", "measuredAmount": {"value": 0.3}},
+    ]
+    result = {
+        "data": {
+            "billingAccountByAuthContext": {
+                "serviceAgreementsConnection": {
+                    "edges": [
+                        {
+                            "node": {
+                                "servicePointsConnection": {
+                                    "edges": [
+                                        {
+                                            "node": {
+                                                "intervalReads": [{"reads": reads_data}],
+                                            }
+                                        }
+                                    ]
+                                },
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+    parsed = Opower._parse_interval_reads_response(result)
+
+    assert len(parsed) == 4
+    assert parsed[0].consumption == 0.5
+    assert parsed[1].consumption == 0.0  # null measuredAmount → 0
+    assert parsed[2].consumption == 0.0  # null value inside measuredAmount → 0
+    assert parsed[3].consumption == 0.3
