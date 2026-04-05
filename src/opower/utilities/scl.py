@@ -106,7 +106,10 @@ class SCL(UtilityBase):
             ) as resp:
                 session_result = await resp.text()
             action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(session_result)
-            if action_url != "https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/fed/v1/user/response/login":
+            if (
+                action_url
+                != "https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/fed/v1/user/response/login"
+            ):
                 raise InvalidAuth("Unexpected Oracle IDCS session URL")
             if set(hidden_inputs.keys()) != {"OCIS_REQ"}:
                 raise InvalidAuth("Unexpected Oracle IDCS session form fields")

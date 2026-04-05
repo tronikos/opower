@@ -9,18 +9,10 @@ from yarl import URL
 
 from opower.utilities.scl import SCL, _get_session_storage_values, _get_user_token_from_url
 
-SSOLOGIN_HTML_FILENAME = os.path.join(
-    os.path.dirname(__file__), "scl/ssologin_response.html"
-)
-LOGIN_PAGE_HTML_FILENAME = os.path.join(
-    os.path.dirname(__file__), "scl/login_page.html"
-)
-IDCS_SESSION_HTML_FILENAME = os.path.join(
-    os.path.dirname(__file__), "scl/idcs_session_response.html"
-)
-SAML_RESPONSE_HTML_FILENAME = os.path.join(
-    os.path.dirname(__file__), "scl/saml_response.html"
-)
+SSOLOGIN_HTML_FILENAME = os.path.join(os.path.dirname(__file__), "scl/ssologin_response.html")
+LOGIN_PAGE_HTML_FILENAME = os.path.join(os.path.dirname(__file__), "scl/login_page.html")
+IDCS_SESSION_HTML_FILENAME = os.path.join(os.path.dirname(__file__), "scl/idcs_session_response.html")
+SAML_RESPONSE_HTML_FILENAME = os.path.join(os.path.dirname(__file__), "scl/saml_response.html")
 ENV_SECRET_PATH = os.path.join(os.path.dirname(__file__), "../../../.env.secret")
 
 
@@ -50,10 +42,7 @@ class TestSCL(unittest.IsolatedAsyncioTestCase):
         password = os.getenv("SCL_PASSWORD")
 
         if username is None or password is None:
-            self.skipTest(
-                "Add `SCL_USERNAME=` and `SCL_PASSWORD=` to `.env.secret`"
-                " to run live SCL test."
-            )
+            self.skipTest("Add `SCL_USERNAME=` and `SCL_PASSWORD=` to `.env.secret` to run live SCL test.")
 
         scl = SCL()
         session = aiohttp.ClientSession()
@@ -64,9 +53,7 @@ class TestSCL(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(access_token)
         self.assertTrue(len(access_token) > 0)
 
-        cookies = session.cookie_jar.filter_cookies(
-            URL("https://scl.opower.com")
-        )
+        cookies = session.cookie_jar.filter_cookies(URL("https://scl.opower.com"))
         self.assertTrue(len(cookies) > 0, "Expected opower cookies to be set")
 
 
@@ -136,9 +123,7 @@ class TestSCLFormParsing(unittest.TestCase):
             action_url,
             "https://login.seattle.gov/#/login?appName=EPORTAL_PROD",
         )
-        self.assertEqual(
-            set(hidden_inputs.keys()), {"signature", "state", "loginCtx"}
-        )
+        self.assertEqual(set(hidden_inputs.keys()), {"signature", "state", "loginCtx"})
         self.assertEqual(hidden_inputs["signature"], "test_signature_value")
 
     def test_idcs_session_form(self) -> None:
@@ -165,6 +150,4 @@ class TestSCLFormParsing(unittest.TestCase):
             action_url,
             "https://myutilities.seattle.gov/rest/auth/samlresp",
         )
-        self.assertEqual(
-            set(hidden_inputs.keys()), {"RelayState", "SAMLResponse"}
-        )
+        self.assertEqual(set(hidden_inputs.keys()), {"RelayState", "SAMLResponse"})
