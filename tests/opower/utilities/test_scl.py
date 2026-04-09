@@ -7,6 +7,7 @@ import aiohttp
 from dotenv import load_dotenv
 from yarl import URL
 
+from opower.utilities.helpers import get_form_action_url_and_hidden_inputs
 from opower.utilities.scl import SCL, _get_session_storage_values, _get_user_token_from_url
 
 SSOLOGIN_HTML_FILENAME = os.path.join(os.path.dirname(__file__), "scl/ssologin_response.html")
@@ -114,8 +115,6 @@ class TestSCLFormParsing(unittest.TestCase):
 
     def test_ssologin_form(self) -> None:
         """Test parsing the SSO login form."""
-        from opower.utilities.helpers import get_form_action_url_and_hidden_inputs
-
         with open(SSOLOGIN_HTML_FILENAME) as f:
             html = f.read()
         action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(html)
@@ -128,8 +127,6 @@ class TestSCLFormParsing(unittest.TestCase):
 
     def test_idcs_session_form(self) -> None:
         """Test parsing the Oracle IDCS session form."""
-        from opower.utilities.helpers import get_form_action_url_and_hidden_inputs
-
         with open(IDCS_SESSION_HTML_FILENAME) as f:
             html = f.read()
         action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(html)
@@ -141,8 +138,6 @@ class TestSCLFormParsing(unittest.TestCase):
 
     def test_saml_response_form(self) -> None:
         """Test parsing the SAML response form."""
-        from opower.utilities.helpers import get_form_action_url_and_hidden_inputs
-
         with open(SAML_RESPONSE_HTML_FILENAME) as f:
             html = f.read()
         action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(html)
