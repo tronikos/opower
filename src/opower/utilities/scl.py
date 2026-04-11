@@ -44,6 +44,78 @@ class SCL(UtilityBase):
         """Return the timezone."""
         return "America/Los_Angeles"
 
+    async def _async_sso_login(
+        self,
+        session: aiohttp.ClientSession,
+        username: str,
+        password: str,
+        hidden_inputs: dict[str, str],
+    ) -> tuple[str, dict[str, str]]:
+        """Perform SSO login flow and return SAML response action URL and hidden inputs."""
+        if set(hidden_inputs.keys()) != {"signature", "state", "loginCtx"}:
+            raise InvalidAuth("Unexpected SSO login form fields")
+
+        # POST to https://login.seattle.gov/#/login?appName=EPORTAL_PROD with signature, state, loginCtx
+        # need to parse signinAT, initialState from html sessionStorage.setItem
+        async with session.post(
+            "https://login.seattle.gov/#/login?appName=EPORTAL_PROD",
+            data=hidden_inputs,
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+        ) as resp:
+            login_result = await resp.text()
+            session_items = _get_session_storage_values(login_result)
+        if not {"initialState", "signinAT"}.issubset(set(session_items.keys())):
+            raise InvalidAuth("Missing session storage values from login page")
+
+        # POST to https://login.seattle.gov/authenticate with credentials, initialState, signinAT
+        # response has authnToken in JSON response if initialState and signinAT present
+        async with session.post(
+            "https://login.seattle.gov/authenticate",
+            json={
+                "credentials": {"username": username, "password": password},
+                "initialState": json.loads(session_items.get("initialState", "{}")),
+                "signinAT": session_items.get("signinAT"),
+            },
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=False,
+        ) as resp:
+            if resp.status == 400:
+                raise InvalidAuth("Username and password failed")
+            authenticate_result = await resp.json()
+        if "error_description" in authenticate_result:
+            raise InvalidAuth(authenticate_result["error_description"])
+        authnToken = authenticate_result.get("authnToken")
+        if not authnToken:
+            raise InvalidAuth("Authentication failed: no authnToken received")
+
+        # POST to https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/sso/v1/sdk/session with authnToken
+        # response has OCIS_REQ in HTML form
+        async with session.post(
+            "https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/sso/v1/sdk/session",
+            data={"authnToken": authnToken},
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+        ) as resp:
+            session_result = await resp.text()
+        action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(session_result)
+        if action_url != "https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/fed/v1/user/response/login":
+            raise InvalidAuth("Unexpected Oracle IDCS session URL")
+        if set(hidden_inputs.keys()) != {"OCIS_REQ"}:
+            raise InvalidAuth("Unexpected Oracle IDCS session form fields")
+
+        # POST to https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/fed/v1/user/response/login
+        # with OCIS_REQ (form data)
+        # response has SAMLResponse in HTML form
+        async with session.post(
+            action_url,
+            data=hidden_inputs,
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+        ) as resp:
+            idcs_login_result = await resp.text()
+        return get_form_action_url_and_hidden_inputs(idcs_login_result)
+
     async def async_login(
         self,
         session: aiohttp.ClientSession,
@@ -59,70 +131,12 @@ class SCL(UtilityBase):
         action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(ssologin_result)
         if action_url == "https://login.seattle.gov/#/login?appName=EPORTAL_PROD":
             # Not logged in to seattle.gov, go through SSO flow
-            assert set(hidden_inputs.keys()) == {"signature", "state", "loginCtx"}
+            action_url, hidden_inputs = await self._async_sso_login(session, username, password, hidden_inputs)
 
-            # POST to https://login.seattle.gov/#/login?appName=EPORTAL_PROD with signature, state, loginCtx
-            # need to parse signinAT, initialState from html sessionStorage.setItem
-            async with session.post(
-                action_url,
-                data=hidden_inputs,
-                headers={"User-Agent": USER_AGENT},
-                raise_for_status=True,
-            ) as resp:
-                login_result = await resp.text()
-                session_items = _get_session_storage_values(login_result)
-            assert {"initialState", "signinAT"}.issubset(set(session_items.keys()))
-
-            # POST to https://login.seattle.gov/authenticate with credentials, initialState, signinAT?
-            # response has authnToken in JSON response if initialState and signinAT present
-            async with session.post(
-                "https://login.seattle.gov/authenticate",
-                json={
-                    "credentials": {"username": username, "password": password},
-                    "initialState": json.loads(session_items.get("initialState", "{}")),
-                    "signinAT": session_items.get("signinAT"),
-                },
-                headers={"User-Agent": USER_AGENT},
-                raise_for_status=False,
-            ) as resp:
-                if resp.status == 400:
-                    raise InvalidAuth("Username and password failed")
-                authenticate_result = await resp.json()
-            if "error_description" in authenticate_result:
-                raise InvalidAuth(authenticate_result["error_description"])
-            assert authenticate_result["authnToken"]
-            authnToken = authenticate_result["authnToken"]
-
-            # POST to https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/sso/v1/sdk/session with authnToken
-            # response has OCIS_REQ in HTML form
-            async with session.post(
-                "https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/sso/v1/sdk/session",
-                data={"authnToken": authnToken},
-                headers={"User-Agent": USER_AGENT},
-                raise_for_status=True,
-            ) as resp:
-                session_result = await resp.text()
-            action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(session_result)
-            assert (
-                action_url
-                == "https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/fed/v1/user/response/login"
-            )
-            assert set(hidden_inputs.keys()) == {"OCIS_REQ"}
-
-            # POST to https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/fed/v1/user/response/login
-            # with OCIS_REQ (form data)
-            # response has SAMLResponse in HTML form
-            async with session.post(
-                action_url,
-                data=hidden_inputs,
-                headers={"User-Agent": USER_AGENT},
-                raise_for_status=True,
-            ) as resp:
-                idcs_login_result = await resp.text()
-            action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(idcs_login_result)
-
-        assert action_url == "https://myutilities.seattle.gov/rest/auth/samlresp"
-        assert set(hidden_inputs.keys()) == {"RelayState", "SAMLResponse"}
+        if action_url != "https://myutilities.seattle.gov/rest/auth/samlresp":
+            raise InvalidAuth("Unexpected SAML response URL")
+        if set(hidden_inputs.keys()) != {"RelayState", "SAMLResponse"}:
+            raise InvalidAuth("Unexpected SAML response form fields")
 
         # POST to https://myutilities.seattle.gov/rest/auth/samlresp w/ RelayState https://myutilities.seattle.gov/eportal
         # and SAMLResponse
@@ -136,7 +150,8 @@ class SCL(UtilityBase):
         ) as resp:
             url = resp.real_url.human_repr()
             user_token = _get_user_token_from_url(url)
-            assert user_token
+            if not user_token:
+                raise InvalidAuth("Failed to extract user token from redirect URL")
 
         # getSSOToken (/auth/token)
         async with session.post(
@@ -150,8 +165,9 @@ class SCL(UtilityBase):
             raise_for_status=True,
         ) as resp:
             auth_token_result = await resp.json()
-        assert auth_token_result["access_token"]
-        access_token = auth_token_result["access_token"]
+        access_token = auth_token_result.get("access_token")
+        if not access_token:
+            raise InvalidAuth("Failed to retrieve access token")
         customer_id = auth_token_result["user"]["customerId"]
 
         # List SCL accounts, required to fetch opower token
@@ -199,6 +215,8 @@ class SCL(UtilityBase):
             raise_for_status=True,
         ) as resp:
             result = await resp.json()
-        assert result["token"]
+        token = result.get("token")
+        if not token:
+            raise InvalidAuth("Failed to retrieve Opower token")
 
-        return str(result["token"])
+        return str(token)
