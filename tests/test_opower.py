@@ -412,11 +412,11 @@ async def test_interval_reads_24h_batching(monkeypatch: pytest.MonkeyPatch) -> N
         await opower._async_get_graphql_interval_reads(account, start, end)
 
         assert len(requested_intervals) == 3
-        # Each interval should use local time with offset (not UTC "Z" suffix)
+        # Intervals should use UTC with Z suffix
         for interval in requested_intervals:
             parts = interval.split("/")
             for part in parts:
-                assert not part.endswith("Z"), f"Expected local time with offset, got UTC: {part}"
+                assert part.endswith("Z"), f"Expected UTC with Z suffix, got: {part}"
 
 
 @pytest.mark.asyncio

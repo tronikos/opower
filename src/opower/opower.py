@@ -667,13 +667,17 @@ class Opower:
         if start_date or end_date:
             start = start_date or datetime(2000, 1, 1)
             end = end_date or datetime.now(tz=tzinfo)
-            start_arrow = arrow.get(start).to(tzinfo)
-            end_arrow = arrow.get(end).to(tzinfo)
+            # Batch in UTC to avoid DST ambiguity, and format with Z suffix
+            # since some utilities (e.g. ConEd) reject timezone offsets.
+            start_utc = arrow.get(start).to("UTC")
+            end_utc = arrow.get(end).to("UTC")
             intervals: list[str] = []
-            batch_start = start_arrow
-            while batch_start < end_arrow:
-                batch_end = min(batch_start.shift(hours=24), end_arrow)
-                intervals.append(f"{batch_start.isoformat()}/{batch_end.isoformat()}")
+            batch_start = start_utc
+            while batch_start < end_utc:
+                batch_end = min(batch_start.shift(hours=24), end_utc)
+                intervals.append(
+                    f"{batch_start.format('YYYY-MM-DDTHH:mm:ss[Z]')}/{batch_end.format('YYYY-MM-DDTHH:mm:ss[Z]')}"
+                )
                 batch_start = batch_end
         else:
             intervals = [""]  # Single request without timeInterval
