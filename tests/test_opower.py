@@ -118,6 +118,3 @@ async def test_cost_reads_bill_does_not_fall_back(
 
         with pytest.raises(ApiException):
             await opower.async_get_cost_reads(account, AggregateType.BILL, None, None)
-
-
-# test
