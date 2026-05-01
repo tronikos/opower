@@ -406,7 +406,15 @@ class Opower:
         The resolution for gas is typically 'day' while for electricity it's hour or quarter hour.
         Opower typically keeps historical cost data for 3 years.
         """
-        reads = await self._async_get_dated_data(account, aggregate_type, start_date, end_date, usage_only)
+        try:
+            reads = await self._async_get_dated_data(account, aggregate_type, start_date, end_date, usage_only)
+        except ApiException:
+            # Some utilities (e.g. ConEd) return HTTP 500 from the cost endpoint
+            # for daily/hourly aggregation. Fall back to usage-only reads.
+            if aggregate_type != AggregateType.BILL and not usage_only:
+                _LOGGER.debug("Cost endpoint failed. Falling back to just usage data.")
+                return await self.async_get_cost_reads(account, aggregate_type, start_date, end_date, usage_only=True)
+            raise
         result: list[CostRead] = []
         for read in reads:
             result.append(
