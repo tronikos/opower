@@ -43,6 +43,7 @@ repos:
           - pyotp
           - pytest-mypy
           - python-dotenv
+          - opower
   - repo: https://github.com/adrienverge/yamllint
     rev: v1.38.0
     hooks:
