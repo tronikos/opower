@@ -155,4 +155,20 @@ class COAUtilities(UtilityBase):
             raise_for_status=True,
         ) as response:
             content = await response.json()
-            return str(content["sessionToken"])
+            session_token = str(content["sessionToken"])
+
+        # Sync user details to establish customer session context on the server.
+        # The browser does this immediately after login; without it the /customers
+        # endpoint returns 403 EMPTY_AUTHORIZED_CUSTOMERS_LIST.
+        await session.put(
+            "https://dss-coa.opower.com/webcenter/edge/apis/customer-sync-v1/cws/v1/coa/sync",
+            headers={
+                "User-Agent": USER_AGENT,
+                "Authorization": f"Bearer {session_token}",
+                "Opower-Selected-Entities": '["urn:session:account:provider:dsst"]',
+                "Opower-Auth-Mode": "sso",
+            },
+            json={"operations": [{"type": "USER_DETAILS"}]},
+        )
+
+        return session_token
