@@ -613,9 +613,13 @@ class Opower:
             headers["authorization"] = f"Bearer {self.access_token}"
 
         opower_selected_entities: list[str] = []
-        if self.utility.is_dss() and self.user_accounts:
-            # Required for DSS endpoints
-            opower_selected_entities.append(f"urn:session:account:{self._get_account_id()}")
+        if self.utility.is_dss():
+            if self.user_accounts:
+                # Required for DSS endpoints
+                opower_selected_entities.append(f"urn:session:account:{self._get_account_id()}")
+            # Required for all DSS endpoints; without this the customers endpoint returns
+            # 403 EMPTY_AUTHORIZED_CUSTOMERS_LIST (confirmed via browser HAR analysis)
+            opower_selected_entities.append("urn:session:account:provider:dsst")
 
         if customer_uuid:
             opower_selected_entities.append(f"urn:opower:customer:uuid:{customer_uuid}")
