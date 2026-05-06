@@ -1,5 +1,6 @@
 """City of Austin Utilities."""
 
+import logging
 from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -11,9 +12,15 @@ from ..exceptions import InvalidAuth
 from .base import UtilityBase
 from .helpers import get_form_action_url_and_hidden_inputs
 
+_LOGGER = logging.getLogger(__name__)
+
 
 class COAUtilities(UtilityBase):
     """City of Austin Utilities."""
+
+    def __init__(self) -> None:
+        """Initialize."""
+        self._web_user_id: str | None = None
 
     @staticmethod
     def name() -> str:
@@ -35,6 +42,11 @@ class COAUtilities(UtilityBase):
     @staticmethod
     def is_dss() -> bool:
         """Check if Utility using DSS version of the portal."""
+        return True
+
+    @staticmethod
+    def uses_bill_trends_for_reads() -> bool:
+        """COA DSS uses SAML-only sessions so DataBrowser-v1 is inaccessible via Bearer token."""
         return True
 
     async def async_login(
@@ -157,10 +169,31 @@ class COAUtilities(UtilityBase):
             content = await response.json()
             session_token = str(content["sessionToken"])
 
+        # After a successful OTT exchange, call user-details with the Bearer token.
+        # Post-SSO this endpoint returns the real user object including webUserId
+        # (a UUID). We store it so _async_get_customers can include it as
+        # urn:opower:customer:uuid in the Opower-Selected-Entities header —
+        # the /customers endpoint requires at least one customer UUID or it
+        # returns 403 EMPTY_AUTHORIZED_CUSTOMERS_LIST.
+        async with session.get(
+            "https://dss-coa.opower.com/webcenter/edge/apis/identity-management-v1/cws/v1/auth/coa/user-details",
+            headers={
+                "User-Agent": USER_AGENT,
+                "Authorization": f"Bearer {session_token}",
+                "Opower-Selected-Entities": '["urn:session:account:provider:dsst"]',
+                "Opower-Auth-Mode": "sso",
+            },
+        ) as user_response:
+            if user_response.status == 200:
+                user_data = await user_response.json()
+                self._web_user_id = user_data.get("webUserId")
+                _LOGGER.debug("user-details webUserId=%s", self._web_user_id)
+            else:
+                _LOGGER.debug("user-details returned status=%s", user_response.status)
+
         # Sync user details to establish customer session context on the server.
-        # The browser does this immediately after login; without it the /customers
-        # endpoint returns 403 EMPTY_AUTHORIZED_CUSTOMERS_LIST.
-        await session.put(
+        # The browser does this immediately after login.
+        async with session.put(
             "https://dss-coa.opower.com/webcenter/edge/apis/customer-sync-v1/cws/v1/coa/sync",
             headers={
                 "User-Agent": USER_AGENT,
@@ -169,6 +202,9 @@ class COAUtilities(UtilityBase):
                 "Opower-Auth-Mode": "sso",
             },
             json={"operations": [{"type": "USER_DETAILS"}]},
-        )
+        ) as sync_response:
+            sync_text = await sync_response.text()
+            _LOGGER.debug("customer-sync status=%s body=%s", sync_response.status, sync_text)
+            sync_response.raise_for_status()
 
         return session_token
