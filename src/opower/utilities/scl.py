@@ -69,7 +69,9 @@ class SCL(UtilityBase):
             raise InvalidAuth("Missing session storage values from login page")
 
         # POST to https://login.seattle.gov/authenticate with credentials, initialState, signinAT
-        # response has authnToken in JSON response if initialState and signinAT present
+        # response has authnToken in JSON response if initialState and signinAT present.
+        # Origin/Referer are needed to get past the bot defense, which otherwise returns
+        # a challenge page. The JSON response is served as text/html, so skip the check.
         async with session.post(
             "https://login.seattle.gov/authenticate",
             json={
@@ -77,12 +79,16 @@ class SCL(UtilityBase):
                 "initialState": json.loads(session_items.get("initialState", "{}")),
                 "signinAT": session_items.get("signinAT"),
             },
-            headers={"User-Agent": USER_AGENT},
+            headers={
+                "User-Agent": USER_AGENT,
+                "Origin": "https://login.seattle.gov",
+                "Referer": "https://login.seattle.gov/",
+            },
             raise_for_status=False,
         ) as resp:
             if resp.status == 400:
                 raise InvalidAuth("Username and password failed")
-            authenticate_result = await resp.json()
+            authenticate_result = await resp.json(content_type=None)
         if "error_description" in authenticate_result:
             raise InvalidAuth(authenticate_result["error_description"])
         authnToken = authenticate_result.get("authnToken")

@@ -2,9 +2,12 @@
 
 import os
 import unittest
+from typing import Any
 
 import aiohttp
+from aiohttp import ContentTypeError, RequestInfo
 from dotenv import load_dotenv
+from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
 from opower.utilities.helpers import get_form_action_url_and_hidden_inputs
@@ -56,6 +59,110 @@ class TestSCL(unittest.IsolatedAsyncioTestCase):
 
         cookies = session.cookie_jar.filter_cookies(URL("https://scl.opower.com"))
         self.assertTrue(len(cookies) > 0, "Expected opower cookies to be set")
+
+
+def _read_fixture(filename: str) -> str:
+    with open(os.path.join(os.path.dirname(__file__), "scl", filename)) as f:
+        return f.read()
+
+
+class _MockResponse:
+    """Minimal stand-in for aiohttp.ClientResponse."""
+
+    def __init__(
+        self, *, text: str = "", payload: Any = None, content_type: str = "application/json", real_url: str = ""
+    ) -> None:
+        self.status = 200
+        self._text = text
+        self._payload = payload
+        self._content_type = content_type
+        self.real_url = URL(real_url)
+
+    async def text(self) -> str:
+        return self._text
+
+    async def json(self, *, content_type: str | None = "application/json") -> Any:
+        # Mimic aiohttp: reject mismatched content types unless the check is disabled.
+        if content_type is not None and "json" not in self._content_type:
+            raise ContentTypeError(
+                RequestInfo(URL(""), "POST", CIMultiDictProxy(CIMultiDict()), URL("")),
+                (),
+                message=f"Attempt to decode JSON with unexpected mimetype: {self._content_type}",
+            )
+        return self._payload
+
+    async def __aenter__(self) -> "_MockResponse":
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+class _MockSession:
+    """Records requests and returns canned responses keyed by URL."""
+
+    def __init__(self, responses: dict[str, _MockResponse]) -> None:
+        self._responses = responses
+        self.requests: list[dict[str, Any]] = []
+
+    def _handle(self, method: str, url: str, **kwargs: Any) -> _MockResponse:
+        self.requests.append({"method": method, "url": url, **kwargs})
+        return self._responses[url]
+
+    def get(self, url: str, **kwargs: Any) -> _MockResponse:
+        return self._handle("GET", url, **kwargs)
+
+    def post(self, url: str, **kwargs: Any) -> _MockResponse:
+        return self._handle("POST", url, **kwargs)
+
+
+class TestSCLLoginFlow(unittest.IsolatedAsyncioTestCase):
+    """Test the full SSO login flow with mocked HTTP responses."""
+
+    async def test_login_sends_bot_defense_headers_and_parses_html_json(self) -> None:
+        """Authenticate must send Origin/Referer and parse its text/html JSON body."""
+        responses = {
+            "https://myutilities.seattle.gov/rest/auth/ssologin": _MockResponse(text=_read_fixture("ssologin_response.html")),
+            "https://login.seattle.gov/#/login?appName=EPORTAL_PROD": _MockResponse(text=_read_fixture("login_page.html")),
+            # Bot defense serves the JSON body as text/html.
+            "https://login.seattle.gov/authenticate": _MockResponse(
+                payload={"authnToken": "test_authn_token"}, content_type="text/html"
+            ),
+            "https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/sso/v1/sdk/session": _MockResponse(
+                text=_read_fixture("idcs_session_response.html")
+            ),
+            "https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/fed/v1/user/response/login": _MockResponse(
+                text=_read_fixture("saml_response.html")
+            ),
+            "https://myutilities.seattle.gov/rest/auth/samlresp": _MockResponse(
+                real_url="https://myutilities.seattle.gov/eportal/#/ssohome/test_user_token"
+            ),
+            "https://myutilities.seattle.gov/rest/auth/token": _MockResponse(
+                payload={"access_token": "test_access_token", "user": {"customerId": "test_customer"}}
+            ),
+            "https://myutilities.seattle.gov/rest/account/list/some": _MockResponse(
+                payload={
+                    "account": [
+                        {
+                            "accountNumber": "1",
+                            "personId": "2",
+                            "companyCd": "SCL",
+                            "serviceAddress": "addr",
+                        }
+                    ]
+                }
+            ),
+            "https://myutilities.seattle.gov/rest/usage/token": _MockResponse(payload={"token": "opower_token"}),
+        }
+        session = _MockSession(responses)
+
+        token = await SCL().async_login(session, "user", "pass", {})  # type: ignore[arg-type]
+
+        self.assertEqual(token, "opower_token")
+        authenticate = next(r for r in session.requests if r["url"] == "https://login.seattle.gov/authenticate")
+        headers = authenticate["headers"]
+        self.assertEqual(headers["Origin"], "https://login.seattle.gov")
+        self.assertEqual(headers["Referer"], "https://login.seattle.gov/")
 
 
 class TestSCLSessionStorageParser(unittest.TestCase):
