@@ -54,11 +54,11 @@ class TestSCL(unittest.IsolatedAsyncioTestCase):
 
         access_token = await scl.async_login(session, username, password, {})
 
+        # SCL returns the Opower token directly; unlike the cookie/SAML based
+        # utilities it never contacts *.opower.com during login, so only the
+        # returned token can be asserted here.
         self.assertIsNotNone(access_token)
         self.assertTrue(len(access_token) > 0)
-
-        cookies = session.cookie_jar.filter_cookies(URL("https://scl.opower.com"))
-        self.assertTrue(len(cookies) > 0, "Expected opower cookies to be set")
 
 
 def _read_fixture(filename: str) -> str:
