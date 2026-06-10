@@ -31,13 +31,18 @@ repos:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
-  - repo: local
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.20.0
     hooks:
       - id: mypy
-        name: mypy
-        entry: mypy --config-file=pyproject.toml
-        language: system
-        types: [python]
+        args: [--config-file=pyproject.toml]
+        additional_dependencies:
+          - aiohttp
+          - aiozoneinfo
+          - arrow
+          - pyotp
+          - pytest-mypy
+          - python-dotenv
   - repo: https://github.com/adrienverge/yamllint
     rev: v1.38.0
     hooks:

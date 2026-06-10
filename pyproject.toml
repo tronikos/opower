@@ -80,6 +80,7 @@ max-complexity = 25
 [tool.mypy]
 python_version = "3.11"
 exclude = [".venv", "venv", "build"]
+mypy_path = "src"
 pretty = true
 strict = true
 show_error_codes = true
