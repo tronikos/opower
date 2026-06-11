@@ -360,11 +360,21 @@ class Opower:
     _DSS_SERVICE_TYPE_TO_METER: ClassVar[dict[str, str]] = {
         "ELECTRICITY": "ELEC",
         "ELECTRIC": "ELEC",
+        "ELECTRICITY_NET_METERING": "ELEC",
+        "SOLAR": "ELEC",
+        "SOLAR_PV": "ELEC",
+        "RESIDENTIAL_ELECTRIC": "ELEC",
+        "COMMERCIAL_ELECTRIC": "ELEC",
         "NATURAL_GAS": "GAS",
         "GAS": "GAS",
         "WATER": "WATER",
         "WASTE_WATER": "WATER",
         "WASTEWATER": "WATER",
+        "WASTEWATER_SERVICE": "WATER",
+        "RESIDENTIAL_WATER": "WATER",
+        "COMMERCIAL_WATER": "WATER",
+        "IRRIGATION": "WATER",
+        "RECLAIMED_WATER": "WATER",
     }
 
     async def _async_get_customers(self) -> list[Any]:
@@ -388,7 +398,13 @@ class Opower:
                 result = await self._async_get_request(url, {}, self._get_headers())
                 for customer in result["customers"]:
                     self.customers.append(customer)
-        assert self.customers
+        if not self.customers:
+            _LOGGER.warning(
+                "No utility customers found for %s. This may indicate that the "
+                "service agreements endpoint returned unrecognized service types. "
+                "Check debug logs for 'Skipping unknown DSS serviceType' entries.",
+                self.utility.name(),
+            )
         return self.customers
 
     async def _async_get_dss_customers(self) -> None:
