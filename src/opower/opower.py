@@ -360,6 +360,7 @@ class Opower:
     _DSS_SERVICE_TYPE_TO_METER: ClassVar[dict[str, str]] = {
         "ELECTRICITY": "ELEC",
         "ELECTRIC": "ELEC",
+        "ELEC": "ELEC",
         "ELECTRICITY_NET_METERING": "ELEC",
         "SOLAR": "ELEC",
         "SOLAR_PV": "ELEC",
