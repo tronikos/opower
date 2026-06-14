@@ -202,6 +202,7 @@ class Opower:
         self.customers: list[Any] = []
         self.user_accounts: list[Any] = []
         self.meters: list[str] = []
+        self._billing_account_urns: dict[tuple[str, str, str, str], str | None] = {}
 
     async def async_login(self) -> None:
         """Login to the utility website and authorize opower.com for access.
@@ -385,21 +386,102 @@ class Opower:
         )
         return False
 
-    async def _bill_segments_are_ambiguous(self, account: Account) -> bool:
-        """Return True when bill segments cannot be safely mapped to an account."""
+    async def _async_get_billing_account_urn(self, account: Account) -> str | None:
+        """Return a GraphQL billing account URN when it can be mapped safely."""
+        cache_key = (account.customer.uuid, account.meter_type.value, account.uuid, account.utility_account_id)
+        if cache_key in self._billing_account_urns:
+            return self._billing_account_urns[cache_key]
+
+        query = """
+        query GetBillingAccountsForBills(
+          $first: Int
+          $onlyActive: Boolean
+        ) {
+          billingAccountsConnection(first: $first) {
+            edges {
+              node {
+                urn
+                uuid
+                accountNumber
+                utilityId
+                serviceAgreementsConnection(first: 25, onlyActive: $onlyActive) {
+                  edges {
+                    node {
+                      serviceType
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+        result = await self._async_post_graphql(
+            query,
+            self._get_headers(account.customer.uuid),
+            {"first": 100, "onlyActive": True},
+        )
+
+        rest_meter_account_count = 0
         for customer in await self._async_get_customers():
             if str(customer.get("uuid", "")) != account.customer.uuid:
                 continue
-            # For bill segments, ConEd's serviceAgreement.uuid does not match
-            # utilityAccount.uuid. Meter type is the only validated bridge, so
-            # use GraphQL only when it uniquely identifies the account.
-            matching_accounts = [
-                utility_account
+            rest_meter_account_count = sum(
+                1
                 for utility_account in customer.get("utilityAccounts", [])
                 if utility_account.get("meterType") == account.meter_type.value
-            ]
-            return len(matching_accounts) > 1
-        return False
+            )
+            break
+
+        account_identifiers = {account.uuid, account.utility_account_id, account.id}
+        account_identifiers |= {identifier.lstrip("0") or "0" for identifier in account_identifiers}
+
+        candidates: list[dict[str, str]] = []
+        for edge in result.get("data", {}).get("billingAccountsConnection", {}).get("edges", []):
+            node = edge.get("node", {})
+            urn = node.get("urn")
+            if not urn:
+                continue
+            service_agreement_edges = node.get("serviceAgreementsConnection", {}).get("edges", [])
+            if any(
+                self._DSS_SERVICE_TYPE_TO_METER.get(str(sa_edge.get("node", {}).get("serviceType", "")).upper())
+                == account.meter_type.value
+                for sa_edge in service_agreement_edges
+            ):
+                candidates.append(
+                    {
+                        "urn": str(urn),
+                        "uuid": str(node.get("uuid", "")),
+                        "accountNumber": str(node.get("accountNumber", "")),
+                        "utilityId": str(node.get("utilityId", "")),
+                    }
+                )
+
+        matching_candidates = [
+            candidate
+            for candidate in candidates
+            if any(
+                value and (value in account_identifiers or (value.lstrip("0") or "0") in account_identifiers)
+                for key, value in candidate.items()
+                if key != "urn"
+            )
+        ]
+
+        if len(matching_candidates) == 1:
+            billing_account_urn = matching_candidates[0]["urn"]
+        elif rest_meter_account_count == 1 and len(candidates) == 1:
+            billing_account_urn = candidates[0]["urn"]
+        else:
+            billing_account_urn = None
+
+        if billing_account_urn is None:
+            _LOGGER.debug(
+                "GraphQL billing account is ambiguous for customer=%s meter_type=%s, falling back to REST bill data.",
+                account.customer.uuid,
+                account.meter_type.value,
+            )
+        self._billing_account_urns[cache_key] = billing_account_urn
+        return billing_account_urn
 
     @staticmethod
     def _extract_segment_consumption(segment: dict[str, Any]) -> float:
@@ -446,20 +528,17 @@ class Opower:
         end_date: datetime | None = None,
     ) -> list[CostRead]:
         """Get bill-level cost and usage data via GraphQL."""
-        if await self._bill_segments_are_ambiguous(account):
-            _LOGGER.debug(
-                "GraphQL bill segments are ambiguous for customer=%s meter_type=%s, falling back to REST bill data.",
-                account.customer.uuid,
-                account.meter_type.value,
-            )
+        billing_account_urn = await self._async_get_billing_account_urn(account)
+        if billing_account_urn is None:
             return []
 
         query = """
         query GetCostUsageReadsForBills(
           $last: Int
           $timeInterval: TimeInterval
+          $selectedAccount: ID
         ) {
-          billingAccountByAuthContext {
+          billingAccountByAuthContext(selectedAccount: $selectedAccount) {
             bills(
               last: $last
               during: $timeInterval
@@ -496,6 +575,7 @@ class Opower:
         variables: dict[str, Any] = {
             "last": bill_count,
             "timeInterval": f"{start_iso}/{end_iso}",
+            "selectedAccount": billing_account_urn,
         }
 
         result = await self._async_post_graphql(query, self._get_headers(account.customer.uuid), variables)
