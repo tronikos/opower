@@ -34,6 +34,24 @@ def _account(meter_type: MeterType = MeterType.ELEC) -> Account:
     )
 
 
+def _customer_accounts(*accounts: tuple[str, MeterType]) -> list[dict[str, object]]:
+    """Return a cached customers response for test accounts."""
+    return [
+        {
+            "uuid": "customer-1",
+            "utilityAccounts": [
+                {
+                    "uuid": uuid,
+                    "preferredUtilityAccountId": uuid,
+                    "meterType": meter_type.value,
+                    "readResolution": ReadResolution.HOUR.value,
+                }
+                for uuid, meter_type in accounts
+            ],
+        }
+    ]
+
+
 @pytest.mark.parametrize("utility", get_supported_utilities())
 @pytest.mark.asyncio
 async def test_invalid_auth(utility: type["UtilityBase"]) -> None:
@@ -115,6 +133,7 @@ async def test_graphql_bill_reads_parse_electric(
             password="test",  # noqa: S106
         )
         account = _account()
+        opower.customers = _customer_accounts(("account-1", MeterType.ELEC))
         captured_variables: dict[str, object] = {}
 
         async def fake_post_graphql(
@@ -196,6 +215,7 @@ async def test_graphql_bill_reads_accept_natural_gas(
             password="test",  # noqa: S106
         )
         account = _account(MeterType.GAS)
+        opower.customers = _customer_accounts(("account-1", MeterType.GAS))
 
         async def fake_post_graphql(
             query: str,
@@ -252,6 +272,57 @@ async def test_graphql_bill_reads_accept_natural_gas(
         assert reads[0].provided_cost == 8.0
         assert reads[0].usage_charges == 8.0
         assert reads[0].current_amount is None
+
+
+@pytest.mark.asyncio
+async def test_cost_reads_bill_falls_back_to_rest_when_graphql_segments_are_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GraphQL bill costs fall back to REST when same-meter accounts cannot be distinguished."""
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(
+            session,
+            "coned",
+            username="test",
+            password="test",  # noqa: S106
+        )
+
+        account = _account()
+        opower.customers = _customer_accounts(
+            ("account-1", MeterType.ELEC),
+            ("account-2", MeterType.ELEC),
+        )
+        call_log: list[bool] = []
+
+        async def fake_post_graphql(*args: object, **kwargs: object) -> dict[str, object]:
+            pytest.fail("Ambiguous same-meter accounts should not query GraphQL bill segments")
+
+        async def fake_get_dated_data(
+            acc: object,
+            agg: AggregateType,
+            start: object,
+            end: object,
+            usage_only: bool = False,
+        ) -> list[dict[str, object]]:
+            call_log.append(usage_only)
+            return [
+                {
+                    "startTime": "2026-01-01T00:00:00-05:00",
+                    "endTime": "2026-02-01T00:00:00-05:00",
+                    "value": 123.0,
+                    "providedCost": 45.67,
+                }
+            ]
+
+        monkeypatch.setattr(opower, "_async_post_graphql", fake_post_graphql)
+        monkeypatch.setattr(opower, "_async_get_dated_data", fake_get_dated_data)
+
+        result = await opower.async_get_cost_reads(account, AggregateType.BILL, None, None)
+
+        assert call_log == [False]
+        assert len(result) == 1
+        assert result[0].consumption == 123.0
+        assert result[0].provided_cost == 45.67
 
 
 @pytest.mark.asyncio

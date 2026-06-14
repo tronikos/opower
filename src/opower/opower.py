@@ -385,6 +385,22 @@ class Opower:
         )
         return False
 
+    async def _bill_segments_are_ambiguous(self, account: Account) -> bool:
+        """Return True when bill segments cannot be safely mapped to an account."""
+        for customer in await self._async_get_customers():
+            if str(customer.get("uuid", "")) != account.customer.uuid:
+                continue
+            # For bill segments, ConEd's serviceAgreement.uuid does not match
+            # utilityAccount.uuid. Meter type is the only validated bridge, so
+            # use GraphQL only when it uniquely identifies the account.
+            matching_accounts = [
+                utility_account
+                for utility_account in customer.get("utilityAccounts", [])
+                if utility_account.get("meterType") == account.meter_type.value
+            ]
+            return len(matching_accounts) > 1
+        return False
+
     @staticmethod
     def _extract_segment_consumption(segment: dict[str, Any]) -> float:
         """Extract consumption value from a GraphQL bill segment."""
@@ -430,6 +446,14 @@ class Opower:
         end_date: datetime | None = None,
     ) -> list[CostRead]:
         """Get bill-level cost and usage data via GraphQL."""
+        if await self._bill_segments_are_ambiguous(account):
+            _LOGGER.debug(
+                "GraphQL bill segments are ambiguous for customer=%s meter_type=%s, falling back to REST bill data.",
+                account.customer.uuid,
+                account.meter_type.value,
+            )
+            return []
+
         query = """
         query GetCostUsageReadsForBills(
           $last: Int
