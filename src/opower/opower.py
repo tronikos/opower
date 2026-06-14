@@ -5,7 +5,7 @@ import json
 import logging
 from datetime import date, datetime, timedelta, tzinfo
 from enum import Enum
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import urlencode
 
 import aiohttp
@@ -21,10 +21,11 @@ _LOGGER = logging.getLogger(__file__)
 
 
 class MeterType(Enum):
-    """Meter type. Electric or gas."""
+    """Meter type."""
 
     ELEC = "ELEC"
     GAS = "GAS"
+    WATER = "WATER"
 
     def __str__(self) -> str:
         """Return the value of the enum."""
@@ -200,8 +201,7 @@ class Opower:
         self.access_token: str | None = None
         self.customers: list[Any] = []
         self.user_accounts: list[Any] = []
-        # Cache: account UUID → (service_point_uuid, register_id)
-        self._service_point_cache: dict[str, tuple[str, str]] = {}
+        self.meters: list[str] = []
 
     async def async_login(self) -> None:
         """Login to the utility website and authorize opower.com for access.
@@ -327,12 +327,20 @@ class Opower:
                         continue
 
                     estimated_usage: dict[str, Any] = segment.get("estimatedUsage") or {}
-                    unit_str = str(estimated_usage.get("unit", "KWH"))
-                    try:
-                        unit_of_measure = UnitOfMeasure(unit_str)
-                    except ValueError:
-                        _LOGGER.debug("Unknown unit of measure: %s, defaulting to KWH", unit_str)
-                        unit_of_measure = UnitOfMeasure.KWH
+                    unit_val = estimated_usage.get("unit")
+                    default_unit = UnitOfMeasure.THERM if account.meter_type == MeterType.GAS else UnitOfMeasure.KWH
+                    if not unit_val:
+                        _LOGGER.warning("Missing unit of measure, defaulting to %s", default_unit)
+                        unit_of_measure = default_unit
+                    else:
+                        unit_str = str(unit_val)
+                        if unit_str == "TH":
+                            unit_str = "THERM"
+                        try:
+                            unit_of_measure = UnitOfMeasure(unit_str)
+                        except ValueError:
+                            _LOGGER.warning("Unknown unit of measure: %s, defaulting to %s", unit_str, default_unit)
+                            unit_of_measure = default_unit
 
                     forecasts.append(
                         Forecast(
@@ -351,41 +359,69 @@ class Opower:
                     )
         return forecasts
 
-    def _segment_matches_meter_type(self, segment: dict[str, Any], account: Account) -> bool:
-        """Return True when a GraphQL segment service type matches account meter type."""
-        allowed_service_types = {
-            MeterType.ELEC: {"ELECTRICITY", "ELEC", "ELECTRIC"},
-            MeterType.GAS: {"GAS", "NATURAL_GAS", "NATURALGAS"},
-        }.get(account.meter_type, set())
-        sa = segment.get("serviceAgreement") or {}
-        sa_service_type = str(sa.get("serviceType", "")).upper()
-        if not sa_service_type or sa_service_type in allowed_service_types:
+    _DSS_SERVICE_TYPE_TO_METER: ClassVar[dict[str, str]] = {
+        "ELEC": "ELEC",
+        "ELECTRICITY": "ELEC",
+        "ELECTRIC": "ELEC",
+        "NATURAL_GAS": "GAS",
+        "NATURALGAS": "GAS",
+        "GAS": "GAS",
+        "WATER": "WATER",
+        "WASTE_WATER": "WATER",
+        "WASTEWATER": "WATER",
+    }
+
+    def _segment_matches_account(self, segment: dict[str, Any], account: Account) -> bool:
+        """Return True when a GraphQL bill segment belongs to the requested account."""
+        service_agreement = segment.get("serviceAgreement") or {}
+        service_type = str(service_agreement.get("serviceType", "")).upper()
+        meter_type = self._DSS_SERVICE_TYPE_TO_METER.get(service_type)
+        if not meter_type or meter_type == account.meter_type.value:
             return True
         _LOGGER.debug(
             "Skipping segment: serviceType=%s != meter_type=%s",
-            sa_service_type,
+            service_type,
             account.meter_type.value,
         )
         return False
 
     @staticmethod
     def _extract_segment_consumption(segment: dict[str, Any]) -> float:
-        """Extract consumption value from segment quantities."""
-        sqs = segment.get("serviceQuantities", [])
-        for sq in sqs:
-            if sq.get("serviceQuantityIdentifier") == "consumption":
-                return _get_value(sq.get("serviceQuantity"))
-        if len(sqs) == 1:
-            return _get_value(sqs[0].get("serviceQuantity"))
+        """Extract consumption value from a GraphQL bill segment."""
+        service_quantities = segment.get("serviceQuantities", [])
+        for quantity in service_quantities:
+            if str(quantity.get("serviceQuantityIdentifier", "")).lower() == "consumption":
+                return _get_value(quantity.get("serviceQuantity"))
+        if len(service_quantities) == 1:
+            return _get_value(service_quantities[0].get("serviceQuantity"))
         return 0.0
 
     @staticmethod
     def _extract_segment_interval(segment: dict[str, Any], bill_time_interval: str) -> tuple[str, str] | None:
-        """Extract segment interval or fallback to bill interval."""
+        """Extract a segment interval, falling back to the bill interval."""
         usage_interval = segment.get("usageInterval", bill_time_interval)
         if "/" not in usage_interval:
             return None
-        return tuple(usage_interval.split("/", 1))
+        start_time, end_time = usage_interval.split("/", 1)
+        return start_time, end_time
+
+    @staticmethod
+    def _bill_query_window(
+        start_date: datetime | None,
+        end_date: datetime | None,
+        timezone: tzinfo,
+    ) -> tuple[str, str, int]:
+        """Return GraphQL time interval bounds and a bill count large enough for the range."""
+        if start_date or end_date:
+            start = start_date or datetime(2000, 1, 1, tzinfo=timezone)
+            end = end_date or datetime.now(tz=timezone)
+        else:
+            end = datetime.now(tz=timezone)
+            start = end - timedelta(days=730)
+        start_arrow = arrow.get(start).to(timezone)
+        end_arrow = arrow.get(end).to(timezone)
+        months = (end_arrow.year - start_arrow.year) * 12 + end_arrow.month - start_arrow.month
+        return start_arrow.isoformat(), end_arrow.isoformat(), max(26, months + 2)
 
     async def _async_get_bill_cost_reads(
         self,
@@ -393,11 +429,7 @@ class Opower:
         start_date: datetime | None = None,
         end_date: datetime | None = None,
     ) -> list[CostRead]:
-        """Get bill-level cost and usage data via GraphQL.
-
-        Returns actual bill costs (usageCharges and currentAmount) which many
-        utilities don't provide through the REST API (providedCost = 0).
-        """
+        """Get bill-level cost and usage data via GraphQL."""
         query = """
         query GetCostUsageReadsForBills(
           $last: Int
@@ -414,6 +446,7 @@ class Opower:
               segments {
                 usageInterval
                 serviceAgreement {
+                  uuid
                   serviceType
                 }
                 serviceQuantities {
@@ -435,64 +468,45 @@ class Opower:
         """
 
         tzinfo = await aiozoneinfo.async_get_time_zone(self.utility.timezone())
-        if start_date or end_date:
-            start = start_date or datetime(2000, 1, 1)
-            end = end_date or datetime.now(tz=tzinfo)
-        else:
-            # Default to ~2 years of bills
-            end = datetime.now(tz=tzinfo)
-            start = end - timedelta(days=730)
-        start_iso = arrow.get(start).to(tzinfo).isoformat()
-        end_iso = arrow.get(end).to(tzinfo).isoformat()
+        start_iso, end_iso, bill_count = self._bill_query_window(start_date, end_date, tzinfo)
         variables: dict[str, Any] = {
-            "last": 26,
+            "last": bill_count,
             "timeInterval": f"{start_iso}/{end_iso}",
         }
 
-        headers = self._get_headers(account.customer.uuid)
-
-        try:
-            result = await self._async_post_graphql(query, headers, variables)
-        except ApiException as err:
-            _LOGGER.debug("GraphQL bill cost query failed: %s", err)
-            return []
-
+        result = await self._async_post_graphql(query, self._get_headers(account.customer.uuid), variables)
         billing_account = result.get("data", {}).get("billingAccountByAuthContext")
         if billing_account is None:
             return []
 
-        bills = billing_account.get("bills", [])
-
         reads: list[CostRead] = []
-        for bill in bills:
+        for bill in billing_account.get("bills", []):
             time_interval = bill.get("timeInterval", "")
             if "/" not in time_interval:
                 _LOGGER.debug("Skipping bill with invalid timeInterval: %s", time_interval)
                 continue
 
             for segment in bill.get("segments", []):
-                if not self._segment_matches_meter_type(segment, account):
+                if not self._segment_matches_account(segment, account):
                     continue
-
-                consumption = self._extract_segment_consumption(segment)
-                raw_usage_charges = segment.get("usageCharges")
-                raw_current_amount = segment.get("currentAmount")
-                usage_charges = _get_value(raw_usage_charges) if raw_usage_charges else None
-                current_amount = _get_value(raw_current_amount) if raw_current_amount else None
-                # Use currentAmount (total bill) as provided_cost; fall back to usageCharges.
-                provided_cost = current_amount if current_amount else (usage_charges if usage_charges else 0.0)
 
                 segment_interval = self._extract_segment_interval(segment, time_interval)
                 if segment_interval is None:
                     _LOGGER.debug("Skipping segment with invalid interval in bill: %s", time_interval)
                     continue
-                seg_start, seg_end = segment_interval
+                segment_start, segment_end = segment_interval
+
+                usage_charges_data = segment.get("usageCharges")
+                current_amount_data = segment.get("currentAmount")
+                usage_charges = _get_value(usage_charges_data) if usage_charges_data else None
+                current_amount = _get_value(current_amount_data) if current_amount_data else None
+                provided_cost = current_amount if current_amount is not None else (usage_charges or 0.0)
 
                 reads.append(
                     CostRead(
-                        start_time=datetime.fromisoformat(seg_start),
-                        end_time=datetime.fromisoformat(seg_end),
-                        consumption=consumption,
+                        start_time=datetime.fromisoformat(segment_start),
+                        end_time=datetime.fromisoformat(segment_end),
+                        consumption=self._extract_segment_consumption(segment),
                         provided_cost=provided_cost,
                         usage_charges=usage_charges,
                         current_amount=current_amount,
@@ -501,295 +515,71 @@ class Opower:
 
         return reads
 
-    @staticmethod
-    def _get_interval_read_filters(meter_type: MeterType) -> tuple[list[str], list[str]]:
-        """Return (units, sqi) enum values for interval read GraphQL queries.
-
-        TODO: Validate gas interval filter variants (e.g. CCF/THERM + SQI) against a live gas utility.
-        """
-        if meter_type == MeterType.ELEC:
-            return ["KWH"], ["NET_USAGE"]
-        return ["CCF"], ["DELIVERED"]
-
-    async def _async_discover_service_point(
-        self,
-        account: Account,
-    ) -> tuple[str, str]:
-        """Discover service point UUID and register ID for an account via GraphQL.
-
-        Returns (service_point_uuid, register_id) needed for interval reads.
-        Results are cached per account UUID.
-        """
-        if account.uuid in self._service_point_cache:
-            return self._service_point_cache[account.uuid]
-
-        units, sqi = self._get_interval_read_filters(account.meter_type)
-
-        query = """
-        query GetServicePointRegisters(
-          $customerURN: ID
-          $units: [UnitOfMeasure!]!
-          $sqi: [ServiceQuantityIdentifier!]!
-        ){
-          billingAccountByAuthContext(singlePremise: $customerURN) {
-            serviceAgreementsConnection(onlyActive: true) {
-              edges {
-                node {
-                  uuid
-                  serviceType
-                  servicePointsConnection {
-                    edges {
-                      node {
-                        uuid
-                        intervalReads(
-                          units: $units
-                          serviceQuantityIdentifier: $sqi
-                          onlyUnverifiedStreams: true
-                        ) {
-                          registerId
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-        """
-        customer_urn = f"urn:opower:customer:uuid:{account.customer.uuid}"
-        variables: dict[str, Any] = {
-            "customerURN": customer_urn,
-            "units": units,
-            "sqi": sqi,
-        }
-        headers = self._get_headers(account.customer.uuid)
-        result = await self._async_post_graphql(query, headers, variables)
-
-        billing_account = result.get("data", {}).get("billingAccountByAuthContext")
-        if billing_account is None:
-            raise ApiException(
-                "No billing account found for interval read discovery",
-                url="graphql",
-            )
-
-        for sa_edge in billing_account.get("serviceAgreementsConnection", {}).get("edges", []):
-            sa_node = sa_edge.get("node", {})
-            for sp_edge in sa_node.get("servicePointsConnection", {}).get("edges", []):
-                sp_node = sp_edge.get("node", {})
-                sp_uuid = sp_node.get("uuid", "")
-                if not sp_uuid:
-                    continue
-
-                for interval_read in sp_node.get("intervalReads", []):
-                    register_id = interval_read.get("registerId", "")
-                    if register_id:
-                        self._service_point_cache[account.uuid] = (sp_uuid, register_id)
-                        return sp_uuid, register_id
-
-        raise ApiException(
-            f"No service point with interval reads found for account {account.uuid}",
-            url="graphql",
-        )
-
-    async def _async_get_graphql_interval_reads(
-        self,
-        account: Account,
-        start_date: datetime | None = None,
-        end_date: datetime | None = None,
-    ) -> list[CostRead]:
-        """Fetch interval reads via GraphQL.
-
-        Returns CostRead objects at the meter's native resolution.
-        """
-        sp_uuid, register_id = await self._async_discover_service_point(account)
-        units, sqi = self._get_interval_read_filters(account.meter_type)
-
-        query = """
-        query GetRegisterUsage(
-          $customerURN: ID
-          $registerId: ID
-          $timeInterval: TimeInterval
-          $spUuid: String
-          $units: [UnitOfMeasure!]!
-          $sqi: [ServiceQuantityIdentifier!]!
-        ) {
-          billingAccountByAuthContext(singlePremise: $customerURN) {
-            serviceAgreementsConnection(onlyActive: true) {
-              edges {
-                node {
-                  servicePointsConnection(matching: $spUuid) {
-                    edges {
-                      node {
-                        intervalReads(
-                          registerId: $registerId
-                          units: $units
-                          serviceQuantityIdentifier: $sqi
-                          timeInterval: $timeInterval
-                          onlyUnverifiedStreams: true
-                        ) {
-                          reads {
-                            timeInterval
-                            measuredAmount {
-                              value
-                            }
-                            monetaryAmount {
-                              value
-                              currency
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-        """
-
-        tzinfo = await aiozoneinfo.async_get_time_zone(self.utility.timezone())
-        customer_urn = f"urn:opower:customer:uuid:{account.customer.uuid}"
-
-        headers = self._get_headers(account.customer.uuid)
-        all_reads: list[CostRead] = []
-
-        # Build list of time intervals to fetch.
-        # GraphQL API limits interval reads to 24 hours per request.
-        base_variables: dict[str, Any] = {
-            "customerURN": customer_urn,
-            "registerId": register_id,
-            "spUuid": sp_uuid,
-            "units": units,
-            "sqi": sqi,
-        }
-        if start_date or end_date:
-            start = start_date or datetime(2000, 1, 1)
-            end = end_date or datetime.now(tz=tzinfo)
-            # Batch in UTC to avoid DST ambiguity, and format with Z suffix
-            # since some utilities (e.g. ConEd) reject timezone offsets.
-            start_utc = arrow.get(start).to("UTC")
-            end_utc = arrow.get(end).to("UTC")
-            intervals: list[str] = []
-            batch_start = start_utc
-            while batch_start < end_utc:
-                batch_end = min(batch_start.shift(hours=24), end_utc)
-                intervals.append(
-                    f"{batch_start.format('YYYY-MM-DDTHH:mm:ss[Z]')}/{batch_end.format('YYYY-MM-DDTHH:mm:ss[Z]')}"
-                )
-                batch_start = batch_end
-        else:
-            intervals = [""]  # Single request without timeInterval
-
-        for interval in intervals:
-            variables = dict(base_variables)
-            if interval:
-                variables["timeInterval"] = interval
-            result = await self._async_post_graphql(query, headers, variables)
-            all_reads.extend(self._parse_interval_reads_response(result))
-
-        # Sort by start time ascending
-        all_reads.sort(key=lambda r: r.start_time)
-        return all_reads
-
-    @staticmethod
-    def _parse_interval_reads_response(
-        result: dict[str, Any],
-    ) -> list[CostRead]:
-        """Parse interval reads from a GraphQL response."""
-        reads: list[CostRead] = []
-        billing_account = result.get("data", {}).get("billingAccountByAuthContext")
-        if billing_account is None:
-            return reads
-        for sa_edge in billing_account.get("serviceAgreementsConnection", {}).get("edges", []):
-            for sp_edge in sa_edge.get("node", {}).get("servicePointsConnection", {}).get("edges", []):
-                for ir in sp_edge.get("node", {}).get("intervalReads", []):
-                    for read in ir.get("reads", []):
-                        time_interval = read.get("timeInterval", "")
-                        if "/" not in time_interval:
-                            continue
-                        measured = read.get("measuredAmount")
-                        value = float(measured["value"]) if measured and measured.get("value") is not None else 0.0
-                        monetary = read.get("monetaryAmount")
-                        provided_cost = float(monetary["value"]) if monetary and monetary.get("value") is not None else 0.0
-                        start_str, end_str = time_interval.split("/", 1)
-                        reads.append(
-                            CostRead(
-                                start_time=datetime.fromisoformat(start_str),
-                                end_time=datetime.fromisoformat(end_str),
-                                consumption=value,
-                                provided_cost=provided_cost,
-                            )
-                        )
-        return reads
-
-    @staticmethod
-    def _aggregate_interval_reads(
-        reads: list[CostRead],
-        aggregate_type: AggregateType,
-        utility_tz: tzinfo | None = None,
-    ) -> list[CostRead]:
-        """Aggregate raw interval reads to the requested resolution.
-
-        Groups reads by time bucket (day/hour/etc) and sums consumption and cost.
-        """
-        if not reads or aggregate_type == AggregateType.QUARTER_HOUR:
-            return reads
-
-        buckets: dict[datetime, float] = {}
-        bucket_costs: dict[datetime, float] = {}
-        bucket_ends: dict[datetime, datetime] = {}
-
-        for read in reads:
-            start_time = read.start_time
-            end_time = read.end_time
-            if utility_tz is not None and start_time.tzinfo is not None:
-                start_time = start_time.astimezone(utility_tz)
-                end_time = end_time.astimezone(utility_tz)
-
-            if aggregate_type == AggregateType.DAY:
-                bucket = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
-            elif aggregate_type == AggregateType.HOUR:
-                bucket = start_time.replace(minute=0, second=0, microsecond=0)
-            elif aggregate_type == AggregateType.HALF_HOUR:
-                bucket = start_time.replace(minute=30 * (start_time.minute // 30), second=0, microsecond=0)
-            else:
-                bucket = start_time
-
-            buckets[bucket] = buckets.get(bucket, 0.0) + read.consumption
-            bucket_costs[bucket] = bucket_costs.get(bucket, 0.0) + read.provided_cost
-            # Track the latest end_time in each bucket
-            if bucket not in bucket_ends or end_time > bucket_ends[bucket]:
-                bucket_ends[bucket] = end_time
-
-        return [
-            CostRead(
-                start_time=bucket_start,
-                end_time=bucket_ends[bucket_start],
-                consumption=round(consumption, 3),
-                provided_cost=round(bucket_costs[bucket_start], 4),
-            )
-            for bucket_start, consumption in sorted(buckets.items())
-        ]
-
     async def _async_get_customers(self) -> list[Any]:
         """Get customers associated to the user."""
         # Cache the customers
         if not self.customers:
-            if self.utility.is_dss() and not self.user_accounts:
-                await self._async_get_user_accounts()
-
-            url = (
-                f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}"
-                f"/edge/apis/multi-account-v1/cws/{self.utility.utilitycode()}"
-                "/customers?offset=0&batchSize=100&addressFilter="
-            )
-            result = await self._async_get_request(url, {}, self._get_headers())
-            for customer in result["customers"]:
-                self.customers.append(customer)
+            if self.utility.is_dss():
+                # The multi-account-v1/customers endpoint requires a server-side
+                # AUTHORIZED_CUSTOMERS_LIST that is only populated via SAML cookie
+                # auth. Bearer token sessions (from ott/confirm) never have it, so
+                # the endpoint always returns 403 EMPTY_AUTHORIZED_CUSTOMERS_LIST.
+                # The browser avoids /customers entirely and uses
+                # bill-trends-v1/serviceAgreements instead — we do the same.
+                await self._async_get_dss_customers()
+            else:
+                url = (
+                    f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}"
+                    f"/edge/apis/multi-account-v1/cws/{self.utility.utilitycode()}"
+                    "/customers?offset=0&batchSize=100&addressFilter="
+                )
+                result = await self._async_get_request(url, {}, self._get_headers())
+                for customer in result["customers"]:
+                    self.customers.append(customer)
         assert self.customers
         return self.customers
+
+    async def _async_get_dss_customers(self) -> None:
+        """Populate self.customers for DSS utilities via service agreements.
+
+        DSS portals expose service/meter data through bill-trends-v1 rather than
+        the multi-account-v1/customers endpoint. We fetch service agreements,
+        map their service types to MeterType values, and construct synthetic
+        customer records that the rest of the library can consume.
+        """
+        if not self.user_accounts:
+            await self._async_get_user_accounts()
+
+        account_id = self._get_account_id()
+
+        # Use the webUserId stored during login as the customer UUID (it is the
+        # only UUID-format identifier the identity-management API exposes via
+        # Bearer token auth). Fall back to accountId if unavailable.
+        customer_uuid: str = getattr(self.utility, "_web_user_id", None) or account_id
+
+        sa_url = (
+            f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}/edge/apis/bill-trends-v1/cws/serviceAgreements"
+        )
+        sa_result = await self._async_get_request(sa_url, {}, self._get_headers())
+
+        utility_accounts: list[Any] = []
+        for sa in sa_result.get("serviceAgreements", []):
+            service_type = sa.get("serviceType", "")
+            meter_type = self._DSS_SERVICE_TYPE_TO_METER.get(service_type)
+            if meter_type is None:
+                _LOGGER.debug("Skipping unknown DSS serviceType %r (saId=%s)", service_type, sa.get("saId"))
+                continue
+            utility_accounts.append(
+                {
+                    "uuid": sa["saId"],
+                    "preferredUtilityAccountId": account_id,
+                    "meterType": meter_type,
+                    "readResolution": "DAY",
+                }
+            )
+
+        if utility_accounts:
+            self.customers.append({"uuid": customer_uuid, "utilityAccounts": utility_accounts})
 
     async def _async_get_user_accounts(self) -> list[Any]:
         """Get accounts associated to the user."""
@@ -823,19 +613,47 @@ class Opower:
         The resolution for gas is typically 'day' while for electricity it's hour or quarter hour.
         Opower typically keeps historical cost data for 3 years.
         """
-        if account.read_resolution is not None and aggregate_type not in SUPPORTED_AGGREGATE_TYPES[account.read_resolution]:
-            raise ValueError(
-                f"Requested aggregate_type: {aggregate_type} "
-                f"not supported by account's read_resolution: {account.read_resolution}"
-            )
-        # Bill-level reads have actual cost data from GraphQL.
-        if aggregate_type == AggregateType.BILL:
-            return await self._async_get_bill_cost_reads(account, start_date, end_date)
+        if aggregate_type == AggregateType.BILL and not usage_only:
+            try:
+                bill_reads = await self._async_get_bill_cost_reads(account, start_date, end_date)
+            except ApiException as err:
+                _LOGGER.debug("GraphQL bill cost query failed, falling back to REST bill data: %s", err)
+            else:
+                if bill_reads:
+                    return bill_reads
+                _LOGGER.debug("GraphQL bill cost query returned no reads, falling back to REST bill data.")
 
-        # Interval reads: use monetaryAmount from GraphQL when available, else 0.
-        utility_tz = await aiozoneinfo.async_get_time_zone(self.utility.timezone())
-        interval_reads = await self._async_get_graphql_interval_reads(account, start_date, end_date)
-        return self._aggregate_interval_reads(interval_reads, aggregate_type, utility_tz)
+        try:
+            reads = await self._async_get_dated_data(account, aggregate_type, start_date, end_date, usage_only)
+        except ApiException:
+            # Some utilities (e.g. ConEd) return HTTP 500 from the cost endpoint
+            # for daily/hourly aggregation. Fall back to usage-only reads.
+            if aggregate_type != AggregateType.BILL and not usage_only:
+                _LOGGER.debug("Cost endpoint failed. Falling back to just usage data.")
+                return await self.async_get_cost_reads(account, aggregate_type, start_date, end_date, usage_only=True)
+            raise
+        result: list[CostRead] = []
+        for read in reads:
+            result.append(
+                CostRead(
+                    start_time=datetime.fromisoformat(read["startTime"]),
+                    end_time=datetime.fromisoformat(read["endTime"]),
+                    consumption=(read["value"] if "value" in read else read["consumption"]["value"]),
+                    provided_cost=read.get("providedCost", 0) or 0,
+                )
+            )
+        # Remove last entries with 0 values
+        while result:
+            last = result.pop()
+            if last.provided_cost != 0 or last.consumption != 0:
+                result.append(last)
+                break
+        # Some utilities provide usage at hourly/daily resolution but only provide cost at bill resolution.
+        # They don't return any data when hitting the cost endpoint so try again with the usage only endpoint.
+        if aggregate_type != AggregateType.BILL and not result and not usage_only:
+            _LOGGER.debug("Got no usage/cost data. Falling back to just usage data.")
+            return await self.async_get_cost_reads(account, aggregate_type, start_date, end_date, usage_only=True)
+        return result
 
     async def async_get_usage_reads(
         self,
@@ -849,54 +667,214 @@ class Opower:
         The resolution for gas is typically 'day' while for electricity it's hour or quarter hour.
         Opower typically keeps historical usage data for a bit over 3 years.
         """
-        if account.read_resolution is not None and aggregate_type not in SUPPORTED_AGGREGATE_TYPES[account.read_resolution]:
-            raise ValueError(
-                f"Requested aggregate_type: {aggregate_type} "
-                f"not supported by account's read_resolution: {account.read_resolution}"
-            )
         if aggregate_type == AggregateType.BILL:
-            # For bill-level usage, return consumption from bill cost reads.
-            bill_reads = await self._async_get_bill_cost_reads(account, start_date, end_date)
-            return [
+            try:
+                bill_reads = await self._async_get_bill_cost_reads(account, start_date, end_date)
+            except ApiException as err:
+                _LOGGER.debug("GraphQL bill usage query failed, falling back to REST usage data: %s", err)
+            else:
+                if bill_reads:
+                    return [
+                        UsageRead(
+                            start_time=read.start_time,
+                            end_time=read.end_time,
+                            consumption=read.consumption,
+                        )
+                        for read in bill_reads
+                    ]
+                _LOGGER.debug("GraphQL bill usage query returned no reads, falling back to REST usage data.")
+
+        reads = await self._async_get_dated_data(account, aggregate_type, start_date, end_date, usage_only=True)
+        result: list[UsageRead] = []
+        for read in reads:
+            result.append(
                 UsageRead(
-                    start_time=r.start_time,
-                    end_time=r.end_time,
-                    consumption=r.consumption,
+                    start_time=datetime.fromisoformat(read["startTime"]),
+                    end_time=datetime.fromisoformat(read["endTime"]),
+                    consumption=read["consumption"]["value"],
                 )
-                for r in bill_reads
-            ]
-        usage_reads = await self._async_get_graphql_interval_reads(account, start_date, end_date)
-        utility_tz = await aiozoneinfo.async_get_time_zone(self.utility.timezone())
-        aggregated = self._aggregate_interval_reads(usage_reads, aggregate_type, utility_tz)
-        return [
-            UsageRead(
-                start_time=r.start_time,
-                end_time=r.end_time,
-                consumption=r.consumption,
             )
-            for r in aggregated
-        ]
+        return result
+
+    async def _async_get_meters(self, account: Account) -> list[str]:
+        """Get the list of meters for the selected account.
+
+        Each meter is a string key for fetching from the realtime data API.
+        """
+        if not self.meters:
+            url = (
+                f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}"
+                f"/edge/apis/cws-real-time-ami-v1/cws/{self.utility.utilitycode()}"
+                f"/accounts/{account.uuid}/meters"
+            )
+            headers = self._get_headers(account.customer.uuid)
+            result = await self._async_get_request(url, {}, headers)
+            self.meters = list(result["meters_ids"])
+        return self.meters
 
     async def async_get_realtime_usage_reads(
         self,
         account: Account,
     ) -> list[UsageRead]:
-        """Get recent usage data at the meter's native resolution.
+        """Get recent usage data from the "Real Time Usage" API.
 
-        Returns approximately the last day of data in 15-minute increments.
+        The realtime API returns data in approximately the last day in 15
+        minute increments. Based on requests from ConEd, the API does not
+        accept any parameters.
+
+        Even though each account may have multiple meters, for now this
+        function only queries data for the first meter on the account.
         """
-        tzinfo = await aiozoneinfo.async_get_time_zone(self.utility.timezone())
-        end = datetime.now(tz=tzinfo)
-        start = end - timedelta(days=2)
-        cost_reads = await self._async_get_graphql_interval_reads(account, start, end)
+        meters = await self._async_get_meters(account)
+        assert len(meters) > 0
+        meter = meters[0]
+
+        url = (
+            f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}"
+            f"/edge/apis/cws-real-time-ami-v1/cws/{self.utility.utilitycode()}"
+            f"/accounts/{account.uuid}/meters/{meter}/usage"
+        )
+        headers = self._get_headers(account.customer.uuid)
+        result = await self._async_get_request(url, {}, headers)
         return [
             UsageRead(
-                start_time=r.start_time,
-                end_time=r.end_time,
-                consumption=r.consumption,
+                start_time=datetime.fromisoformat(read["startTime"]),
+                end_time=datetime.fromisoformat(read["endTime"]),
+                consumption=read["value"],
             )
-            for r in cost_reads
+            for read in result["reads"]
         ]
+
+    async def _async_get_dated_data(
+        self,
+        account: Account,
+        aggregate_type: AggregateType,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+        usage_only: bool = False,
+    ) -> list[Any]:
+        """Wrap _async_fetch by breaking requests for big date ranges to smaller ones to satisfy opower imposed limits."""
+        if account.read_resolution is not None and aggregate_type not in SUPPORTED_AGGREGATE_TYPES[account.read_resolution]:
+            raise ValueError(
+                f"Requested aggregate_type: {aggregate_type} "
+                f"not supported by account's read_resolution: {account.read_resolution}"
+            )
+        if start_date is None:
+            if aggregate_type == AggregateType.BILL:
+                return await self._async_fetch(account, aggregate_type, start_date, end_date, usage_only)
+            raise ValueError("start_date is required unless aggregate_type=BILL")
+        if end_date is None:
+            raise ValueError("end_date is required unless aggregate_type=BILL")
+
+        tzinfo = await aiozoneinfo.async_get_time_zone(self.utility.timezone())
+        start = arrow.get(start_date.date(), tzinfo)
+        end = arrow.get(end_date.date(), tzinfo).shift(days=1)
+
+        max_request_days = None
+        if aggregate_type == AggregateType.DAY:
+            max_request_days = 363
+        elif aggregate_type == AggregateType.HOUR:
+            max_request_days = 26
+        elif aggregate_type == AggregateType.HALF_HOUR or aggregate_type == AggregateType.QUARTER_HOUR:
+            max_request_days = 6
+
+        # Fetch data in batches in reverse chronological order
+        # until we reach start or there is no fetched data
+        # (non bill data are available up to 3 years ago).
+        result: list[Any] = []
+        req_end = end
+        while True:
+            req_start = start
+            if max_request_days is not None:
+                req_start = max(start, req_end.shift(days=-max_request_days))
+            if req_start >= req_end:
+                return result
+            reads = await self._async_fetch(account, aggregate_type, req_start, req_end, usage_only)
+            if not reads:
+                return result
+            result = reads + result
+            req_end = req_start.shift(days=-1)
+
+    async def _async_fetch_dss_bills(self) -> list[Any]:
+        """Fetch bill-level cost data for DSS utilities via bill-trends-v1/billHistory.
+
+        DataBrowser-v1 is not accessible for DSS portals that use SAML-only auth,
+        so we fall back here.  Consumption values are set to 0 because the
+        billHistory endpoint does not expose metered usage.  Date range filtering
+        is intentionally omitted: bill data is always returned in full because
+        monthly billing cycles rarely align with the caller's requested window.
+        """
+        url = f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}/edge/apis/bill-trends-v1/cws/billHistory"
+        result = await self._async_get_request(url, {"numMonths": "36"}, self._get_headers())
+
+        bills = result.get("bills", [])
+        if len(bills) < 2:
+            return []
+
+        # Bills are newest-first; reverse so we can compute period start dates
+        # from the preceding bill's date.
+        bills_asc = list(reversed(bills))
+
+        reads: list[Any] = []
+        for i in range(1, len(bills_asc)):
+            prev_date = datetime.fromisoformat(bills_asc[i - 1]["billDate"])
+            bill_date = datetime.fromisoformat(bills_asc[i]["billDate"])
+            period_start = prev_date + timedelta(days=1)
+            if period_start > bill_date:
+                # Two bills share the same date; skip the degenerate entry.
+                continue
+            reads.append(
+                {
+                    "startTime": period_start.isoformat(),
+                    "endTime": bill_date.isoformat(),
+                    "value": 0,
+                    "providedCost": bills_asc[i]["cost"],
+                }
+            )
+
+        return reads
+
+    async def _async_fetch(
+        self,
+        account: Account,
+        aggregate_type: AggregateType,
+        start_date: datetime | arrow.Arrow | None = None,
+        end_date: datetime | arrow.Arrow | None = None,
+        usage_only: bool = False,
+    ) -> list[Any]:
+        if usage_only:
+            url = (
+                f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}"
+                f"/edge/apis/DataBrowser-v1/cws/utilities/{self.utility.utilitycode()}"
+                f"/utilityAccounts/{account.uuid}/reads"
+            )
+        else:
+            url = (
+                f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}"
+                f"/edge/apis/DataBrowser-v1/cws/cost/utilityAccount/{account.uuid}"
+            )
+        convert_to_date = usage_only
+        params = {"aggregateType": aggregate_type.value}
+        headers = self._get_headers(account.customer.uuid)
+        if start_date:
+            params["startDate"] = (start_date.date() if convert_to_date else start_date).isoformat()
+        if end_date:
+            params["endDate"] = (end_date.date() if convert_to_date else end_date).isoformat()
+        try:
+            result = await self._async_get_request(url, params, headers)
+            return list(result["reads"])
+        except ApiException as err:
+            # Ignore server errors for BILL requests
+            # that can happen if end_date is before account activation
+            if err.status == 500 and aggregate_type == AggregateType.BILL:
+                _LOGGER.debug("Ignoring error while fetching bill data: %s", err)
+                return []
+            # DSS utilities with a bill-trends fallback: if DataBrowser-v1 is
+            # inaccessible (403) fall back to monthly bill history.
+            if err.status == 403 and self.utility.uses_bill_trends_for_reads() and not usage_only:
+                _LOGGER.debug("DataBrowser-v1 returned 403 for DSS, falling back to bill history: %s", err)
+                return await self._async_fetch_dss_bills()
+            raise
 
     def _get_account_id(self) -> str:
         for user_account in self.user_accounts:
@@ -913,11 +891,18 @@ class Opower:
             headers["authorization"] = f"Bearer {self.access_token}"
 
         opower_selected_entities: list[str] = []
-        if self.utility.is_dss() and self.user_accounts:
-            # Required for DSS endpoints
-            opower_selected_entities.append(f"urn:session:account:{self._get_account_id()}")
+        if self.utility.is_dss():
+            if self.user_accounts:
+                # Required for DSS endpoints
+                opower_selected_entities.append(f"urn:session:account:{self._get_account_id()}")
+            # Required for all DSS endpoints; without this the customers endpoint returns
+            # 403 EMPTY_AUTHORIZED_CUSTOMERS_LIST (confirmed via browser HAR analysis)
+            opower_selected_entities.append("urn:session:account:provider:dsst")
 
-        if customer_uuid:
+        # For DSS, only include the customer UUID claim when it is a true UUID (the
+        # webUserId captured at login).  A numeric CIS accountId is not accepted.
+        # Non-DSS utilities always include it (comes from the /customers response).
+        if customer_uuid and ("-" in customer_uuid or not self.utility.is_dss()):
             opower_selected_entities.append(f"urn:opower:customer:uuid:{customer_uuid}")
         if opower_selected_entities:
             headers["Opower-Selected-Entities"] = json.dumps(opower_selected_entities)
@@ -952,7 +937,12 @@ class Opower:
         except ClientError as e:
             raise ApiException(f"Client Error: {e}", url=full_url) from e
 
-    async def _async_post_graphql(self, query: str, headers: dict[str, str], variables: dict[str, Any] | None = None) -> Any:
+    async def _async_post_graphql(
+        self,
+        query: str,
+        headers: dict[str, str],
+        variables: dict[str, Any] | None = None,
+    ) -> Any:
         """Execute a GraphQL query against the Opower API."""
         url = f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}/edge/apis/dsm-graphql-v1/cws/graphql"
         _LOGGER.debug("GraphQL query to: %s", url)

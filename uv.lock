@@ -411,7 +411,7 @@ wheels = [
 
 [[package]]
 name = "opower"
-version = "0.17.0"
+version = "0.18.4"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
