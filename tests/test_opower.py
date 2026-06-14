@@ -180,7 +180,7 @@ async def test_graphql_bill_reads_parse_electric(
                                 "timeInterval": "2023-01-01T05:00:00+00:00/2023-02-01T05:00:00+00:00",
                                 "segments": [
                                     {
-                                        "usageInterval": "2023-01-01T05:00:00+00:00/2023-02-01T05:00:00+00:00",
+                                        "usageInterval": None,
                                         "serviceAgreement": {
                                             "uuid": "account-1",
                                             "serviceType": "ELECTRICITY",

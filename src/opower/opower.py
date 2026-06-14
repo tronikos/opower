@@ -497,7 +497,7 @@ class Opower:
     @staticmethod
     def _extract_segment_interval(segment: dict[str, Any], bill_time_interval: str) -> tuple[str, str] | None:
         """Extract a segment interval, falling back to the bill interval."""
-        usage_interval = segment.get("usageInterval", bill_time_interval)
+        usage_interval = segment.get("usageInterval") or bill_time_interval
         if "/" not in usage_interval:
             return None
         start_time, end_time = usage_interval.split("/", 1)
@@ -606,10 +606,17 @@ class Opower:
                 current_amount = _get_value(current_amount_data) if current_amount_data else None
                 provided_cost = current_amount if current_amount is not None else (usage_charges or 0.0)
 
+                try:
+                    start_time = datetime.fromisoformat(segment_start)
+                    end_time = datetime.fromisoformat(segment_end)
+                except ValueError:
+                    _LOGGER.debug("Skipping segment with invalid interval in bill: %s", segment_interval)
+                    continue
+
                 reads.append(
                     CostRead(
-                        start_time=datetime.fromisoformat(segment_start),
-                        end_time=datetime.fromisoformat(segment_end),
+                        start_time=start_time,
+                        end_time=end_time,
                         consumption=self._extract_segment_consumption(segment),
                         provided_cost=provided_cost,
                         usage_charges=usage_charges,
