@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 from enum import Enum
 from typing import Any, ClassVar
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 import aiohttp
 import aiozoneinfo
@@ -18,6 +19,20 @@ from .exceptions import ApiException, CannotConnect, InvalidAuth
 from .utilities import UtilityBase
 
 _LOGGER = logging.getLogger(__file__)
+
+
+def _parse_read_time(value: str, tz: ZoneInfo) -> datetime:
+    """Parse an ISO 8601 timestamp returned by the Opower API.
+
+    Some utilities (e.g. City of Austin) return timestamps without a UTC
+    offset. Consumers such as Home Assistant's recorder require timezone-aware
+    timestamps for statistics, so assume the utility's local timezone when the
+    parsed value is naive.
+    """
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=tz)
+    return parsed
 
 
 class MeterType(Enum):
@@ -474,12 +489,13 @@ class Opower:
                 _LOGGER.debug("Cost endpoint failed. Falling back to just usage data.")
                 return await self.async_get_cost_reads(account, aggregate_type, start_date, end_date, usage_only=True)
             raise
+        tz = await aiozoneinfo.async_get_time_zone(self.utility.timezone())
         result: list[CostRead] = []
         for read in reads:
             result.append(
                 CostRead(
-                    start_time=datetime.fromisoformat(read["startTime"]),
-                    end_time=datetime.fromisoformat(read["endTime"]),
+                    start_time=_parse_read_time(read["startTime"], tz),
+                    end_time=_parse_read_time(read["endTime"], tz),
                     consumption=(read["value"] if "value" in read else read["consumption"]["value"]),
                     provided_cost=read.get("providedCost", 0) or 0,
                 )
@@ -510,12 +526,13 @@ class Opower:
         Opower typically keeps historical usage data for a bit over 3 years.
         """
         reads = await self._async_get_dated_data(account, aggregate_type, start_date, end_date, usage_only=True)
+        tz = await aiozoneinfo.async_get_time_zone(self.utility.timezone())
         result: list[UsageRead] = []
         for read in reads:
             result.append(
                 UsageRead(
-                    start_time=datetime.fromisoformat(read["startTime"]),
-                    end_time=datetime.fromisoformat(read["endTime"]),
+                    start_time=_parse_read_time(read["startTime"], tz),
+                    end_time=_parse_read_time(read["endTime"], tz),
                     consumption=read["consumption"]["value"],
                 )
             )
@@ -561,10 +578,11 @@ class Opower:
         )
         headers = self._get_headers(account.customer.uuid)
         result = await self._async_get_request(url, {}, headers)
+        tz = await aiozoneinfo.async_get_time_zone(self.utility.timezone())
         return [
             UsageRead(
-                start_time=datetime.fromisoformat(read["startTime"]),
-                end_time=datetime.fromisoformat(read["endTime"]),
+                start_time=_parse_read_time(read["startTime"], tz),
+                end_time=_parse_read_time(read["endTime"], tz),
                 consumption=read["value"],
             )
             for read in result["reads"]
