@@ -5,7 +5,7 @@ import json
 import logging
 from datetime import date, datetime, timedelta
 from enum import Enum
-from typing import Any, ClassVar
+from typing import Any
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
@@ -104,6 +104,28 @@ SUPPORTED_AGGREGATE_TYPES = {
         AggregateType.HALF_HOUR,
         AggregateType.QUARTER_HOUR,
     ],
+}
+
+
+_DSS_SERVICE_TYPE_TO_METER = {
+    "ELECTRICITY": "ELEC",
+    "ELECTRIC": "ELEC",
+    "ELEC": "ELEC",
+    "ELECTRICITY_NET_METERING": "ELEC",
+    "SOLAR": "ELEC",
+    "SOLAR_PV": "ELEC",
+    "RESIDENTIAL_ELECTRIC": "ELEC",
+    "COMMERCIAL_ELECTRIC": "ELEC",
+    "NATURAL_GAS": "GAS",
+    "GAS": "GAS",
+    "WATER": "WATER",
+    "WASTE_WATER": "WATER",
+    "WASTEWATER": "WATER",
+    "WASTEWATER_SERVICE": "WATER",
+    "RESIDENTIAL_WATER": "WATER",
+    "COMMERCIAL_WATER": "WATER",
+    "IRRIGATION": "WATER",
+    "RECLAIMED_WATER": "WATER",
 }
 
 
@@ -372,55 +394,34 @@ class Opower:
                     )
         return forecasts
 
-    _DSS_SERVICE_TYPE_TO_METER: ClassVar[dict[str, str]] = {
-        "ELECTRICITY": "ELEC",
-        "ELECTRIC": "ELEC",
-        "ELEC": "ELEC",
-        "ELECTRICITY_NET_METERING": "ELEC",
-        "SOLAR": "ELEC",
-        "SOLAR_PV": "ELEC",
-        "RESIDENTIAL_ELECTRIC": "ELEC",
-        "COMMERCIAL_ELECTRIC": "ELEC",
-        "NATURAL_GAS": "GAS",
-        "GAS": "GAS",
-        "WATER": "WATER",
-        "WASTE_WATER": "WATER",
-        "WASTEWATER": "WATER",
-        "WASTEWATER_SERVICE": "WATER",
-        "RESIDENTIAL_WATER": "WATER",
-        "COMMERCIAL_WATER": "WATER",
-        "IRRIGATION": "WATER",
-        "RECLAIMED_WATER": "WATER",
-    }
-
     async def _async_get_customers(self) -> list[Any]:
         """Get customers associated to the user."""
         # Cache the customers
         if not self.customers:
-            if self.utility.is_dss():
-                # The multi-account-v1/customers endpoint requires a server-side
-                # AUTHORIZED_CUSTOMERS_LIST that is only populated via SAML cookie
-                # auth. Bearer token sessions (from ott/confirm) never have it, so
-                # the endpoint always returns 403 EMPTY_AUTHORIZED_CUSTOMERS_LIST.
-                # The browser avoids /customers entirely and uses
-                # bill-trends-v1/serviceAgreements instead — we do the same.
-                await self._async_get_dss_customers()
-            else:
-                url = (
-                    f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}"
-                    f"/edge/apis/multi-account-v1/cws/{self.utility.utilitycode()}"
-                    "/customers?offset=0&batchSize=100&addressFilter="
-                )
+            if self.utility.is_dss() and not self.user_accounts:
+                await self._async_get_user_accounts()
+
+            url = (
+                f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}"
+                f"/edge/apis/multi-account-v1/cws/{self.utility.utilitycode()}"
+                "/customers?offset=0&batchSize=100&addressFilter="
+            )
+            try:
                 result = await self._async_get_request(url, {}, self._get_headers())
                 for customer in result["customers"]:
                     self.customers.append(customer)
-        if not self.customers:
-            _LOGGER.warning(
-                "No utility customers found for %s. This may indicate that the "
-                "service agreements endpoint returned unrecognized service types. "
-                "Check debug logs for 'Skipping unknown DSS serviceType' entries.",
-                self.utility.name(),
-            )
+            except ApiException as err:
+                if self.utility.is_dss():
+                    _LOGGER.debug(
+                        "Failed to fetch customers from multi-account-v1, falling back to service agreements: %s",
+                        err,
+                    )
+                    self.customers = []
+                    await self._async_get_dss_customers()
+                else:
+                    raise
+
+        assert self.customers
         return self.customers
 
     async def _async_get_dss_customers(self) -> None:
@@ -449,7 +450,7 @@ class Opower:
         utility_accounts: list[Any] = []
         for sa in sa_result.get("serviceAgreements", []):
             service_type = sa.get("serviceType", "")
-            meter_type = self._DSS_SERVICE_TYPE_TO_METER.get(service_type)
+            meter_type = _DSS_SERVICE_TYPE_TO_METER.get(service_type)
             if meter_type is None:
                 _LOGGER.debug("Skipping unknown DSS serviceType %r (saId=%s)", service_type, sa.get("saId"))
                 continue
@@ -464,6 +465,14 @@ class Opower:
 
         if utility_accounts:
             self.customers.append({"uuid": customer_uuid, "utilityAccounts": utility_accounts})
+
+        if not self.customers:
+            _LOGGER.warning(
+                "No utility customers found for %s. This may indicate that the "
+                "service agreements endpoint returned unrecognized service types. "
+                "Check debug logs for 'Skipping unknown DSS serviceType' entries.",
+                self.utility.name(),
+            )
 
     async def _async_get_user_accounts(self) -> list[Any]:
         """Get accounts associated to the user."""
