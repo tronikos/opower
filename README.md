@@ -18,7 +18,7 @@ This library is used by the [Opower integration in Home Assistant](https://www.h
   - Southwestern Electric Power Company (SWEPCO)
 - Burbank Water and Power (BWP)
 - City of Austin Utilities
-- Consolidated Edison (ConEd)
+- Consolidated Edison (ConEd) and subsidiaries
   - Orange & Rockland Utilities (ORU)
 - Duquesne Light Company (DQE)
 - Evergy
@@ -31,11 +31,12 @@ This library is used by the [Opower integration in Home Assistant](https://www.h
   - PECO Energy Company (PECO)
   - Potomac Electric Power Company (Pepco)
 - Glendale Water and Power (GWP)
-- National Grid subsidiaries
+- National Grid US subsidiaries
   - National Grid Massachusetts
   - National Grid NY Long Island
   - National Grid NY Metro
   - National Grid NY Upstate
+- Northern Indiana Public Service Company (NIPSCO)
 - Pacific Gas & Electric (PG&E)
 - Portland General Electric (PGE)
 - Puget Sound Energy (PSE)

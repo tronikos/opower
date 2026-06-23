@@ -50,6 +50,16 @@ class UtilityBase(abc.ABC):
         """Check if Utility using DSS version of the portal."""
         return False
 
+    @staticmethod
+    def uses_bill_trends_for_reads() -> bool:
+        """Return True if this utility reads historical data from bill-trends-v1 instead of DataBrowser-v1.
+
+        Override in utilities where DataBrowser-v1 is inaccessible (e.g. SAML-only DSS portals).
+        Only bill-level cost data will be available; sub-bill granularity and consumption values
+        are not supported by this path.
+        """
+        return False
+
     def utilitycode(self) -> str:
         """Return the utilitycode identifier for the utility."""
         return self.subdomain()

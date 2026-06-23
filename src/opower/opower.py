@@ -3,10 +3,11 @@
 import dataclasses
 import json
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from enum import Enum
 from typing import Any
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 import aiohttp
 import aiozoneinfo
@@ -20,11 +21,26 @@ from .utilities import UtilityBase
 _LOGGER = logging.getLogger(__file__)
 
 
+def _parse_read_time(value: str, tz: ZoneInfo) -> datetime:
+    """Parse an ISO 8601 timestamp returned by the Opower API.
+
+    Some utilities (e.g. City of Austin) return timestamps without a UTC
+    offset. Consumers such as Home Assistant's recorder require timezone-aware
+    timestamps for statistics, so assume the utility's local timezone when the
+    parsed value is naive.
+    """
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=tz)
+    return parsed
+
+
 class MeterType(Enum):
-    """Meter type. Electric or gas."""
+    """Meter type."""
 
     ELEC = "ELEC"
     GAS = "GAS"
+    WATER = "WATER"
 
     def __str__(self) -> str:
         """Return the value of the enum."""
@@ -88,6 +104,28 @@ SUPPORTED_AGGREGATE_TYPES = {
         AggregateType.HALF_HOUR,
         AggregateType.QUARTER_HOUR,
     ],
+}
+
+
+_DSS_SERVICE_TYPE_TO_METER = {
+    "ELECTRICITY": "ELEC",
+    "ELECTRIC": "ELEC",
+    "ELEC": "ELEC",
+    "ELECTRICITY_NET_METERING": "ELEC",
+    "SOLAR": "ELEC",
+    "SOLAR_PV": "ELEC",
+    "RESIDENTIAL_ELECTRIC": "ELEC",
+    "COMMERCIAL_ELECTRIC": "ELEC",
+    "NATURAL_GAS": "GAS",
+    "GAS": "GAS",
+    "WATER": "WATER",
+    "WASTE_WATER": "WATER",
+    "WASTEWATER": "WATER",
+    "WASTEWATER_SERVICE": "WATER",
+    "RESIDENTIAL_WATER": "WATER",
+    "COMMERCIAL_WATER": "WATER",
+    "IRRIGATION": "WATER",
+    "RECLAIMED_WATER": "WATER",
 }
 
 
@@ -324,12 +362,20 @@ class Opower:
                         continue
 
                     estimated_usage: dict[str, Any] = segment.get("estimatedUsage") or {}
-                    unit_str = str(estimated_usage.get("unit", "KWH"))
-                    try:
-                        unit_of_measure = UnitOfMeasure(unit_str)
-                    except ValueError:
-                        _LOGGER.debug("Unknown unit of measure: %s, defaulting to KWH", unit_str)
-                        unit_of_measure = UnitOfMeasure.KWH
+                    unit_val = estimated_usage.get("unit")
+                    default_unit = UnitOfMeasure.THERM if account.meter_type == MeterType.GAS else UnitOfMeasure.KWH
+                    if not unit_val:
+                        _LOGGER.warning("Missing unit of measure, defaulting to %s", default_unit)
+                        unit_of_measure = default_unit
+                    else:
+                        unit_str = str(unit_val)
+                        if unit_str == "TH":
+                            unit_str = "THERM"
+                        try:
+                            unit_of_measure = UnitOfMeasure(unit_str)
+                        except ValueError:
+                            _LOGGER.warning("Unknown unit of measure: %s, defaulting to %s", unit_str, default_unit)
+                            unit_of_measure = default_unit
 
                     forecasts.append(
                         Forecast(
@@ -360,11 +406,73 @@ class Opower:
                 f"/edge/apis/multi-account-v1/cws/{self.utility.utilitycode()}"
                 "/customers?offset=0&batchSize=100&addressFilter="
             )
-            result = await self._async_get_request(url, {}, self._get_headers())
-            for customer in result["customers"]:
-                self.customers.append(customer)
+            try:
+                result = await self._async_get_request(url, {}, self._get_headers())
+                for customer in result["customers"]:
+                    self.customers.append(customer)
+            except ApiException as err:
+                if self.utility.is_dss():
+                    _LOGGER.debug(
+                        "Failed to fetch customers from multi-account-v1, falling back to service agreements: %s",
+                        err,
+                    )
+                    self.customers = []
+                    await self._async_get_dss_customers()
+                else:
+                    raise
+
         assert self.customers
         return self.customers
+
+    async def _async_get_dss_customers(self) -> None:
+        """Populate self.customers for DSS utilities via service agreements.
+
+        DSS portals expose service/meter data through bill-trends-v1 rather than
+        the multi-account-v1/customers endpoint. We fetch service agreements,
+        map their service types to MeterType values, and construct synthetic
+        customer records that the rest of the library can consume.
+        """
+        if not self.user_accounts:
+            await self._async_get_user_accounts()
+
+        account_id = self._get_account_id()
+
+        # Use the webUserId stored during login as the customer UUID (it is the
+        # only UUID-format identifier the identity-management API exposes via
+        # Bearer token auth). Fall back to accountId if unavailable.
+        customer_uuid: str = getattr(self.utility, "_web_user_id", None) or account_id
+
+        sa_url = (
+            f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}/edge/apis/bill-trends-v1/cws/serviceAgreements"
+        )
+        sa_result = await self._async_get_request(sa_url, {}, self._get_headers())
+
+        utility_accounts: list[Any] = []
+        for sa in sa_result.get("serviceAgreements", []):
+            service_type = sa.get("serviceType", "")
+            meter_type = _DSS_SERVICE_TYPE_TO_METER.get(service_type)
+            if meter_type is None:
+                _LOGGER.debug("Skipping unknown DSS serviceType %r (saId=%s)", service_type, sa.get("saId"))
+                continue
+            utility_accounts.append(
+                {
+                    "uuid": sa["saId"],
+                    "preferredUtilityAccountId": account_id,
+                    "meterType": meter_type,
+                    "readResolution": "DAY",
+                }
+            )
+
+        if utility_accounts:
+            self.customers.append({"uuid": customer_uuid, "utilityAccounts": utility_accounts})
+
+        if not self.customers:
+            _LOGGER.warning(
+                "No utility customers found for %s. This may indicate that the "
+                "service agreements endpoint returned unrecognized service types. "
+                "Check debug logs for 'Skipping unknown DSS serviceType' entries.",
+                self.utility.name(),
+            )
 
     async def _async_get_user_accounts(self) -> list[Any]:
         """Get accounts associated to the user."""
@@ -398,13 +506,22 @@ class Opower:
         The resolution for gas is typically 'day' while for electricity it's hour or quarter hour.
         Opower typically keeps historical cost data for 3 years.
         """
-        reads = await self._async_get_dated_data(account, aggregate_type, start_date, end_date, usage_only)
+        try:
+            reads = await self._async_get_dated_data(account, aggregate_type, start_date, end_date, usage_only)
+        except ApiException:
+            # Some utilities (e.g. ConEd) return HTTP 500 from the cost endpoint
+            # for daily/hourly aggregation. Fall back to usage-only reads.
+            if aggregate_type != AggregateType.BILL and not usage_only:
+                _LOGGER.debug("Cost endpoint failed. Falling back to just usage data.")
+                return await self.async_get_cost_reads(account, aggregate_type, start_date, end_date, usage_only=True)
+            raise
+        tz = await aiozoneinfo.async_get_time_zone(self.utility.timezone())
         result: list[CostRead] = []
         for read in reads:
             result.append(
                 CostRead(
-                    start_time=datetime.fromisoformat(read["startTime"]),
-                    end_time=datetime.fromisoformat(read["endTime"]),
+                    start_time=_parse_read_time(read["startTime"], tz),
+                    end_time=_parse_read_time(read["endTime"], tz),
                     consumption=(read["value"] if "value" in read else read["consumption"]["value"]),
                     provided_cost=read.get("providedCost", 0) or 0,
                 )
@@ -435,12 +552,13 @@ class Opower:
         Opower typically keeps historical usage data for a bit over 3 years.
         """
         reads = await self._async_get_dated_data(account, aggregate_type, start_date, end_date, usage_only=True)
+        tz = await aiozoneinfo.async_get_time_zone(self.utility.timezone())
         result: list[UsageRead] = []
         for read in reads:
             result.append(
                 UsageRead(
-                    start_time=datetime.fromisoformat(read["startTime"]),
-                    end_time=datetime.fromisoformat(read["endTime"]),
+                    start_time=_parse_read_time(read["startTime"], tz),
+                    end_time=_parse_read_time(read["endTime"], tz),
                     consumption=read["consumption"]["value"],
                 )
             )
@@ -486,10 +604,11 @@ class Opower:
         )
         headers = self._get_headers(account.customer.uuid)
         result = await self._async_get_request(url, {}, headers)
+        tz = await aiozoneinfo.async_get_time_zone(self.utility.timezone())
         return [
             UsageRead(
-                start_time=datetime.fromisoformat(read["startTime"]),
-                end_time=datetime.fromisoformat(read["endTime"]),
+                start_time=_parse_read_time(read["startTime"], tz),
+                end_time=_parse_read_time(read["endTime"], tz),
                 consumption=read["value"],
             )
             for read in result["reads"]
@@ -545,6 +664,45 @@ class Opower:
             result = reads + result
             req_end = req_start.shift(days=-1)
 
+    async def _async_fetch_dss_bills(self) -> list[Any]:
+        """Fetch bill-level cost data for DSS utilities via bill-trends-v1/billHistory.
+
+        DataBrowser-v1 is not accessible for DSS portals that use SAML-only auth,
+        so we fall back here.  Consumption values are set to 0 because the
+        billHistory endpoint does not expose metered usage.  Date range filtering
+        is intentionally omitted: bill data is always returned in full because
+        monthly billing cycles rarely align with the caller's requested window.
+        """
+        url = f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}/edge/apis/bill-trends-v1/cws/billHistory"
+        result = await self._async_get_request(url, {"numMonths": "36"}, self._get_headers())
+
+        bills = result.get("bills", [])
+        if len(bills) < 2:
+            return []
+
+        # Bills are newest-first; reverse so we can compute period start dates
+        # from the preceding bill's date.
+        bills_asc = list(reversed(bills))
+
+        reads: list[Any] = []
+        for i in range(1, len(bills_asc)):
+            prev_date = datetime.fromisoformat(bills_asc[i - 1]["billDate"])
+            bill_date = datetime.fromisoformat(bills_asc[i]["billDate"])
+            period_start = prev_date + timedelta(days=1)
+            if period_start > bill_date:
+                # Two bills share the same date; skip the degenerate entry.
+                continue
+            reads.append(
+                {
+                    "startTime": period_start.isoformat(),
+                    "endTime": bill_date.isoformat(),
+                    "value": 0,
+                    "providedCost": bills_asc[i]["cost"],
+                }
+            )
+
+        return reads
+
     async def _async_fetch(
         self,
         account: Account,
@@ -580,6 +738,11 @@ class Opower:
             if err.status == 500 and aggregate_type == AggregateType.BILL:
                 _LOGGER.debug("Ignoring error while fetching bill data: %s", err)
                 return []
+            # DSS utilities with a bill-trends fallback: if DataBrowser-v1 is
+            # inaccessible (403) fall back to monthly bill history.
+            if err.status == 403 and self.utility.uses_bill_trends_for_reads() and not usage_only:
+                _LOGGER.debug("DataBrowser-v1 returned 403 for DSS, falling back to bill history: %s", err)
+                return await self._async_fetch_dss_bills()
             raise
 
     def _get_account_id(self) -> str:
@@ -597,11 +760,18 @@ class Opower:
             headers["authorization"] = f"Bearer {self.access_token}"
 
         opower_selected_entities: list[str] = []
-        if self.utility.is_dss() and self.user_accounts:
-            # Required for DSS endpoints
-            opower_selected_entities.append(f"urn:session:account:{self._get_account_id()}")
+        if self.utility.is_dss():
+            if self.user_accounts:
+                # Required for DSS endpoints
+                opower_selected_entities.append(f"urn:session:account:{self._get_account_id()}")
+            # Required for all DSS endpoints; without this the customers endpoint returns
+            # 403 EMPTY_AUTHORIZED_CUSTOMERS_LIST (confirmed via browser HAR analysis)
+            opower_selected_entities.append("urn:session:account:provider:dsst")
 
-        if customer_uuid:
+        # For DSS, only include the customer UUID claim when it is a true UUID (the
+        # webUserId captured at login).  A numeric CIS accountId is not accepted.
+        # Non-DSS utilities always include it (comes from the /customers response).
+        if customer_uuid and ("-" in customer_uuid or not self.utility.is_dss()):
             opower_selected_entities.append(f"urn:opower:customer:uuid:{customer_uuid}")
         if opower_selected_entities:
             headers["Opower-Selected-Entities"] = json.dumps(opower_selected_entities)
