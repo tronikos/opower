@@ -1,4 +1,5 @@
 """Rhode Island Energy (RIEnergy).
+
 At the time of this commit, this appears to be an unmaintained system for RIEnergy.
 Accounts do not appear to correctly return as solar even if they are,
 so only consumption (will be net if net metered, but will bottom out at 0) and cost data
@@ -49,7 +50,6 @@ class RhodeIslandEnergy(UtilityBase):
         """Authenticate against the RIEnergy Opower portal."""
         # 1. Define URLs
         base_url = f"https://{self.subdomain()}.opower.com"
-        login_page_url = f"{base_url}/ei/x/sign-in-wall?source=intercepted"
         api_url = f"{base_url}/ei/edge/apis/user-account-control-v1/cws/v1/{self.utilitycode()}/account/signin"
 
         # 2. Execute Login
