@@ -11,7 +11,6 @@ import aiohttp
 
 # --- FIX: Import the USER_AGENT constant ---
 from ..const import USER_AGENT
-from ..exceptions import InvalidAuth
 from .base import UtilityBase
 
 
