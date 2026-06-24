@@ -123,6 +123,62 @@ async def test_cost_reads_bill_does_not_fall_back(
 
 
 @pytest.mark.asyncio
+async def test_five_minute_read_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Parse five-minute accounts and allow existing fine-grained aggregations."""
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(
+            session,
+            "Consolidated Edison (ConEd)",
+            username="test",
+            password="test",  # noqa: S106
+        )
+
+        async def fake_get_customers() -> list[dict[str, object]]:
+            return [
+                {
+                    "uuid": "customer-uuid",
+                    "utilityAccounts": [
+                        {
+                            "uuid": "account-uuid",
+                            "preferredUtilityAccountId": "account-id",
+                            "meterType": "ELEC",
+                            "readResolution": "FIVE_MINUTE",
+                        }
+                    ],
+                }
+            ]
+
+        calls: list[AggregateType] = []
+
+        async def fake_async_fetch(
+            account: Account,
+            aggregate_type: AggregateType,
+            start_date: datetime | None = None,
+            end_date: datetime | None = None,
+            usage_only: bool = False,
+        ) -> list[dict[str, object]]:
+            calls.append(aggregate_type)
+            return [{"start": start_date, "end": end_date, "usage_only": usage_only}]
+
+        monkeypatch.setattr(opower, "_async_get_customers", fake_get_customers)
+        monkeypatch.setattr(opower, "_async_fetch", fake_async_fetch)
+
+        accounts = await opower.async_get_accounts()
+
+        assert len(accounts) == 1
+        assert accounts[0].read_resolution is ReadResolution.FIVE_MINUTE
+        await opower._async_get_dated_data(
+            accounts[0],
+            AggregateType.QUARTER_HOUR,
+            datetime(2026, 1, 1),
+            datetime(2026, 1, 1),
+        )
+        assert calls == [AggregateType.QUARTER_HOUR]
+
+
+@pytest.mark.asyncio
 async def test_naive_read_times_localized_to_utility_timezone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
