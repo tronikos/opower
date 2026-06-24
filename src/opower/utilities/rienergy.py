@@ -49,11 +49,9 @@ class RhodeIslandEnergy(UtilityBase):
         api_url = f"{base_url}/ei/edge/apis/user-account-control-v1/cws/v1/{self.utilitycode()}/account/signin"
 
         # 2. Execute Login
-        payload = {"username": username, "password": password}
-
         async with session.post(
             api_url,
-            json=payload,
+            json={"username": username, "password": password}
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         ) as _:
