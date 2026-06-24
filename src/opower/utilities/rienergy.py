@@ -48,32 +48,13 @@ class RhodeIslandEnergy(UtilityBase):
         login_page_url = f"{base_url}/ei/x/sign-in-wall?source=intercepted"
         api_url = f"{base_url}/ei/edge/apis/user-account-control-v1/cws/v1/{self.utilitycode()}/account/signin"
 
-        # 2. Define Headers
-        # --- FIX: Use the imported USER_AGENT constant instead of hardcoding one ---
-        headers = {
-            "User-Agent": USER_AGENT,
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-
-        # 3. Prepare Login Headers
-        login_headers = headers.copy()
-        login_headers.update(
-            {
-                "Content-Type": "application/json",
-                "Origin": base_url,
-                "Referer": login_page_url,
-                "X-Requested-With": "XMLHttpRequest",
-            }
-        )
-
-        # 4. Execute Login
+        # 2. Execute Login
         payload = {"username": username, "password": password}
 
         async with session.post(
             api_url,
             json=payload,
-            headers=login_headers,
+            headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         ) as _:
             pass
