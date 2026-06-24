@@ -35,11 +35,6 @@ class RhodeIslandEnergy(UtilityBase):
         """Return the timezone for this utility."""
         return "America/New_York"
 
-    @staticmethod
-    def is_dss() -> bool:
-        """Indicate that this utility uses the DSS version of the portal."""
-        return False
-
     async def async_login(
         self,
         session: aiohttp.ClientSession,
@@ -61,12 +56,7 @@ class RhodeIslandEnergy(UtilityBase):
             "Accept-Language": "en-US,en;q=0.9",
         }
 
-        # 3. Warm up the session
-        # We just call the context manager to get the cookies
-        async with session.get(login_page_url, headers=headers):
-            pass
-
-        # 4. Prepare Login Headers
+        # 3. Prepare Login Headers
         login_headers = headers.copy()
         login_headers.update(
             {
@@ -77,7 +67,7 @@ class RhodeIslandEnergy(UtilityBase):
             }
         )
 
-        # 5. Execute Login
+        # 4. Execute Login
         payload = {"username": username, "password": password}
 
         async with session.post(
