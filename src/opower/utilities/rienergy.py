@@ -46,7 +46,7 @@ class RhodeIslandEnergy(UtilityBase):
         username: str,
         password: str,
         login_data: dict[str, Any],
-    ) -> str | None:
+    ) -> None:
         """Authenticate against the RIEnergy Opower portal."""
         # 1. Define URLs
         base_url = f"https://{self.subdomain()}.opower.com"
@@ -84,26 +84,6 @@ class RhodeIslandEnergy(UtilityBase):
             api_url,
             json=payload,
             headers=login_headers,
-            raise_for_status=False,
-        ) as resp:
-            # --- HANDLE 204 SUCCESS ---
-            if resp.status == 204:
-                return "cookie-auth-success"
-
-            # If it's not 200 or 204, fail.
-            if resp.status != 200:
-                error_text = await resp.text()
-                raise InvalidAuth(f"Login failed: {resp.status} - {error_text}")
-
-            try:
-                result = await resp.json()
-            except Exception as exc:
-                raise InvalidAuth("Unexpected response from RIEnergy login") from exc
-
-        # 6. Extract Token (Only if response was 200 JSON)
-        token = result.get("sessionToken") or result.get("accessToken")
-
-        if not token:
-            raise InvalidAuth(f"Login failed; token not found. Response keys: {list(result.keys())}")
-
-        return str(token)
+            raise_for_status=True,
+        ) as _:
+            pass
