@@ -51,7 +51,7 @@ class RhodeIslandEnergy(UtilityBase):
         # 2. Execute Login
         async with session.post(
             api_url,
-            json={"username": username, "password": password}
+            json={"username": username, "password": password},
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         ) as _:
