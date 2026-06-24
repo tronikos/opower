@@ -1,6 +1,6 @@
-"""Rhode Island Energy (RIEnergy).
+"""Rhode Island Energy (RIEnergy)."""
 
-At the time of this commit, this appears to be an unmaintained system for RIEnergy.
+"""At the time of this commit, this appears to be an unmaintained system for RIEnergy.
 Accounts do not appear to correctly return as solar even if they are,
 so only consumption (will be net if net metered, but will bottom out at 0) and cost data
 are available, with a resolution of "BILLING".
