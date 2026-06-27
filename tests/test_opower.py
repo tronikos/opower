@@ -3,6 +3,7 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
+from zoneinfo import ZoneInfo
 
 import aiohttp
 import pytest
@@ -502,3 +503,56 @@ async def test_cost_reads_bill_usage_only_uses_rest(
         assert len(result) == 1
         assert result[0].consumption == 10.0
         assert result[0].provided_cost == 0.0
+
+
+@pytest.mark.asyncio
+async def test_naive_read_times_localized_to_utility_timezone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reads without a UTC offset are localized to the utility's timezone.
+
+    Some utilities (e.g. City of Austin) return timestamps with no offset.
+    Statistics consumers (such as Home Assistant's recorder) require
+    timezone-aware datetimes, so naive values must be localized rather than
+    passed through unchanged.
+    """
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(
+            session,
+            "City of Austin Utilities",
+            username="test",
+            password="test",  # noqa: S106
+        )
+
+        account = Account(
+            customer=Mock(),
+            uuid="test-uuid",
+            utility_account_id="test-id",
+            id="test-id",
+            meter_type=MeterType.ELEC,
+            read_resolution=ReadResolution.DAY,
+        )
+
+        async def fake_get_dated_data(
+            *args: object,
+            **kwargs: object,
+        ) -> list[dict[str, object]]:
+            return [
+                {
+                    "startTime": "2026-06-01T00:00:00",
+                    "endTime": "2026-06-02T00:00:00",
+                    "consumption": {"value": 10.0},
+                    "providedCost": 1.23,
+                }
+            ]
+
+        monkeypatch.setattr(opower, "_async_get_dated_data", fake_get_dated_data)
+
+        result = await opower.async_get_cost_reads(account, AggregateType.DAY, None, None)
+
+        tz = ZoneInfo("America/Chicago")
+        assert len(result) == 1
+        assert result[0].start_time == datetime(2026, 6, 1, tzinfo=tz)
+        assert result[0].end_time == datetime(2026, 6, 2, tzinfo=tz)
+        assert result[0].start_time.tzinfo is not None
+        assert result[0].end_time.tzinfo is not None
