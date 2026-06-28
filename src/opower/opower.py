@@ -81,6 +81,7 @@ class ReadResolution(Enum):
     HOUR = "HOUR"
     HALF_HOUR = "HALF_HOUR"
     QUARTER_HOUR = "QUARTER_HOUR"
+    FIVE_MINUTE = "FIVE_MINUTE"
 
     def __str__(self) -> str:
         """Return the value of the enum."""
@@ -98,6 +99,13 @@ SUPPORTED_AGGREGATE_TYPES = {
         AggregateType.HALF_HOUR,
     ],
     ReadResolution.QUARTER_HOUR: [
+        AggregateType.BILL,
+        AggregateType.DAY,
+        AggregateType.HOUR,
+        AggregateType.HALF_HOUR,
+        AggregateType.QUARTER_HOUR,
+    ],
+    ReadResolution.FIVE_MINUTE: [
         AggregateType.BILL,
         AggregateType.DAY,
         AggregateType.HOUR,
