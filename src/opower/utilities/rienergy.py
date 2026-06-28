@@ -10,7 +10,6 @@ from typing import Any
 
 import aiohttp
 
-# --- FIX: Import the USER_AGENT constant ---
 from ..const import USER_AGENT
 from .base import UtilityBase
 
@@ -48,11 +47,9 @@ class RhodeIslandEnergy(UtilityBase):
         login_data: dict[str, Any],
     ) -> None:
         """Authenticate against the RIEnergy Opower portal."""
-        # 1. Define URLs
         base_url = f"https://{self.subdomain()}.opower.com"
         api_url = f"{base_url}/ei/edge/apis/user-account-control-v1/cws/v1/{self.utilitycode()}/account/signin"
 
-        # 2. Execute Login
         async with session.post(
             api_url,
             json={"username": username, "password": password},
