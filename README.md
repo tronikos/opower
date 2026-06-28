@@ -40,6 +40,7 @@ This library is used by the [Opower integration in Home Assistant](https://www.h
 - Pacific Gas & Electric (PG&E)
 - Portland General Electric (PGE)
 - Puget Sound Energy (PSE)
+- Rhode Island Energy (RIEnergy)
 - Sacramento Municipal Utility District (SMUD)
 - Seattle City Light (SCL)
 - Southern Maryland Electric Cooperative (SMECO)
