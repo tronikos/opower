@@ -18,6 +18,7 @@ This library is used by the [Opower integration in Home Assistant](https://www.h
   - Southwestern Electric Power Company (SWEPCO)
 - Burbank Water and Power (BWP)
 - City of Austin Utilities
+- Clark Public Utilities
 - Consolidated Edison (ConEd) and subsidiaries
   - Orange & Rockland Utilities (ORU)
 - Duquesne Light Company (DQE)
