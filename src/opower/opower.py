@@ -182,6 +182,23 @@ class Forecast:
 
 
 @dataclasses.dataclass
+class ReadComponent:
+    """A per-rate-period component of a cost read.
+
+    Utilities on time-of-use rates return one component per TOU period
+    (e.g. on-peak/off-peak) and utilities on tiered rates return one
+    component per tier. Not all utilities return components.
+    """
+
+    tier_type: str | None  # e.g. "ORDINAL"
+    tier_number: int | None  # populated for tiered rates
+    season: str | None  # e.g. "SUMMER"
+    day_part: str | None  # e.g. "ON_PEAK+RT02/TOD"; TOU period is before the "+"
+    cost: float  # in $
+    consumption: float  # taken from value field, in KWH or THERM/CCF
+
+
+@dataclasses.dataclass
 class CostRead:
     """A read from the meter that has both consumption and cost data."""
 
@@ -189,6 +206,7 @@ class CostRead:
     end_time: datetime
     consumption: float  # taken from value field, in KWH or THERM/CCF
     provided_cost: float  # in $
+    read_components: list[ReadComponent] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -532,6 +550,17 @@ class Opower:
                     end_time=_parse_read_time(read["endTime"], tz),
                     consumption=(read["value"] if "value" in read else read["consumption"]["value"]),
                     provided_cost=read.get("providedCost", 0) or 0,
+                    read_components=[
+                        ReadComponent(
+                            tier_type=component.get("tierType"),
+                            tier_number=component.get("tierNumber"),
+                            season=component.get("season"),
+                            day_part=component.get("dayPart"),
+                            cost=component.get("cost", 0) or 0,
+                            consumption=component.get("value", 0) or 0,
+                        )
+                        for component in read.get("readComponents") or []
+                    ],
                 )
             )
         # Remove last entries with 0 values
