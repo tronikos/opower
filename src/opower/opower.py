@@ -137,9 +137,9 @@ _DSS_SERVICE_TYPE_TO_METER = {
 }
 
 
-def _get_value(data: dict[str, Any] | None, default: float = 0) -> float:
-    """Extract 'value' from a dict, returning default if missing or None."""
-    val = (data or {}).get("value")
+def _get_value(data: dict[str, Any] | None, key: str = "value", default: float = 0) -> float:
+    """Extract `key` from a dict, returning default if missing or None."""
+    val = (data or {}).get(key)
     return float(val) if val is not None else default
 
 
@@ -556,8 +556,8 @@ class Opower:
                             tier_number=component.get("tierNumber"),
                             season=component.get("season"),
                             day_part=component.get("dayPart"),
-                            cost=component.get("cost", 0) or 0,
-                            consumption=component.get("value", 0) or 0,
+                            cost=_get_value(component, key="cost"),
+                            consumption=_get_value(component),
                         )
                         for component in read.get("readComponents") or []
                     ],
