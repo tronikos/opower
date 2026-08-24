@@ -104,7 +104,9 @@ class AESIndiana(UtilityBase):
 
         for step in range(_MAX_STEPS):
             method, url, data = pending
-            _LOGGER.debug("AES Indiana login step %d: %s %s", step, method, url[:120])
+            # Authentication URLs contain short-lived SAML/OAuth credentials in
+            # their query strings. Keep those values out of diagnostic logs.
+            _LOGGER.debug("AES Indiana login step %d: %s %s", step, method, url.split("?", 1)[0][:120])
             async with session.request(
                 method,
                 # encoded=True keeps yarl from normalizing (and thus breaking)
@@ -122,7 +124,10 @@ class AESIndiana(UtilityBase):
             if status in (301, 302, 303, 307, 308) and location:
                 # urljoin is a pure string operation that, unlike yarl,
                 # preserves the redirect URL bytes exactly.
-                pending = ("GET", urljoin(url, location), None)
+                redirect_url = urljoin(url, location)
+                # 307 and 308 preserve the request method and body. The other
+                # redirect statuses in this browser-oriented flow become GETs.
+                pending = (method, redirect_url, data) if status in (307, 308) else ("GET", redirect_url, None)
                 continue
 
             if _LOGIN_FORM_MARKER in body:
@@ -146,7 +151,7 @@ class AESIndiana(UtilityBase):
                 pending = ("POST", urljoin(url, action_url), inputs)
                 continue
 
-            if url.startswith("https://aesi.opower.com/"):
+            if url.split("?", 1)[0].rstrip("/") == "https://aesi.opower.com/ei/x/dashboard":
                 # Landed on the OPower dashboard; session cookies are set.
                 _LOGGER.debug("AES Indiana login successful")
                 return ""
