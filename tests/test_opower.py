@@ -506,6 +506,150 @@ async def test_cost_reads_bill_usage_only_uses_rest(
 
 
 @pytest.mark.asyncio
+async def test_cost_reads_parse_read_components(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Parse readComponents (TOU/tier breakdown) when present, default to empty otherwise."""
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(
+            session,
+            "Sacramento Municipal Utility District (SMUD)",
+            username="test",
+            password="test",  # noqa: S106
+        )
+
+        account = Account(
+            customer=Mock(),
+            uuid="test-uuid",
+            utility_account_id="test-id",
+            id="test-id",
+            meter_type=MeterType.ELEC,
+            read_resolution=ReadResolution.HOUR,
+        )
+
+        async def fake_get_dated_data(*args: object, **kwargs: object) -> list[dict[str, object]]:
+            return [
+                # Real (redacted) SMUD read on a time-of-use rate.
+                {
+                    "startTime": "2026-06-17T00:00:00.000-07:00",
+                    "endTime": "2026-06-18T00:00:00.000-07:00",
+                    "value": 33.732,
+                    "readType": "ACTUAL",
+                    "providedCost": 6.9044064,
+                    "readComponents": [
+                        {
+                            "tierType": "ORDINAL",
+                            "tierNumber": None,
+                            "season": "SUMMER",
+                            "dayPart": "ON_PEAK+RT02/TOD",
+                            "cost": 0.8195652,
+                            "value": 2.1768,
+                        },
+                        {
+                            "tierType": "ORDINAL",
+                            "tierNumber": None,
+                            "season": "SUMMER",
+                            "dayPart": "OFF_PEAK+RT02/TOD",
+                            "cost": 1.749516,
+                            "value": 11.2872,
+                        },
+                        {
+                            "tierType": "ORDINAL",
+                            "tierNumber": None,
+                            "season": "SUMMER",
+                            "dayPart": "PART_PEAK+RT02/TOD",
+                            "cost": 4.3353252,
+                            "value": 20.268,
+                        },
+                    ],
+                },
+                # Read without components (not all utilities return them).
+                {
+                    "startTime": "2026-06-18T00:00:00.000-07:00",
+                    "endTime": "2026-06-19T00:00:00.000-07:00",
+                    "value": 31.104,
+                    "readType": "ACTUAL",
+                    "providedCost": 6.4527,
+                },
+            ]
+
+        monkeypatch.setattr(opower, "_async_get_dated_data", fake_get_dated_data)
+
+        result = await opower.async_get_cost_reads(account, AggregateType.DAY, None, None)
+        assert len(result) == 2
+
+        components = result[0].read_components
+        assert len(components) == 3
+        assert components[0].tier_type == "ORDINAL"
+        assert components[0].tier_number is None
+        assert components[0].season == "SUMMER"
+        assert components[0].day_part == "ON_PEAK+RT02/TOD"
+        assert components[0].cost == 0.8195652
+        assert components[0].consumption == 2.1768
+        # Components sum to the read's totals.
+        assert sum(c.consumption for c in components) == pytest.approx(result[0].consumption)
+        assert sum(c.cost for c in components) == pytest.approx(result[0].provided_cost)
+
+        assert result[1].read_components == []
+
+
+@pytest.mark.asyncio
+async def test_five_minute_read_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Parse five-minute accounts and allow existing fine-grained aggregations."""
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(
+            session,
+            "Consolidated Edison (ConEd)",
+            username="test",
+            password="test",  # noqa: S106
+        )
+
+        async def fake_get_customers() -> list[dict[str, object]]:
+            return [
+                {
+                    "uuid": "customer-uuid",
+                    "utilityAccounts": [
+                        {
+                            "uuid": "account-uuid",
+                            "preferredUtilityAccountId": "account-id",
+                            "meterType": "ELEC",
+                            "readResolution": "FIVE_MINUTE",
+                        }
+                    ],
+                }
+            ]
+
+        calls: list[AggregateType] = []
+
+        async def fake_async_fetch(
+            account: Account,
+            aggregate_type: AggregateType,
+            start_date: datetime | None = None,
+            end_date: datetime | None = None,
+            usage_only: bool = False,
+        ) -> list[dict[str, object]]:
+            calls.append(aggregate_type)
+            return [{"start": start_date, "end": end_date, "usage_only": usage_only}]
+
+        monkeypatch.setattr(opower, "_async_get_customers", fake_get_customers)
+        monkeypatch.setattr(opower, "_async_fetch", fake_async_fetch)
+
+        accounts = await opower.async_get_accounts()
+
+        assert len(accounts) == 1
+        assert accounts[0].read_resolution is ReadResolution.FIVE_MINUTE
+        await opower._async_get_dated_data(
+            accounts[0],
+            AggregateType.QUARTER_HOUR,
+            datetime(2026, 1, 1),
+            datetime(2026, 1, 1),
+        )
+        assert calls == [AggregateType.QUARTER_HOUR]
+
+
+@pytest.mark.asyncio
 async def test_naive_read_times_localized_to_utility_timezone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

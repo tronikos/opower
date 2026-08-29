@@ -81,6 +81,7 @@ class ReadResolution(Enum):
     HOUR = "HOUR"
     HALF_HOUR = "HALF_HOUR"
     QUARTER_HOUR = "QUARTER_HOUR"
+    FIVE_MINUTE = "FIVE_MINUTE"
 
     def __str__(self) -> str:
         """Return the value of the enum."""
@@ -98,6 +99,13 @@ SUPPORTED_AGGREGATE_TYPES = {
         AggregateType.HALF_HOUR,
     ],
     ReadResolution.QUARTER_HOUR: [
+        AggregateType.BILL,
+        AggregateType.DAY,
+        AggregateType.HOUR,
+        AggregateType.HALF_HOUR,
+        AggregateType.QUARTER_HOUR,
+    ],
+    ReadResolution.FIVE_MINUTE: [
         AggregateType.BILL,
         AggregateType.DAY,
         AggregateType.HOUR,
@@ -129,9 +137,9 @@ _DSS_SERVICE_TYPE_TO_METER = {
 }
 
 
-def _get_value(data: dict[str, Any] | None, default: float = 0) -> float:
-    """Extract 'value' from a dict, returning default if missing or None."""
-    val = (data or {}).get("value")
+def _get_value(data: dict[str, Any] | None, key: str = "value", default: float = 0) -> float:
+    """Extract `key` from a dict, returning default if missing or None."""
+    val = (data or {}).get(key)
     return float(val) if val is not None else default
 
 
@@ -174,6 +182,23 @@ class Forecast:
 
 
 @dataclasses.dataclass
+class ReadComponent:
+    """A per-rate-period component of a cost read.
+
+    Utilities on time-of-use rates return one component per TOU period
+    (e.g. on-peak/off-peak) and utilities on tiered rates return one
+    component per tier. Not all utilities return components.
+    """
+
+    tier_type: str | None  # e.g. "ORDINAL"
+    tier_number: int | None  # populated for tiered rates
+    season: str | None  # e.g. "SUMMER"
+    day_part: str | None  # e.g. "ON_PEAK+RT02/TOD"; TOU period is before the "+"
+    cost: float  # in $
+    consumption: float  # taken from value field, in KWH or THERM/CCF
+
+
+@dataclasses.dataclass
 class CostRead:
     """A read from the meter that has both consumption and cost data."""
 
@@ -183,6 +208,7 @@ class CostRead:
     provided_cost: float  # in $
     usage_charges: float | None = None  # energy charges only, in $
     current_amount: float | None = None  # total bill amount incl. delivery + taxes, in $
+    read_components: list[ReadComponent] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -791,6 +817,17 @@ class Opower:
                     end_time=_parse_read_time(read["endTime"], tz),
                     consumption=(read["value"] if "value" in read else read["consumption"]["value"]),
                     provided_cost=read.get("providedCost", 0) or 0,
+                    read_components=[
+                        ReadComponent(
+                            tier_type=component.get("tierType"),
+                            tier_number=component.get("tierNumber"),
+                            season=component.get("season"),
+                            day_part=component.get("dayPart"),
+                            cost=_get_value(component, key="cost"),
+                            consumption=_get_value(component),
+                        )
+                        for component in read.get("readComponents") or []
+                    ],
                 )
             )
         # Remove last entries with 0 values

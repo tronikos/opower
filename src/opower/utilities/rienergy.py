@@ -1,0 +1,59 @@
+"""Rhode Island Energy (RIEnergy).
+
+At the time of this commit, this appears to be an unmaintained system for RIEnergy.
+Accounts do not appear to correctly return as solar even if they are,
+so only consumption (will be net if net metered, but will bottom out at 0) and cost data
+are available, with a resolution of "BILLING".
+"""
+
+from typing import Any
+
+import aiohttp
+
+from ..const import USER_AGENT
+from .base import UtilityBase
+
+
+class RhodeIslandEnergy(UtilityBase):
+    """Rhode Island Energy (RIEnergy).
+
+    This utility uses the Opower portal at `rienergy.opower.com`.
+    Login is handled via the 'user-account-control-v1' API endpoint.
+    """
+
+    @staticmethod
+    def name() -> str:
+        """Return a distinct, human-readable name for this utility."""
+        return "Rhode Island Energy (RIEnergy)"
+
+    def subdomain(self) -> str:
+        """Return the opower.com subdomain for this utility."""
+        return "rienergy"
+
+    def utilitycode(self) -> str:
+        """Return the utilitycode identifier for the utility."""
+        return "ngri"
+
+    @staticmethod
+    def timezone() -> str:
+        """Return the timezone for this utility."""
+        return "America/New_York"
+
+    async def async_login(
+        self,
+        session: aiohttp.ClientSession,
+        username: str,
+        password: str,
+        login_data: dict[str, Any],
+    ) -> None:
+        """Authenticate against the RIEnergy Opower portal."""
+        base_url = f"https://{self.subdomain()}.opower.com"
+        api_url = f"{base_url}/ei/edge/apis/user-account-control-v1/cws/v1/{self.utilitycode()}/account/signin"
+
+        async with session.post(
+            api_url,
+            json={"username": username, "password": password},
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+        ) as _:
+            pass
