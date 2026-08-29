@@ -506,6 +506,51 @@ async def test_cost_reads_bill_usage_only_uses_rest(
 
 
 @pytest.mark.asyncio
+async def test_usage_reads_bill_uses_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bill-level usage reads preserve the REST usage endpoint."""
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(
+            session,
+            "Pacific Gas and Electric Company (PG&E)",
+            username="test",
+            password="test",  # noqa: S106
+        )
+
+        account = _account()
+        call_log: list[bool] = []
+
+        async def fake_get_bill_cost_reads(*args: object, **kwargs: object) -> list[object]:
+            pytest.fail("GraphQL bill reads should not be used for explicit usage reads")
+
+        async def fake_get_dated_data(
+            acc: object,
+            agg: AggregateType,
+            start: object,
+            end: object,
+            usage_only: bool = False,
+        ) -> list[dict[str, object]]:
+            call_log.append(usage_only)
+            return [
+                {
+                    "startTime": "2026-01-01T00:00:00-05:00",
+                    "endTime": "2026-02-01T00:00:00-05:00",
+                    "consumption": {"value": 10.0},
+                }
+            ]
+
+        monkeypatch.setattr(opower, "_async_get_bill_cost_reads", fake_get_bill_cost_reads)
+        monkeypatch.setattr(opower, "_async_get_dated_data", fake_get_dated_data)
+
+        result = await opower.async_get_usage_reads(account, AggregateType.BILL, None, None)
+
+        assert call_log == [True]
+        assert len(result) == 1
+        assert result[0].consumption == 10.0
+
+
+@pytest.mark.asyncio
 async def test_cost_reads_parse_read_components(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

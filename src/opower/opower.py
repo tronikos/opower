@@ -855,23 +855,6 @@ class Opower:
         The resolution for gas is typically 'day' while for electricity it's hour or quarter hour.
         Opower typically keeps historical usage data for a bit over 3 years.
         """
-        if aggregate_type == AggregateType.BILL:
-            try:
-                bill_reads = await self._async_get_bill_cost_reads(account, start_date, end_date)
-            except ApiException as err:
-                _LOGGER.debug("GraphQL bill usage query failed, falling back to REST usage data: %s", err)
-            else:
-                if bill_reads:
-                    return [
-                        UsageRead(
-                            start_time=read.start_time,
-                            end_time=read.end_time,
-                            consumption=read.consumption,
-                        )
-                        for read in bill_reads
-                    ]
-                _LOGGER.debug("GraphQL bill usage query returned no reads, falling back to REST usage data.")
-
         reads = await self._async_get_dated_data(account, aggregate_type, start_date, end_date, usage_only=True)
         tz = await aiozoneinfo.async_get_time_zone(self.utility.timezone())
         result: list[UsageRead] = []
