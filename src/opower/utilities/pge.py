@@ -158,6 +158,35 @@ class PGE(UtilityBase):
         """Return the timezone."""
         return "America/Los_Angeles"
 
+    @staticmethod
+    async def _async_select_account(session: aiohttp.ClientSession, aura_token: str, account_id: str) -> None:
+        """Select which billing account the Salesforce session (and thus the Opower token) is scoped to.
+
+        A PG&E login can have more than one premise linked to it (e.g. after moving, or when a
+        household account is shared). PG&E's own multi-account-v1/customers endpoint only ever
+        returns the one premise that is active in this Salesforce session at the moment the Opower
+        token is minted, not every premise linked to the login. Without an explicit selection, that
+        premise is whatever Salesforce defaults to, which is not necessarily the one the caller wants.
+
+        Reproduces the same Apex calls myaccount.pge.com's own account-switcher UI makes.
+        """
+        _LOGGER.debug("Selecting PG&E account %s before requesting Opower token", account_id)
+        for classname, method, extra_params in (
+            ("MyAcct_GlobalHeaderController", "CustomerType", {"AccNumber": account_id}),
+            ("MyAcct_AccountCacheHandler", "setBillingAccountSelection", {"ccspAccountId": account_id}),
+            ("MyAcct_AccountCacheHandler", "copyToSessionCacheForUser", None),
+        ):
+            params: dict[str, Any] = {"classname": classname, "method": method}
+            if extra_params is not None:
+                params["params"] = extra_params
+            body = {
+                "message": {"actions": [{"descriptor": "aura://ApexActionController/ACTION$execute", "params": params}]},
+                "aura.context": {"app": "siteforce:communityApp"},
+                "aura.pageURI": "/myaccount/s/",
+                "aura.token": aura_token,
+            }
+            await _aura_apex_action_execute(session, body)
+
     async def async_login(
         self,
         session: aiohttp.ClientSession,
@@ -247,6 +276,9 @@ class PGE(UtilityBase):
                 "aura.token": aura_token,
             }
             await _aura_apex_action_execute(session, body)
+
+        if account_id := login_data.get("account_id"):
+            await self._async_select_account(session, aura_token, account_id)
 
         _LOGGER.debug("Fetching OpowerDataBrowser to extract token")
         resp = await session.get(
