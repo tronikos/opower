@@ -613,6 +613,18 @@ def _pge(session: _FakeSession) -> Opower:
     return opower
 
 
+def _coned(session: _FakeSession) -> Opower:
+    """Return a ConEd client wired to a fake session and already logged in."""
+    opower = Opower(
+        session,  # type: ignore[arg-type]
+        "Consolidated Edison (ConEd)",
+        "test",
+        "test",
+    )
+    opower._access_token = _ACCESS_TOKEN
+    return opower
+
+
 @pytest.mark.asyncio
 async def test_get_accounts_parses_customers_response() -> None:
     """Parse accounts out of a multi-account-v1 response."""
@@ -1241,6 +1253,290 @@ async def test_realtime_usage_reads_require_a_meter() -> None:
 
     with pytest.raises(CannotConnect):
         await _pge(session).async_get_realtime_usage_reads(account)
+
+
+def _realtime_account() -> Account:
+    """Return a synthetic ConEd electric account."""
+    return Account(
+        customer=Customer(uuid=_CUSTOMER_UUID),
+        uuid=_ELEC_ACCOUNT_UUID,
+        utility_account_id="1000000003",
+        id="1000000003",
+        meter_type=MeterType.ELEC,
+        read_resolution=ReadResolution.QUARTER_HOUR,
+    )
+
+
+def _realtime_topology(*billing_accounts: dict[str, Any]) -> dict[str, Any]:
+    """Build a GraphQL billing account topology response."""
+    return {
+        "data": {"billingAccountsConnection": {"edges": [{"node": billing_account} for billing_account in billing_accounts]}}
+    }
+
+
+def _realtime_billing_account(
+    billing_uuid: str,
+    service_agreement_uuid: str,
+    *,
+    account_number: str = "1000000003",
+    service_agreement_utility_id: str | None = None,
+) -> dict[str, Any]:
+    """Build one GraphQL billing account with an electric service point."""
+    return {
+        "urn": f"urn:opower:v1:account:cned:uuid:{billing_uuid}",
+        "uuid": billing_uuid,
+        "accountNumber": account_number,
+        "utilityId": account_number,
+        "serviceAgreementsConnection": {
+            "edges": [
+                {
+                    "node": {
+                        "uuid": service_agreement_uuid,
+                        "utilityId": service_agreement_utility_id,
+                        "serviceType": "ELECTRICITY",
+                        "servicePointsConnection": {
+                            "edges": [
+                                {
+                                    "node": {
+                                        "uuid": f"sp-{service_agreement_uuid}",
+                                        "serviceType": "ELECTRICITY",
+                                    }
+                                }
+                            ]
+                        },
+                    }
+                }
+            ]
+        },
+    }
+
+
+def _realtime_registers(*register_ids: str) -> dict[str, Any]:
+    """Build a GraphQL WRTAMI register response."""
+    return {
+        "data": {
+            "billingAccountByAuthContext": {
+                "serviceAgreementsConnection": {
+                    "edges": [
+                        {
+                            "node": {
+                                "servicePointsConnection": {
+                                    "edges": [
+                                        {
+                                            "node": {
+                                                "intervalReads": [{"registerId": register_id} for register_id in register_ids]
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+
+def _realtime_usage(*reads: dict[str, Any]) -> dict[str, Any]:
+    """Build a GraphQL WRTAMI usage response."""
+    return {
+        "data": {
+            "billingAccountByAuthContext": {
+                "serviceAgreementsConnection": {
+                    "edges": [
+                        {
+                            "node": {
+                                "servicePointsConnection": {"edges": [{"node": {"intervalReads": [{"reads": list(reads)}]}}]}
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_realtime_usage_reads_use_graphql_net_usage_and_cache_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ConEd uses unverified NET_USAGE reads and caches stable register metadata."""
+    opower = _coned(_FakeSession({}))
+    account = _realtime_account()
+    calls: list[tuple[str, dict[str, Any] | None]] = []
+
+    async def fake_post_graphql(
+        query: str,
+        headers: dict[str, str],
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        del headers
+        calls.append((query, variables))
+        if "WRTAMI_GetTopology" in query:
+            return _realtime_topology(
+                _realtime_billing_account(
+                    "other-billing-account",
+                    "other-service-agreement",
+                    account_number="9999999999",
+                ),
+                _realtime_billing_account(
+                    "selected-billing-account",
+                    "selected-service-agreement",
+                    account_number="9999999998",
+                    service_agreement_utility_id=account.utility_account_id,
+                ),
+            )
+        if "WRTAMI_GetRegisters" in query:
+            return _realtime_registers("net-register")
+        return _realtime_usage(
+            {
+                "timeInterval": "2026-09-01T10:15:00-04:00/2026-09-01T10:30:00-04:00",
+                "measuredAmount": {"value": -0.12},
+            },
+            {
+                "timeInterval": "2026-09-01T10:00:00-04:00/2026-09-01T10:15:00-04:00",
+                "measuredAmount": {"value": 0.25},
+            },
+            {
+                "timeInterval": "2026-09-01T10:30:00-04:00/2026-09-01T10:45:00-04:00",
+                "measuredAmount": None,
+            },
+        )
+
+    monkeypatch.setattr(opower, "_async_post_graphql", fake_post_graphql)
+
+    first = await opower.async_get_realtime_usage_reads(account)
+    second = await opower.async_get_realtime_usage_reads(account)
+
+    assert [read.consumption for read in first] == [0.25, -0.12]
+    assert second == first
+    assert first[0].start_time == datetime(2026, 9, 1, 10, 0, tzinfo=ZoneInfo("America/New_York"))
+    assert sum("WRTAMI_GetTopology" in query for query, _ in calls) == 1
+    assert sum("WRTAMI_GetRegisters" in query for query, _ in calls) == 1
+    assert sum("WRTAMI_GetRegisterUsage" in query for query, _ in calls) == 2
+    realtime_queries = [query for query, _ in calls if "WRTAMI_GetRegisters" in query or "WRTAMI_GetRegisterUsage" in query]
+    assert all("serviceQuantityIdentifier: [NET_USAGE]" in query for query in realtime_queries)
+    assert all("onlyUnverifiedStreams: true" in query for query in realtime_queries)
+    usage_variables = next(variables for query, variables in calls if "WRTAMI_GetRegisterUsage" in query)
+    assert usage_variables == {
+        "selectedAccount": ("urn:opower:v1:account:cned:uuid:selected-billing-account"),
+        "registerId": "net-register",
+        "saUuid": "selected-service-agreement",
+        "spUuid": "sp-selected-service-agreement",
+    }
+
+
+@pytest.mark.asyncio
+async def test_realtime_usage_reads_fall_back_when_graphql_mapping_is_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Multiple matching GraphQL account paths use the compatibility REST API."""
+    meters_response = {"meters_ids": ["KWH:NET_USAGE"]}
+    usage_response = {
+        "reads": [
+            {
+                "startTime": "2026-09-01T10:00:00-04:00",
+                "endTime": "2026-09-01T10:15:00-04:00",
+                "value": 0.4,
+            }
+        ]
+    }
+    session = _FakeSession({"/meters/": usage_response, "/meters": meters_response})
+    opower = _coned(session)
+    account = _realtime_account()
+    topology_calls = 0
+
+    async def fake_post_graphql(
+        query: str,
+        headers: dict[str, str],
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        nonlocal topology_calls
+        del query, headers, variables
+        topology_calls += 1
+        return _realtime_topology(
+            _realtime_billing_account("billing-1", "service-agreement-1"),
+            _realtime_billing_account("billing-2", "service-agreement-2"),
+        )
+
+    monkeypatch.setattr(opower, "_async_post_graphql", fake_post_graphql)
+
+    first = await opower.async_get_realtime_usage_reads(account)
+    second = await opower.async_get_realtime_usage_reads(account)
+
+    assert [read.consumption for read in first] == [0.4]
+    assert second == first
+    assert topology_calls == 1
+    assert [request["method"] for request in session.requests] == ["GET", "GET", "GET"]
+
+
+@pytest.mark.asyncio
+async def test_realtime_usage_reads_fall_back_when_graphql_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A GraphQL API failure uses the existing realtime REST path."""
+    session = _FakeSession(
+        {
+            "/meters/": {
+                "reads": [
+                    {
+                        "startTime": "2026-09-01T10:00:00-04:00",
+                        "endTime": "2026-09-01T10:15:00-04:00",
+                        "value": 0.4,
+                    }
+                ]
+            },
+            "/meters": {"meters_ids": ["KWH:NET_USAGE"]},
+        }
+    )
+    opower = _coned(session)
+
+    async def fail_graphql(
+        query: str,
+        headers: dict[str, str],
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        del query, headers, variables
+        raise ApiException("GraphQL failed", url="https://example.test/graphql")
+
+    monkeypatch.setattr(opower, "_async_post_graphql", fail_graphql)
+
+    result = await opower.async_get_realtime_usage_reads(_realtime_account())
+
+    assert [read.consumption for read in result] == [0.4]
+
+
+@pytest.mark.asyncio
+async def test_realtime_usage_reads_surface_rest_error_after_graphql_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The compatibility REST error propagates when both realtime paths fail."""
+    session = _FakeSession(
+        {
+            "/meters": _FakeResponse(
+                {"error": {"details": "No meter asset ID returned"}},
+                status=424,
+            )
+        }
+    )
+    opower = _coned(session)
+
+    async def fail_graphql(
+        query: str,
+        headers: dict[str, str],
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        del query, headers, variables
+        raise ApiException("GraphQL failed", url="https://example.test/graphql")
+
+    monkeypatch.setattr(opower, "_async_post_graphql", fail_graphql)
+
+    with pytest.raises(ApiException) as exc_info:
+        await opower.async_get_realtime_usage_reads(_realtime_account())
+
+    assert exc_info.value.status == 424
+    assert "No meter asset ID returned" in (exc_info.value.response_text or "")
 
 
 def test_select_utility_accepts_name_and_class_name() -> None:

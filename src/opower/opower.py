@@ -218,6 +218,16 @@ class UsageRead:
     consumption: float  # taken from consumption.value field, in KWH or THERM/CCF
 
 
+@dataclasses.dataclass(frozen=True)
+class _RealtimeGraphQLMetadata:
+    """Identifiers needed to query one account's realtime GraphQL reads."""
+
+    selected_account: str
+    service_agreement_uuid: str
+    service_point_uuid: str
+    register_ids: tuple[str, ...]
+
+
 def get_supported_utilities() -> list[type["UtilityBase"]]:
     """Return a list of all supported utilities."""
     return UtilityBase.subclasses
@@ -265,6 +275,7 @@ class Opower:
         # Keyed by account uuid: meters are fetched per account, so a single
         # list would serve one account's meters for every other account.
         self._meters: dict[str, list[str]] = {}
+        self._realtime_graphql_metadata: dict[tuple[str, str, str, str], _RealtimeGraphQLMetadata | None] = {}
 
     async def async_login(self) -> None:
         """Login to the utility website and authorize opower.com for access.
@@ -632,19 +643,11 @@ class Opower:
             self._meters[account.uuid] = list(result["meters_ids"])
         return self._meters[account.uuid]
 
-    async def async_get_realtime_usage_reads(
+    async def _async_get_legacy_realtime_usage_reads(
         self,
         account: Account,
     ) -> list[UsageRead]:
-        """Get recent usage data from the "Real Time Usage" API.
-
-        The realtime API returns data in approximately the last day in 15
-        minute increments. Based on requests from ConEd, the API does not
-        accept any parameters.
-
-        Even though each account may have multiple meters, for now this
-        function only queries data for the first meter on the account.
-        """
+        """Get recent usage data from the legacy realtime REST API."""
         meters = await self._async_get_meters(account)
         if not meters:
             raise CannotConnect(f"No meters found for account {account.id}")
@@ -666,6 +669,356 @@ class Opower:
             )
             for read in result["reads"]
         ]
+
+    def _normalized_account_identifiers(self, account: Account) -> set[str]:
+        """Return account identifiers in the forms used by Opower APIs."""
+        identifiers = {account.uuid, account.utility_account_id, account.id}
+        for customer in self._customers:
+            if str(customer.get("uuid", "")) != account.customer.uuid:
+                continue
+            for utility_account in customer.get("utilityAccounts", []):
+                if str(utility_account.get("uuid", "")) != account.uuid:
+                    continue
+                identifiers |= {
+                    str(utility_account[key])
+                    for key in (
+                        "uuid",
+                        "utilityAccountId",
+                        "utilityAccountId2",
+                        "preferredUtilityAccountId",
+                        "servicePointId",
+                    )
+                    if utility_account.get(key) is not None
+                }
+        return identifiers | {identifier.lstrip("0") or "0" for identifier in identifiers}
+
+    @staticmethod
+    def _matches_meter_type(node: dict[str, Any], meter_type: MeterType) -> bool:
+        """Return whether a GraphQL service entity matches a meter type."""
+        service_type = str(node.get("serviceType", "")).upper()
+        return _DSS_SERVICE_TYPE_TO_METER.get(service_type) == meter_type.value
+
+    @staticmethod
+    def _graphql_identifiers(
+        node: dict[str, Any],
+        keys: tuple[str, ...],
+    ) -> set[str]:
+        """Return normalized identifiers from a GraphQL entity."""
+        identifiers = {str(node[key]) for key in keys if node.get(key)}
+        return identifiers | {identifier.lstrip("0") or "0" for identifier in identifiers}
+
+    def _realtime_graphql_mappings(
+        self,
+        account: Account,
+        result: dict[str, Any],
+    ) -> list[tuple[str, str, str]]:
+        """Return GraphQL account paths that safely match a REST account."""
+        account_identifiers = self._normalized_account_identifiers(account)
+        mappings: list[tuple[str, str, str]] = []
+        billing_accounts_connection = (result.get("data") or {}).get("billingAccountsConnection") or {}
+
+        for edge in billing_accounts_connection.get("edges") or []:
+            billing_account = edge.get("node") or {}
+            selected_account = str(billing_account.get("urn", ""))
+            if not selected_account:
+                continue
+
+            billing_identifiers = self._graphql_identifiers(
+                billing_account,
+                ("uuid", "accountNumber", "utilityId"),
+            )
+            billing_account_matches = bool(account_identifiers & billing_identifiers)
+
+            service_agreements_connection = billing_account.get("serviceAgreementsConnection") or {}
+            service_agreements = [
+                service_agreement_edge.get("node") or {}
+                for service_agreement_edge in service_agreements_connection.get("edges") or []
+                if self._matches_meter_type(service_agreement_edge.get("node") or {}, account.meter_type)
+            ]
+            matching_service_agreements = [
+                service_agreement
+                for service_agreement in service_agreements
+                if account_identifiers
+                & self._graphql_identifiers(
+                    service_agreement,
+                    ("uuid", "utilityId"),
+                )
+            ]
+            if matching_service_agreements:
+                service_agreements = matching_service_agreements
+            elif not billing_account_matches or len(service_agreements) != 1:
+                continue
+
+            for service_agreement in service_agreements:
+                service_points_connection = service_agreement.get("servicePointsConnection") or {}
+                service_points = [
+                    service_point_edge.get("node") or {}
+                    for service_point_edge in service_points_connection.get("edges") or []
+                    if self._matches_meter_type(service_point_edge.get("node") or {}, account.meter_type)
+                ]
+                matching_service_points = [
+                    service_point
+                    for service_point in service_points
+                    if account_identifiers
+                    & self._graphql_identifiers(
+                        service_point,
+                        ("uuid", "utilityId"),
+                    )
+                ]
+                if matching_service_points:
+                    service_points = matching_service_points
+                if len(service_points) != 1:
+                    continue
+                service_agreement_uuid = str(service_agreement.get("uuid", ""))
+                service_point_uuid = str(service_points[0].get("uuid", ""))
+                if service_agreement_uuid and service_point_uuid:
+                    mappings.append(
+                        (
+                            selected_account,
+                            service_agreement_uuid,
+                            service_point_uuid,
+                        )
+                    )
+        return mappings
+
+    async def _async_get_realtime_graphql_metadata(
+        self,
+        account: Account,
+    ) -> _RealtimeGraphQLMetadata | None:
+        """Discover and cache an unambiguous GraphQL realtime register mapping."""
+        cache_key = (
+            account.customer.uuid,
+            account.meter_type.value,
+            account.uuid,
+            account.utility_account_id,
+        )
+        if cache_key in self._realtime_graphql_metadata:
+            return self._realtime_graphql_metadata[cache_key]
+
+        topology_query = """
+        query WRTAMI_GetTopology($first: Int, $onlyActive: Boolean) {
+          billingAccountsConnection(first: $first) {
+            edges {
+              node {
+                urn
+                uuid
+                accountNumber
+                utilityId
+                serviceAgreementsConnection(first: 25, onlyActive: $onlyActive) {
+                  edges {
+                    node {
+                      uuid
+                      utilityId
+                      serviceType
+                      servicePointsConnection(first: 25) {
+                        edges {
+                          node {
+                            uuid
+                            utilityId
+                            serviceType
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+        result = await self._async_post_graphql(
+            topology_query,
+            self._get_headers(account.customer.uuid),
+            {"first": 100, "onlyActive": True},
+        )
+        mappings = self._realtime_graphql_mappings(account, result)
+
+        if len(mappings) != 1:
+            self._realtime_graphql_metadata[cache_key] = None
+            return None
+
+        selected_account, service_agreement_uuid, service_point_uuid = mappings[0]
+        registers_query = """
+        query WRTAMI_GetRegisters(
+          $selectedAccount: ID
+          $saUuid: String
+          $spUuid: String
+        ) {
+          billingAccountByAuthContext(selectedAccount: $selectedAccount) {
+            serviceAgreementsConnection(onlyActive: true, matching: $saUuid) {
+              edges {
+                node {
+                  servicePointsConnection(matching: $spUuid) {
+                    edges {
+                      node {
+                        intervalReads(
+                          units: [KWH]
+                          serviceQuantityIdentifier: [NET_USAGE]
+                          onlyUnverifiedStreams: true
+                        ) {
+                          registerId
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+        variables = {
+            "selectedAccount": selected_account,
+            "saUuid": service_agreement_uuid,
+            "spUuid": service_point_uuid,
+        }
+        registers_result = await self._async_post_graphql(
+            registers_query,
+            self._get_headers(account.customer.uuid),
+            variables,
+        )
+        billing_account = (registers_result.get("data") or {}).get("billingAccountByAuthContext") or {}
+        service_agreements_connection = billing_account.get("serviceAgreementsConnection") or {}
+        service_agreement_edges = service_agreements_connection.get("edges") or []
+        if len(service_agreement_edges) != 1:
+            self._realtime_graphql_metadata[cache_key] = None
+            return None
+        service_agreement = service_agreement_edges[0].get("node") or {}
+        service_points_connection = service_agreement.get("servicePointsConnection") or {}
+        service_point_edges = service_points_connection.get("edges") or []
+        if len(service_point_edges) != 1:
+            self._realtime_graphql_metadata[cache_key] = None
+            return None
+        service_point = service_point_edges[0].get("node") or {}
+        interval_reads = service_point.get("intervalReads") or []
+        register_ids = tuple(
+            dict.fromkeys(
+                str(interval_read["registerId"]) for interval_read in interval_reads if interval_read.get("registerId")
+            )
+        )
+        if not register_ids:
+            self._realtime_graphql_metadata[cache_key] = None
+            return None
+
+        metadata = _RealtimeGraphQLMetadata(
+            selected_account=selected_account,
+            service_agreement_uuid=service_agreement_uuid,
+            service_point_uuid=service_point_uuid,
+            register_ids=register_ids,
+        )
+        self._realtime_graphql_metadata[cache_key] = metadata
+        return metadata
+
+    async def _async_get_graphql_realtime_usage_reads(
+        self,
+        account: Account,
+    ) -> list[UsageRead] | None:
+        """Get recent unverified NET_USAGE reads from the GraphQL WRTAMI API."""
+        metadata = await self._async_get_realtime_graphql_metadata(account)
+        if metadata is None:
+            return None
+
+        usage_query = """
+        query WRTAMI_GetRegisterUsage(
+          $selectedAccount: ID
+          $registerId: ID
+          $saUuid: String
+          $spUuid: String
+        ) {
+          billingAccountByAuthContext(selectedAccount: $selectedAccount) {
+            serviceAgreementsConnection(onlyActive: true, matching: $saUuid) {
+              edges {
+                node {
+                  servicePointsConnection(matching: $spUuid) {
+                    edges {
+                      node {
+                        intervalReads(
+                          registerId: $registerId
+                          units: [KWH]
+                          serviceQuantityIdentifier: [NET_USAGE]
+                          onlyUnverifiedStreams: true
+                        ) {
+                          reads {
+                            timeInterval
+                            measuredAmount {
+                              value
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+        tz = await aiozoneinfo.async_get_time_zone(self.utility.timezone())
+        reads: list[UsageRead] = []
+        for register_id in metadata.register_ids:
+            result = await self._async_post_graphql(
+                usage_query,
+                self._get_headers(account.customer.uuid),
+                {
+                    "selectedAccount": metadata.selected_account,
+                    "registerId": register_id,
+                    "saUuid": metadata.service_agreement_uuid,
+                    "spUuid": metadata.service_point_uuid,
+                },
+            )
+            billing_account = (result.get("data") or {}).get("billingAccountByAuthContext") or {}
+            service_agreements_connection = billing_account.get("serviceAgreementsConnection") or {}
+            service_agreement_edges = service_agreements_connection.get("edges") or []
+            if len(service_agreement_edges) != 1:
+                raise CannotConnect("GraphQL realtime service agreement mapping changed")
+            service_agreement = service_agreement_edges[0].get("node") or {}
+            service_points_connection = service_agreement.get("servicePointsConnection") or {}
+            service_point_edges = service_points_connection.get("edges") or []
+            if len(service_point_edges) != 1:
+                raise CannotConnect("GraphQL realtime service point mapping changed")
+            service_point = service_point_edges[0].get("node") or {}
+            for stream in service_point.get("intervalReads") or []:
+                for read in stream.get("reads") or []:
+                    measured_amount = read.get("measuredAmount")
+                    if not measured_amount or measured_amount.get("value") is None:
+                        continue
+                    time_interval = str(read.get("timeInterval", ""))
+                    if "/" not in time_interval:
+                        raise CannotConnect("GraphQL realtime read has an invalid time interval")
+                    start_time, end_time = time_interval.split("/", 1)
+                    reads.append(
+                        UsageRead(
+                            start_time=_parse_read_time(start_time, tz),
+                            end_time=_parse_read_time(end_time, tz),
+                            consumption=float(measured_amount["value"]),
+                        )
+                    )
+
+        if not reads:
+            raise CannotConnect("GraphQL realtime API returned no usable reads")
+        reads.sort(key=lambda read: read.start_time)
+        return reads
+
+    async def async_get_realtime_usage_reads(
+        self,
+        account: Account,
+    ) -> list[UsageRead]:
+        """Get approximately the latest day of usage in 15-minute increments."""
+        if self.utility.supports_realtime_usage():
+            try:
+                graphql_reads = await self._async_get_graphql_realtime_usage_reads(account)
+            except (ApiException, CannotConnect) as err:
+                _LOGGER.debug(
+                    "GraphQL realtime usage failed; falling back to legacy REST: %s",
+                    err,
+                )
+            else:
+                if graphql_reads is not None:
+                    return graphql_reads
+                _LOGGER.debug("GraphQL realtime account mapping was unavailable; falling back to legacy REST.")
+        return await self._async_get_legacy_realtime_usage_reads(account)
 
     async def _async_get_dated_data(
         self,
@@ -870,15 +1223,23 @@ class Opower:
         except ClientError as e:
             raise ApiException(f"Client Error: {e}", url=full_url) from e
 
-    async def _async_post_graphql(self, query: str, headers: dict[str, str]) -> Any:
+    async def _async_post_graphql(
+        self,
+        query: str,
+        headers: dict[str, str],
+        variables: dict[str, Any] | None = None,
+    ) -> Any:
         """Execute a GraphQL query against the Opower API."""
         url = f"https://{self._get_subdomain()}.opower.com/{self._get_api_root()}/edge/apis/dsm-graphql-v1/cws/graphql"
         _LOGGER.debug("GraphQL query to: %s", url)
+        payload: dict[str, Any] = {"query": query}
+        if variables is not None:
+            payload["variables"] = variables
         try:
             async with self._session.post(
                 url,
                 headers={**headers, "Content-Type": "application/json"},
-                json={"query": query},
+                json=payload,
             ) as resp:
                 if not resp.ok:
                     raise ApiException(
