@@ -1357,6 +1357,21 @@ def _realtime_usage(*reads: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def test_realtime_graphql_mapping_requires_service_agreement_identifier() -> None:
+    """A billing-account match alone cannot identify a service agreement."""
+    opower = _coned(_FakeSession({}))
+    account = _realtime_account()
+    topology = _realtime_topology(
+        _realtime_billing_account(
+            account.uuid,
+            "unmatched-service-agreement",
+            account_number=account.utility_account_id,
+        )
+    )
+
+    assert opower._realtime_graphql_mappings(account, topology) == []
+
+
 @pytest.mark.asyncio
 async def test_realtime_usage_reads_use_graphql_net_usage_and_cache_discovery(
     monkeypatch: pytest.MonkeyPatch,
@@ -1456,8 +1471,16 @@ async def test_realtime_usage_reads_fall_back_when_graphql_mapping_is_ambiguous(
         del query, headers, variables
         topology_calls += 1
         return _realtime_topology(
-            _realtime_billing_account("billing-1", "service-agreement-1"),
-            _realtime_billing_account("billing-2", "service-agreement-2"),
+            _realtime_billing_account(
+                "billing-1",
+                "service-agreement-1",
+                service_agreement_utility_id=account.utility_account_id,
+            ),
+            _realtime_billing_account(
+                "billing-2",
+                "service-agreement-2",
+                service_agreement_utility_id=account.utility_account_id,
+            ),
         )
 
     monkeypatch.setattr(opower, "_async_post_graphql", fake_post_graphql)
@@ -1468,6 +1491,60 @@ async def test_realtime_usage_reads_fall_back_when_graphql_mapping_is_ambiguous(
     assert [read.consumption for read in first] == [0.4]
     assert second == first
     assert topology_calls == 1
+    assert [request["method"] for request in session.requests] == ["GET", "GET", "GET"]
+
+
+@pytest.mark.asyncio
+async def test_realtime_usage_reads_fall_back_when_register_mapping_is_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Multiple GraphQL registers use the compatibility REST API."""
+    session = _FakeSession(
+        {
+            "/meters/": {
+                "reads": [
+                    {
+                        "startTime": "2026-09-01T10:00:00-04:00",
+                        "endTime": "2026-09-01T10:15:00-04:00",
+                        "value": 0.4,
+                    }
+                ]
+            },
+            "/meters": {"meters_ids": ["KWH:NET_USAGE"]},
+        }
+    )
+    opower = _coned(session)
+    account = _realtime_account()
+    graphql_calls = 0
+
+    async def fake_post_graphql(
+        query: str,
+        headers: dict[str, str],
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        nonlocal graphql_calls
+        del headers, variables
+        graphql_calls += 1
+        if "WRTAMI_GetTopology" in query:
+            return _realtime_topology(
+                _realtime_billing_account(
+                    "selected-billing-account",
+                    "selected-service-agreement",
+                    service_agreement_utility_id=account.utility_account_id,
+                )
+            )
+        if "WRTAMI_GetRegisters" in query:
+            return _realtime_registers("net-register-1", "net-register-2")
+        pytest.fail("GraphQL usage must not be queried for ambiguous registers")
+
+    monkeypatch.setattr(opower, "_async_post_graphql", fake_post_graphql)
+
+    first = await opower.async_get_realtime_usage_reads(account)
+    second = await opower.async_get_realtime_usage_reads(account)
+
+    assert [read.consumption for read in first] == [0.4]
+    assert second == first
+    assert graphql_calls == 2
     assert [request["method"] for request in session.requests] == ["GET", "GET", "GET"]
 
 

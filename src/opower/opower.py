@@ -225,7 +225,7 @@ class _RealtimeGraphQLMetadata:
     selected_account: str
     service_agreement_uuid: str
     service_point_uuid: str
-    register_ids: tuple[str, ...]
+    register_id: str
 
 
 def get_supported_utilities() -> list[type["UtilityBase"]]:
@@ -672,7 +672,15 @@ class Opower:
 
     def _normalized_account_identifiers(self, account: Account) -> set[str]:
         """Return account identifiers in the forms used by Opower APIs."""
-        identifiers = {account.uuid, account.utility_account_id, account.id}
+        identifiers = {
+            identifier
+            for identifier in (
+                account.uuid,
+                account.utility_account_id,
+                account.id,
+            )
+            if identifier
+        }
         for customer in self._customers:
             if str(customer.get("uuid", "")) != account.customer.uuid:
                 continue
@@ -723,19 +731,13 @@ class Opower:
             if not selected_account:
                 continue
 
-            billing_identifiers = self._graphql_identifiers(
-                billing_account,
-                ("uuid", "accountNumber", "utilityId"),
-            )
-            billing_account_matches = bool(account_identifiers & billing_identifiers)
-
             service_agreements_connection = billing_account.get("serviceAgreementsConnection") or {}
             service_agreements = [
                 service_agreement_edge.get("node") or {}
                 for service_agreement_edge in service_agreements_connection.get("edges") or []
                 if self._matches_meter_type(service_agreement_edge.get("node") or {}, account.meter_type)
             ]
-            matching_service_agreements = [
+            service_agreements = [
                 service_agreement
                 for service_agreement in service_agreements
                 if account_identifiers
@@ -744,10 +746,6 @@ class Opower:
                     ("uuid", "utilityId"),
                 )
             ]
-            if matching_service_agreements:
-                service_agreements = matching_service_agreements
-            elif not billing_account_matches or len(service_agreements) != 1:
-                continue
 
             for service_agreement in service_agreements:
                 service_points_connection = service_agreement.get("servicePointsConnection") or {}
@@ -801,9 +799,6 @@ class Opower:
             edges {
               node {
                 urn
-                uuid
-                accountNumber
-                utilityId
                 serviceAgreementsConnection(first: 25, onlyActive: $onlyActive) {
                   edges {
                     node {
@@ -897,7 +892,7 @@ class Opower:
                 str(interval_read["registerId"]) for interval_read in interval_reads if interval_read.get("registerId")
             )
         )
-        if not register_ids:
+        if len(register_ids) != 1:
             self._realtime_graphql_metadata[cache_key] = None
             return None
 
@@ -905,7 +900,7 @@ class Opower:
             selected_account=selected_account,
             service_agreement_uuid=service_agreement_uuid,
             service_point_uuid=service_point_uuid,
-            register_ids=register_ids,
+            register_id=register_ids[0],
         )
         self._realtime_graphql_metadata[cache_key] = metadata
         return metadata
@@ -957,44 +952,45 @@ class Opower:
         """
         tz = await aiozoneinfo.async_get_time_zone(self.utility.timezone())
         reads: list[UsageRead] = []
-        for register_id in metadata.register_ids:
-            result = await self._async_post_graphql(
-                usage_query,
-                self._get_headers(account.customer.uuid),
-                {
-                    "selectedAccount": metadata.selected_account,
-                    "registerId": register_id,
-                    "saUuid": metadata.service_agreement_uuid,
-                    "spUuid": metadata.service_point_uuid,
-                },
+        result = await self._async_post_graphql(
+            usage_query,
+            self._get_headers(account.customer.uuid),
+            {
+                "selectedAccount": metadata.selected_account,
+                "registerId": metadata.register_id,
+                "saUuid": metadata.service_agreement_uuid,
+                "spUuid": metadata.service_point_uuid,
+            },
+        )
+        billing_account = (result.get("data") or {}).get("billingAccountByAuthContext") or {}
+        service_agreements_connection = billing_account.get("serviceAgreementsConnection") or {}
+        service_agreement_edges = service_agreements_connection.get("edges") or []
+        if len(service_agreement_edges) != 1:
+            raise CannotConnect("GraphQL realtime service agreement mapping changed")
+        service_agreement = service_agreement_edges[0].get("node") or {}
+        service_points_connection = service_agreement.get("servicePointsConnection") or {}
+        service_point_edges = service_points_connection.get("edges") or []
+        if len(service_point_edges) != 1:
+            raise CannotConnect("GraphQL realtime service point mapping changed")
+        service_point = service_point_edges[0].get("node") or {}
+        streams = service_point.get("intervalReads") or []
+        if len(streams) != 1:
+            raise CannotConnect("GraphQL realtime register mapping changed")
+        for read in streams[0].get("reads") or []:
+            measured_amount = read.get("measuredAmount")
+            if not measured_amount or measured_amount.get("value") is None:
+                continue
+            time_interval = str(read.get("timeInterval", ""))
+            if "/" not in time_interval:
+                raise CannotConnect("GraphQL realtime read has an invalid time interval")
+            start_time, end_time = time_interval.split("/", 1)
+            reads.append(
+                UsageRead(
+                    start_time=_parse_read_time(start_time, tz),
+                    end_time=_parse_read_time(end_time, tz),
+                    consumption=float(measured_amount["value"]),
+                )
             )
-            billing_account = (result.get("data") or {}).get("billingAccountByAuthContext") or {}
-            service_agreements_connection = billing_account.get("serviceAgreementsConnection") or {}
-            service_agreement_edges = service_agreements_connection.get("edges") or []
-            if len(service_agreement_edges) != 1:
-                raise CannotConnect("GraphQL realtime service agreement mapping changed")
-            service_agreement = service_agreement_edges[0].get("node") or {}
-            service_points_connection = service_agreement.get("servicePointsConnection") or {}
-            service_point_edges = service_points_connection.get("edges") or []
-            if len(service_point_edges) != 1:
-                raise CannotConnect("GraphQL realtime service point mapping changed")
-            service_point = service_point_edges[0].get("node") or {}
-            for stream in service_point.get("intervalReads") or []:
-                for read in stream.get("reads") or []:
-                    measured_amount = read.get("measuredAmount")
-                    if not measured_amount or measured_amount.get("value") is None:
-                        continue
-                    time_interval = str(read.get("timeInterval", ""))
-                    if "/" not in time_interval:
-                        raise CannotConnect("GraphQL realtime read has an invalid time interval")
-                    start_time, end_time = time_interval.split("/", 1)
-                    reads.append(
-                        UsageRead(
-                            start_time=_parse_read_time(start_time, tz),
-                            end_time=_parse_read_time(end_time, tz),
-                            consumption=float(measured_amount["value"]),
-                        )
-                    )
 
         if not reads:
             raise CannotConnect("GraphQL realtime API returned no usable reads")
