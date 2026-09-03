@@ -1270,7 +1270,12 @@ def _realtime_account() -> Account:
 def _realtime_topology(*billing_accounts: dict[str, Any]) -> dict[str, Any]:
     """Build a GraphQL billing account topology response."""
     return {
-        "data": {"billingAccountsConnection": {"edges": [{"node": billing_account} for billing_account in billing_accounts]}}
+        "data": {
+            "billingAccountsConnection": {
+                "pageInfo": {"hasNextPage": False},
+                "edges": [{"node": billing_account} for billing_account in billing_accounts],
+            }
+        }
     }
 
 
@@ -1288,6 +1293,7 @@ def _realtime_billing_account(
         "accountNumber": account_number,
         "utilityId": account_number,
         "serviceAgreementsConnection": {
+            "pageInfo": {"hasNextPage": False},
             "edges": [
                 {
                     "node": {
@@ -1295,6 +1301,7 @@ def _realtime_billing_account(
                         "utilityId": service_agreement_utility_id,
                         "serviceType": "ELECTRICITY",
                         "servicePointsConnection": {
+                            "pageInfo": {"hasNextPage": False},
                             "edges": [
                                 {
                                     "node": {
@@ -1302,11 +1309,11 @@ def _realtime_billing_account(
                                         "serviceType": "ELECTRICITY",
                                     }
                                 }
-                            ]
+                            ],
                         },
                     }
                 }
-            ]
+            ],
         },
     }
 
@@ -1370,6 +1377,78 @@ def test_realtime_graphql_mapping_requires_service_agreement_identifier() -> Non
     )
 
     assert opower._realtime_graphql_mappings(account, topology) == []
+
+
+@pytest.mark.parametrize(
+    ("connection_name", "page_info"),
+    [
+        ("billing_accounts", {"hasNextPage": True}),
+        ("billing_accounts", None),
+        ("service_agreements", {"hasNextPage": True}),
+        ("service_agreements", None),
+        ("service_points", {"hasNextPage": True}),
+        ("service_points", None),
+    ],
+)
+def test_realtime_graphql_mapping_requires_complete_connections(
+    connection_name: str,
+    page_info: dict[str, bool] | None,
+) -> None:
+    """A truncated or malformed topology cannot establish a safe mapping."""
+    opower = _coned(_FakeSession({}))
+    account = _realtime_account()
+    topology = _realtime_topology(
+        _realtime_billing_account(
+            "selected-billing-account",
+            "selected-service-agreement",
+            service_agreement_utility_id=account.utility_account_id,
+        )
+    )
+    billing_accounts = topology["data"]["billingAccountsConnection"]
+    service_agreements = billing_accounts["edges"][0]["node"]["serviceAgreementsConnection"]
+    service_points = service_agreements["edges"][0]["node"]["servicePointsConnection"]
+    connection = {
+        "billing_accounts": billing_accounts,
+        "service_agreements": service_agreements,
+        "service_points": service_points,
+    }[connection_name]
+    if page_info is None:
+        connection.pop("pageInfo")
+    else:
+        connection["pageInfo"] = page_info
+
+    assert opower._realtime_graphql_mappings(account, topology) == []
+
+
+@pytest.mark.parametrize("duplicate_edge", ["service_agreement", "service_point"])
+def test_realtime_graphql_mapping_ignores_duplicate_edges(
+    duplicate_edge: str,
+) -> None:
+    """Duplicate edges for the same UUID do not make a mapping ambiguous."""
+    opower = _coned(_FakeSession({}))
+    account = _realtime_account()
+    topology = _realtime_topology(
+        _realtime_billing_account(
+            "selected-billing-account",
+            "selected-service-agreement",
+            service_agreement_utility_id=account.utility_account_id,
+        )
+    )
+    billing_account = topology["data"]["billingAccountsConnection"]["edges"][0]["node"]
+    service_agreement_edges = billing_account["serviceAgreementsConnection"]["edges"]
+    if duplicate_edge == "service_agreement":
+        service_agreement_edges.append(service_agreement_edges[0])
+    else:
+        service_point_edges = service_agreement_edges[0]["node"]["servicePointsConnection"]["edges"]
+        service_point_edges.append(service_point_edges[0])
+
+    assert opower._realtime_graphql_mappings(account, topology) == [
+        (
+            "urn:opower:v1:account:cned:uuid:selected-billing-account",
+            "selected-service-agreement",
+            "sp-selected-service-agreement",
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -1495,10 +1574,110 @@ async def test_realtime_usage_reads_fall_back_when_graphql_mapping_is_ambiguous(
 
 
 @pytest.mark.asyncio
-async def test_realtime_usage_reads_fall_back_when_register_mapping_is_ambiguous(
+async def test_realtime_usage_reads_select_net_usage_register(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Multiple GraphQL registers use the compatibility REST API."""
+    """A NET_USAGE register is selected from a net-metered register set."""
+    opower = _coned(_FakeSession({}))
+    account = _realtime_account()
+    usage_variables: dict[str, Any] | None = None
+
+    async def fake_post_graphql(
+        query: str,
+        headers: dict[str, str],
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        nonlocal usage_variables
+        del headers
+        if "WRTAMI_GetTopology" in query:
+            return _realtime_topology(
+                _realtime_billing_account(
+                    "selected-billing-account",
+                    "selected-service-agreement",
+                    service_agreement_utility_id=account.utility_account_id,
+                )
+            )
+        if "WRTAMI_GetRegisters" in query:
+            return _realtime_registers(
+                "KWH:DELIVERED",
+                "KWH:RECEIVED",
+                "KWH:NET_USAGE",
+            )
+        usage_variables = variables
+        return _realtime_usage(
+            {
+                "timeInterval": "2026-09-01T10:00:00-04:00/2026-09-01T10:15:00-04:00",
+                "measuredAmount": {"value": -0.4},
+            }
+        )
+
+    monkeypatch.setattr(opower, "_async_post_graphql", fake_post_graphql)
+
+    result = await opower.async_get_realtime_usage_reads(account)
+
+    assert [read.consumption for read in result] == [-0.4]
+    assert usage_variables is not None
+    assert usage_variables["registerId"] == "KWH:NET_USAGE"
+
+
+@pytest.mark.parametrize(
+    "graphql_reads",
+    [
+        (),
+        (
+            {
+                "timeInterval": "2026-09-01T10:00:00-04:00/2026-09-01T10:15:00-04:00",
+                "measuredAmount": None,
+            },
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_realtime_usage_reads_return_empty_for_valid_no_data(
+    monkeypatch: pytest.MonkeyPatch,
+    graphql_reads: tuple[dict[str, Any], ...],
+) -> None:
+    """A valid empty or null-only GraphQL stream does not use REST fallback."""
+    opower = _coned(_FakeSession({}))
+    account = _realtime_account()
+
+    async def fake_post_graphql(
+        query: str,
+        headers: dict[str, str],
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        del headers, variables
+        if "WRTAMI_GetTopology" in query:
+            return _realtime_topology(
+                _realtime_billing_account(
+                    "selected-billing-account",
+                    "selected-service-agreement",
+                    service_agreement_utility_id=account.utility_account_id,
+                )
+            )
+        if "WRTAMI_GetRegisters" in query:
+            return _realtime_registers("opaque-register")
+        return _realtime_usage(*graphql_reads)
+
+    monkeypatch.setattr(opower, "_async_post_graphql", fake_post_graphql)
+
+    assert await opower.async_get_realtime_usage_reads(account) == []
+
+
+@pytest.mark.parametrize(
+    "register_ids",
+    [
+        ("opaque-register-1", "opaque-register-2"),
+        ("KWH:DELIVERED",),
+        ("KWH:RECEIVED",),
+    ],
+)
+@pytest.mark.asyncio
+async def test_realtime_usage_reads_fall_back_when_register_mapping_is_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+    register_ids: tuple[str, ...],
+) -> None:
+    """Unidentified or directional GraphQL registers use compatibility REST."""
     session = _FakeSession(
         {
             "/meters/": {
@@ -1534,7 +1713,7 @@ async def test_realtime_usage_reads_fall_back_when_register_mapping_is_ambiguous
                 )
             )
         if "WRTAMI_GetRegisters" in query:
-            return _realtime_registers("net-register-1", "net-register-2")
+            return _realtime_registers(*register_ids)
         pytest.fail("GraphQL usage must not be queried for ambiguous registers")
 
     monkeypatch.setattr(opower, "_async_post_graphql", fake_post_graphql)

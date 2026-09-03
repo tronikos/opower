@@ -647,7 +647,7 @@ class Opower:
         self,
         account: Account,
     ) -> list[UsageRead]:
-        """Get recent usage data from the legacy realtime REST API."""
+        """Get recent legacy REST usage from the account's first meter."""
         meters = await self._async_get_meters(account)
         if not meters:
             raise CannotConnect(f"No meters found for account {account.id}")
@@ -715,6 +715,27 @@ class Opower:
         identifiers = {str(node[key]) for key in keys if node.get(key)}
         return identifiers | {identifier.lstrip("0") or "0" for identifier in identifiers}
 
+    @staticmethod
+    def _graphql_connection_is_complete(connection: dict[str, Any]) -> bool:
+        """Return whether a requested GraphQL connection is not truncated."""
+        return (connection.get("pageInfo") or {}).get("hasNextPage") is False
+
+    @staticmethod
+    def _deduplicate_graphql_nodes_by_uuid(
+        nodes: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Deduplicate GraphQL nodes only when they share a non-empty UUID."""
+        unique_nodes: list[dict[str, Any]] = []
+        seen_uuids: set[str] = set()
+        for node in nodes:
+            uuid = str(node.get("uuid", ""))
+            if uuid and uuid in seen_uuids:
+                continue
+            unique_nodes.append(node)
+            if uuid:
+                seen_uuids.add(uuid)
+        return unique_nodes
+
     def _realtime_graphql_mappings(
         self,
         account: Account,
@@ -724,6 +745,8 @@ class Opower:
         account_identifiers = self._normalized_account_identifiers(account)
         mappings: list[tuple[str, str, str]] = []
         billing_accounts_connection = (result.get("data") or {}).get("billingAccountsConnection") or {}
+        if not self._graphql_connection_is_complete(billing_accounts_connection):
+            return []
 
         for edge in billing_accounts_connection.get("edges") or []:
             billing_account = edge.get("node") or {}
@@ -732,6 +755,8 @@ class Opower:
                 continue
 
             service_agreements_connection = billing_account.get("serviceAgreementsConnection") or {}
+            if not self._graphql_connection_is_complete(service_agreements_connection):
+                return []
             service_agreements = [
                 service_agreement_edge.get("node") or {}
                 for service_agreement_edge in service_agreements_connection.get("edges") or []
@@ -749,11 +774,14 @@ class Opower:
 
             for service_agreement in service_agreements:
                 service_points_connection = service_agreement.get("servicePointsConnection") or {}
+                if not self._graphql_connection_is_complete(service_points_connection):
+                    return []
                 service_points = [
                     service_point_edge.get("node") or {}
                     for service_point_edge in service_points_connection.get("edges") or []
                     if self._matches_meter_type(service_point_edge.get("node") or {}, account.meter_type)
                 ]
+                service_points = self._deduplicate_graphql_nodes_by_uuid(service_points)
                 matching_service_points = [
                     service_point
                     for service_point in service_points
@@ -777,7 +805,7 @@ class Opower:
                             service_point_uuid,
                         )
                     )
-        return mappings
+        return list(dict.fromkeys(mappings))
 
     async def _async_get_realtime_graphql_metadata(
         self,
@@ -796,16 +824,25 @@ class Opower:
         topology_query = """
         query WRTAMI_GetTopology($first: Int, $onlyActive: Boolean) {
           billingAccountsConnection(first: $first) {
+            pageInfo {
+              hasNextPage
+            }
             edges {
               node {
                 urn
-                serviceAgreementsConnection(first: 25, onlyActive: $onlyActive) {
+                serviceAgreementsConnection(first: $first, onlyActive: $onlyActive) {
+                  pageInfo {
+                    hasNextPage
+                  }
                   edges {
                     node {
                       uuid
                       utilityId
                       serviceType
-                      servicePointsConnection(first: 25) {
+                      servicePointsConnection(first: $first) {
+                        pageInfo {
+                          hasNextPage
+                        }
                         edges {
                           node {
                             uuid
@@ -892,7 +929,17 @@ class Opower:
                 str(interval_read["registerId"]) for interval_read in interval_reads if interval_read.get("registerId")
             )
         )
-        if len(register_ids) != 1:
+        net_usage_register_ids = [
+            register_id for register_id in register_ids if "NET_USAGE" in register_id.strip().upper().split(":")
+        ]
+        if len(net_usage_register_ids) == 1:
+            register_id = net_usage_register_ids[0]
+        elif len(register_ids) == 1 and not {
+            "DELIVERED",
+            "RECEIVED",
+        } & set(register_ids[0].strip().upper().split(":")):
+            register_id = register_ids[0]
+        else:
             self._realtime_graphql_metadata[cache_key] = None
             return None
 
@@ -900,7 +947,7 @@ class Opower:
             selected_account=selected_account,
             service_agreement_uuid=service_agreement_uuid,
             service_point_uuid=service_point_uuid,
-            register_id=register_ids[0],
+            register_id=register_id,
         )
         self._realtime_graphql_metadata[cache_key] = metadata
         return metadata
@@ -914,6 +961,8 @@ class Opower:
         if metadata is None:
             return None
 
+        # Observed on ConEd 2026-09-01: omitting timeInterval returns the latest
+        # ~24 hours; explicit requests are also capped at 24 hours (dasl-/pitools#15).
         usage_query = """
         query WRTAMI_GetRegisterUsage(
           $selectedAccount: ID
@@ -992,8 +1041,6 @@ class Opower:
                 )
             )
 
-        if not reads:
-            raise CannotConnect("GraphQL realtime API returned no usable reads")
         reads.sort(key=lambda read: read.start_time)
         return reads
 
@@ -1001,7 +1048,11 @@ class Opower:
         self,
         account: Account,
     ) -> list[UsageRead]:
-        """Get approximately the latest day of usage in 15-minute increments."""
+        """Get approximately the latest day of realtime usage.
+
+        Interval resolution varies by utility. The compatibility REST path
+        queries only the account's first meter.
+        """
         if self.utility.supports_realtime_usage():
             try:
                 graphql_reads = await self._async_get_graphql_realtime_usage_reads(account)
