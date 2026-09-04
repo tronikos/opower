@@ -1,6 +1,7 @@
 """Tests for Opower."""
 
 import asyncio
+import dataclasses
 import json
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -2334,6 +2335,181 @@ async def test_realtime_usage_reads_fall_back_when_graphql_mapping_is_ambiguous(
     assert second == first
     assert topology_calls == 1
     assert [request["method"] for request in session.requests] == ["GET", "GET", "GET"]
+
+
+@pytest.mark.asyncio
+async def test_realtime_discovery_is_not_disabled_by_an_empty_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty topology body is a hiccup, not an account without a stream.
+
+    Caching it would pin the utility to the legacy REST endpoint - the one that
+    now returns 424 - until the next restart.
+    """
+    meters_response = {"meters_ids": ["KWH:NET_USAGE"]}
+    rest_usage = {"reads": [{"startTime": "2026-09-01T10:00:00-04:00", "endTime": "2026-09-01T10:15:00-04:00", "value": 0.4}]}
+    session = _FakeSession({"/meters/": rest_usage, "/meters": meters_response})
+    opower = _coned(session)
+    account = _realtime_account()
+    calls = 0
+
+    async def fake_post_graphql(
+        query: str,
+        headers: dict[str, str],
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        nonlocal calls
+        del headers, variables
+        calls += 1
+        if calls == 1:
+            return {"data": {"billingAccountsConnection": None}}
+        if "WRTAMI_GetTopology" in query:
+            return _realtime_topology(
+                _realtime_billing_account(
+                    "billing-1",
+                    "service-agreement-1",
+                    service_agreement_utility_id=account.utility_account_id,
+                )
+            )
+        if "WRTAMI_GetRegisters" in query:
+            return _realtime_registers("KWH:NET_USAGE")
+        return _realtime_usage(
+            {
+                "timeInterval": "2026-09-01T14:00:00Z/2026-09-01T14:15:00Z",
+                "measuredAmount": {"value": 0.25},
+            }
+        )
+
+    monkeypatch.setattr(opower, "_async_post_graphql", fake_post_graphql)
+
+    first = await opower.async_get_realtime_usage_reads(account)
+    second = await opower.async_get_realtime_usage_reads(account)
+
+    assert [read.consumption for read in first] == [0.4], "empty body falls back to REST"
+    assert [read.consumption for read in second] == [0.25], "and must retry GraphQL next time"
+
+
+@pytest.mark.asyncio
+async def test_realtime_usage_reads_rediscover_after_the_mapping_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cached mapping that stops resolving is dropped, not retried forever."""
+    meters_response = {"meters_ids": ["KWH:NET_USAGE"]}
+    rest_usage = {"reads": [{"startTime": "2026-09-01T10:00:00-04:00", "endTime": "2026-09-01T10:15:00-04:00", "value": 0.4}]}
+    session = _FakeSession({"/meters/": rest_usage, "/meters": meters_response})
+    opower = _coned(session)
+    account = _realtime_account()
+    topology_calls = 0
+    usage_calls = 0
+
+    async def fake_post_graphql(
+        query: str,
+        headers: dict[str, str],
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        nonlocal topology_calls, usage_calls
+        del headers, variables
+        if "WRTAMI_GetTopology" in query:
+            topology_calls += 1
+            return _realtime_topology(
+                _realtime_billing_account(
+                    "billing-1",
+                    "service-agreement-1",
+                    service_agreement_utility_id=account.utility_account_id,
+                )
+            )
+        if "WRTAMI_GetRegisters" in query:
+            return _realtime_registers("KWH:NET_USAGE")
+        usage_calls += 1
+        if usage_calls == 1:
+            # The register the mapping was built on has gone away.
+            return {"data": {"billingAccountByAuthContext": {"serviceAgreementsConnection": {"edges": []}}}}
+        return _realtime_usage(
+            {
+                "timeInterval": "2026-09-01T14:00:00Z/2026-09-01T14:15:00Z",
+                "measuredAmount": {"value": 0.25},
+            }
+        )
+
+    monkeypatch.setattr(opower, "_async_post_graphql", fake_post_graphql)
+
+    first = await opower.async_get_realtime_usage_reads(account)
+    second = await opower.async_get_realtime_usage_reads(account)
+
+    assert [read.consumption for read in first] == [0.4], "a changed mapping falls back to REST"
+    assert [read.consumption for read in second] == [0.25]
+    assert topology_calls == 2, "the stale mapping must be rediscovered, not reused"
+
+
+@pytest.mark.asyncio
+async def test_realtime_usage_reads_skip_graphql_for_non_electric_meters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both GraphQL queries ask for KWH, so a gas meter must not pay for them."""
+    meters_response = {"meters_ids": ["THERM:NET_USAGE"]}
+    rest_usage = {"reads": [{"startTime": "2026-09-01T10:00:00-04:00", "endTime": "2026-09-01T10:15:00-04:00", "value": 0.4}]}
+    session = _FakeSession({"/meters/": rest_usage, "/meters": meters_response})
+    opower = _coned(session)
+    gas_account = dataclasses.replace(_realtime_account(), meter_type=MeterType.GAS)
+    calls = 0
+
+    async def fake_post_graphql(
+        query: str,
+        headers: dict[str, str],
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        nonlocal calls
+        del query, headers, variables
+        calls += 1
+        return {}
+
+    monkeypatch.setattr(opower, "_async_post_graphql", fake_post_graphql)
+
+    result = await opower.async_get_realtime_usage_reads(gas_account)
+
+    assert [read.consumption for read in result] == [0.4]
+    assert calls == 0, "no GraphQL round trip for a meter the queries cannot serve"
+
+
+@pytest.mark.asyncio
+async def test_realtime_usage_reads_fall_back_on_an_unparsable_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A read that will not parse must fall back, not raise at the caller."""
+    meters_response = {"meters_ids": ["KWH:NET_USAGE"]}
+    rest_usage = {"reads": [{"startTime": "2026-09-01T10:00:00-04:00", "endTime": "2026-09-01T10:15:00-04:00", "value": 0.4}]}
+    session = _FakeSession({"/meters/": rest_usage, "/meters": meters_response})
+    opower = _coned(session)
+    account = _realtime_account()
+
+    async def fake_post_graphql(
+        query: str,
+        headers: dict[str, str],
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        del headers, variables
+        if "WRTAMI_GetTopology" in query:
+            return _realtime_topology(
+                _realtime_billing_account(
+                    "billing-1",
+                    "service-agreement-1",
+                    service_agreement_utility_id=account.utility_account_id,
+                )
+            )
+        if "WRTAMI_GetRegisters" in query:
+            return _realtime_registers("KWH:NET_USAGE")
+        return _realtime_usage(
+            {
+                "timeInterval": "not-a-timestamp/also-not-a-timestamp",
+                "measuredAmount": {"value": 0.25},
+            }
+        )
+
+    monkeypatch.setattr(opower, "_async_post_graphql", fake_post_graphql)
+
+    result = await opower.async_get_realtime_usage_reads(account)
+
+    assert [read.consumption for read in result] == [0.4]
 
 
 @pytest.mark.asyncio

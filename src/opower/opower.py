@@ -1122,7 +1122,7 @@ class Opower:
         unique_nodes: list[dict[str, Any]] = []
         seen_uuids: set[str] = set()
         for node in nodes:
-            uuid = str(node.get("uuid", ""))
+            uuid = str(node.get("uuid") or "")
             if uuid and uuid in seen_uuids:
                 continue
             unique_nodes.append(node)
@@ -1144,7 +1144,7 @@ class Opower:
 
         for edge in billing_accounts_connection.get("edges") or []:
             billing_account = edge.get("node") or {}
-            selected_account = str(billing_account.get("urn", ""))
+            selected_account = str(billing_account.get("urn") or "")
             if not selected_account:
                 continue
 
@@ -1189,8 +1189,8 @@ class Opower:
                     service_points = matching_service_points
                 if len(service_points) != 1:
                     continue
-                service_agreement_uuid = str(service_agreement.get("uuid", ""))
-                service_point_uuid = str(service_points[0].get("uuid", ""))
+                service_agreement_uuid = str(service_agreement.get("uuid") or "")
+                service_point_uuid = str(service_points[0].get("uuid") or "")
                 if service_agreement_uuid and service_point_uuid:
                     mappings.append(
                         (
@@ -1201,17 +1201,32 @@ class Opower:
                     )
         return list(dict.fromkeys(mappings))
 
-    async def _async_get_realtime_graphql_metadata(
-        self,
-        account: Account,
-    ) -> _RealtimeGraphQLMetadata | None:
-        """Discover and cache an unambiguous GraphQL realtime register mapping."""
-        cache_key = (
+    @staticmethod
+    def _realtime_graphql_cache_key(account: Account) -> tuple[str, str, str, str]:
+        """Return the key the discovered realtime mapping is cached under."""
+        return (
             account.customer.uuid,
             account.meter_type.value,
             account.uuid,
             account.utility_account_id,
         )
+
+    def _forget_realtime_graphql_metadata(self, account: Account) -> None:
+        """Drop the cached mapping so the next call rediscovers it.
+
+        The mapping is discovered once and reused. When the usage query then finds
+        it no longer resolves - a replaced meter or service agreement - keeping it
+        would repeat the same doomed request on every later call for the life of
+        the session, while rediscovery would have fixed it.
+        """
+        self._realtime_graphql_metadata.pop(self._realtime_graphql_cache_key(account), None)
+
+    async def _async_get_realtime_graphql_metadata(
+        self,
+        account: Account,
+    ) -> _RealtimeGraphQLMetadata | None:
+        """Discover and cache an unambiguous GraphQL realtime register mapping."""
+        cache_key = self._realtime_graphql_cache_key(account)
         if cache_key in self._realtime_graphql_metadata:
             return self._realtime_graphql_metadata[cache_key]
 
@@ -1261,7 +1276,13 @@ class Opower:
         mappings = self._realtime_graphql_mappings(account, result)
 
         if len(mappings) != 1:
-            self._realtime_graphql_metadata[cache_key] = None
+            # Only remember "no mapping" when the response actually described the
+            # customer. An empty body is more likely a server hiccup than an
+            # account without a realtime stream, and caching it would pin this
+            # utility to the legacy REST endpoint - the one that now returns 424 -
+            # until the next restart.
+            if ((result.get("data") or {}).get("billingAccountsConnection") or {}).get("edges"):
+                self._realtime_graphql_metadata[cache_key] = None
             return None
 
         selected_account, service_agreement_uuid, service_point_uuid = mappings[0]
@@ -1357,6 +1378,13 @@ class Opower:
 
         # Observed on ConEd 2026-09-01: omitting timeInterval returns the latest
         # ~24 hours; explicit requests are also capped at 24 hours (dasl-/pitools#15).
+        #
+        # intervalReads on purpose, even though the historical read path deliberately
+        # avoids it (see _REGISTER_READS_QUERY). Its two drawbacks - the 24 hour cap
+        # and null values around DST transitions - are what rule it out for a long
+        # backfill, and neither bites a rolling ~24 hour realtime window. It is also
+        # the only field taking onlyUnverifiedStreams, which is what makes these
+        # reads ~50 minutes fresh rather than hours. Do not "fix" this to readStreams.
         usage_query = """
         query WRTAMI_GetRegisterUsage(
           $selectedAccount: ID
@@ -1409,31 +1437,40 @@ class Opower:
         service_agreements_connection = billing_account.get("serviceAgreementsConnection") or {}
         service_agreement_edges = service_agreements_connection.get("edges") or []
         if len(service_agreement_edges) != 1:
+            self._forget_realtime_graphql_metadata(account)
             raise CannotConnect("GraphQL realtime service agreement mapping changed")
         service_agreement = service_agreement_edges[0].get("node") or {}
         service_points_connection = service_agreement.get("servicePointsConnection") or {}
         service_point_edges = service_points_connection.get("edges") or []
         if len(service_point_edges) != 1:
+            self._forget_realtime_graphql_metadata(account)
             raise CannotConnect("GraphQL realtime service point mapping changed")
         service_point = service_point_edges[0].get("node") or {}
         streams = service_point.get("intervalReads") or []
         if len(streams) != 1:
+            self._forget_realtime_graphql_metadata(account)
             raise CannotConnect("GraphQL realtime register mapping changed")
         for read in streams[0].get("reads") or []:
             measured_amount = read.get("measuredAmount")
             if not measured_amount or measured_amount.get("value") is None:
                 continue
-            time_interval = str(read.get("timeInterval", ""))
+            time_interval = str(read.get("timeInterval") or "")
             if "/" not in time_interval:
                 raise CannotConnect("GraphQL realtime read has an invalid time interval")
             start_time, end_time = time_interval.split("/", 1)
-            reads.append(
-                UsageRead(
-                    start_time=_parse_read_time(start_time, tz),
-                    end_time=_parse_read_time(end_time, tz),
-                    consumption=float(measured_amount["value"]),
+            try:
+                reads.append(
+                    UsageRead(
+                        start_time=_parse_read_time(start_time, tz),
+                        end_time=_parse_read_time(end_time, tz),
+                        consumption=float(measured_amount["value"]),
+                    )
                 )
-            )
+            except (TypeError, ValueError) as err:
+                # Anything unparsable is a changed contract, not a bad read. Raise
+                # so the caller falls back to REST rather than returning a series
+                # with holes in it.
+                raise CannotConnect(f"GraphQL realtime read could not be parsed: {err}") from err
 
         reads.sort(key=lambda read: read.start_time)
         return reads
@@ -1447,7 +1484,10 @@ class Opower:
         Interval resolution varies by utility. The compatibility REST path
         queries only the account's first meter.
         """
-        if self.utility.supports_realtime_usage():
+        # Both GraphQL queries ask for KWH registers, so a gas or water account
+        # would spend two round trips to discover nothing; the legacy REST path
+        # serves those meters unchanged.
+        if self.utility.supports_realtime_usage() and account.meter_type is MeterType.ELEC:
             try:
                 graphql_reads = await self._async_get_graphql_realtime_usage_reads(account)
             except (ApiException, CannotConnect) as err:
