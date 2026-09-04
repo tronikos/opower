@@ -237,6 +237,117 @@ async def test_cost_reads_parse_read_components(
 
 
 @pytest.mark.asyncio
+async def test_cost_reads_parse_tiered_read_components(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Parse readComponents on a tiered rate, and treat a null readComponents as empty."""
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(
+            session,
+            "Pacific Gas and Electric Company (PG&E)",
+            username="test",
+            password="test",  # noqa: S106
+        )
+
+        account = Account(
+            customer=Mock(),
+            uuid="test-uuid",
+            utility_account_id="test-id",
+            id="test-id",
+            meter_type=MeterType.GAS,
+            read_resolution=ReadResolution.DAY,
+        )
+
+        async def fake_get_dated_data(*args: object, **kwargs: object) -> list[dict[str, object]]:
+            return [
+                # Real (redacted) PG&E gas reads on a tiered rate: tierNumber is an
+                # integer and dayPart is null, the mirror image of a time-of-use rate.
+                {
+                    "startTime": "2026-07-23T00:00:00.000-07:00",
+                    "endTime": "2026-07-24T00:00:00.000-07:00",
+                    "value": 1.055975,
+                    "readType": "ACTUAL",
+                    "providedCost": 2.5,
+                    "readComponents": [
+                        {
+                            "tierType": "ORDINAL",
+                            "tierNumber": 1,
+                            "season": "SUMMER",
+                            "dayPart": None,
+                            "cost": 2.5,
+                            "value": 1.055975,
+                        }
+                    ],
+                    "rebateAmount": 0,
+                    "milesDriven": 0,
+                    "isPeakPeriod": False,
+                },
+                # A day that starts a tier accounting segment carries both tiers.
+                {
+                    "startTime": "2026-06-30T00:00:00.000-07:00",
+                    "endTime": "2026-07-01T00:00:00.000-07:00",
+                    "value": 1.062021,
+                    "readType": "ACTUAL",
+                    "providedCost": 2.7,
+                    "readComponents": [
+                        {
+                            "tierType": "ORDINAL",
+                            "tierNumber": 2,
+                            "season": "SUMMER",
+                            "dayPart": None,
+                            "cost": 1.1,
+                            "value": 0.388,
+                        },
+                        {
+                            "tierType": "ORDINAL",
+                            "tierNumber": 1,
+                            "season": "SUMMER",
+                            "dayPart": None,
+                            "cost": 1.6,
+                            "value": 0.674021,
+                        },
+                    ],
+                    "rebateAmount": 0,
+                    "milesDriven": 0,
+                    "isPeakPeriod": False,
+                },
+                # Bill-level reads return readComponents as null rather than a list.
+                {
+                    "startTime": "2026-06-13T00:00:00.000-07:00",
+                    "endTime": "2026-07-15T00:00:00.000-07:00",
+                    "value": 10.0,
+                    "readType": "ACTUAL",
+                    "providedCost": 25.51,
+                    "readComponents": None,
+                    "rebateAmount": None,
+                    "milesDriven": None,
+                    "isPeakPeriod": None,
+                },
+            ]
+
+        monkeypatch.setattr(opower, "_async_get_dated_data", fake_get_dated_data)
+        monkeypatch.setattr(opower, "_async_get_register_streams", _no_register_streams)
+
+        result = await opower.async_get_cost_reads(account, AggregateType.DAY, None, None)
+        assert len(result) == 3
+
+        components = result[0].read_components
+        assert len(components) == 1
+        assert components[0].tier_type == "ORDINAL"
+        assert components[0].tier_number == 1
+        assert components[0].day_part is None
+        assert components[0].consumption == 1.055975
+        assert components[0].cost == 2.5
+
+        components = result[1].read_components
+        assert [c.tier_number for c in components] == [2, 1]
+        assert sum(c.consumption for c in components) == pytest.approx(result[1].consumption)
+        assert sum(c.cost for c in components) == pytest.approx(result[1].provided_cost)
+
+        assert result[2].read_components == []
+
+
+@pytest.mark.asyncio
 async def test_five_minute_read_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
