@@ -8,6 +8,7 @@ This library is used by the [Opower integration in Home Assistant](https://www.h
 
 ## Supported Utilities
 
+- AES Indiana
 - American Electric Power (AEP) subsidiaries
   - AEP Ohio
   - AEP Texas
