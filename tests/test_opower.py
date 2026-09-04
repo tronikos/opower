@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from unittest.mock import Mock
 from zoneinfo import ZoneInfo
@@ -53,6 +53,11 @@ async def test_invalid_auth(utility: type["UtilityBase"]) -> None:
             await opower.async_login()
 
 
+async def _no_register_streams(*args: object, **kwargs: object) -> None:
+    """Stand in for the registers probe in tests whose fixtures are REST-only."""
+    return
+
+
 @pytest.mark.asyncio
 async def test_cost_reads_falls_back_to_usage_on_api_error(
     monkeypatch: pytest.MonkeyPatch,
@@ -96,6 +101,8 @@ async def test_cost_reads_falls_back_to_usage_on_api_error(
             ]
 
         monkeypatch.setattr(opower, "_async_get_dated_data", fake_get_dated_data)
+        # Daily reads are enriched from GraphQL; these fixtures are REST-only.
+        monkeypatch.setattr(opower, "_async_get_register_streams", _no_register_streams)
 
         result = await opower.async_get_cost_reads(account, AggregateType.DAY, None, None)
         # Should have tried cost first, then fallen back to usage-only
@@ -131,6 +138,8 @@ async def test_cost_reads_bill_does_not_fall_back(
             raise ApiException(message="HTTP Error: 500", url="http://example.com")
 
         monkeypatch.setattr(opower, "_async_get_dated_data", fake_get_dated_data)
+        # Daily reads are enriched from GraphQL; these fixtures are REST-only.
+        monkeypatch.setattr(opower, "_async_get_register_streams", _no_register_streams)
 
         with pytest.raises(ApiException):
             await opower.async_get_cost_reads(account, AggregateType.BILL, None, None)
@@ -205,6 +214,8 @@ async def test_cost_reads_parse_read_components(
             ]
 
         monkeypatch.setattr(opower, "_async_get_dated_data", fake_get_dated_data)
+        # Daily reads are enriched from GraphQL; these fixtures are REST-only.
+        monkeypatch.setattr(opower, "_async_get_register_streams", _no_register_streams)
 
         result = await opower.async_get_cost_reads(account, AggregateType.DAY, None, None)
         assert len(result) == 2
@@ -478,6 +489,8 @@ async def test_naive_read_times_localized_to_utility_timezone(
             ]
 
         monkeypatch.setattr(opower, "_async_get_dated_data", fake_get_dated_data)
+        # Daily reads are enriched from GraphQL; these fixtures are REST-only.
+        monkeypatch.setattr(opower, "_async_get_register_streams", _no_register_streams)
 
         result = await opower.async_get_cost_reads(account, AggregateType.DAY, None, None)
 
@@ -541,7 +554,12 @@ class _FakeSession:
         self.requests.append({"method": method, "url": url, **kwargs})
         for substring, route in self._routes.items():
             if substring in url:
-                result = route(kwargs.get("params") or {}) if callable(route) else route
+                if getattr(route, "wants_request", False):
+                    result = route(kwargs)
+                elif callable(route):
+                    result = route(kwargs.get("params") or {})
+                else:
+                    result = route
                 return result if isinstance(result, _FakeResponse) else _FakeResponse(result)
         raise AssertionError(f"Unexpected request to {url}")
 
@@ -926,7 +944,13 @@ async def test_cost_reads_parse_tiered_and_time_of_use_components() -> None:
         "seriesComponents": None,
         "ratePlans": None,
     }
-    session = _FakeSession({"cost/utilityAccount": cost_response})
+    session = _FakeSession(
+        {
+            # REST-only fixture: no registers to enrich the daily reads with.
+            "dsm-graphql-v1": _NO_REGISTERS_RESPONSE,
+            "cost/utilityAccount": cost_response,
+        }
+    )
     account = Account(
         customer=Customer(uuid=_CUSTOMER_UUID),
         uuid=_ELEC_ACCOUNT_UUID,
@@ -1019,7 +1043,14 @@ async def test_cost_reads_fall_back_to_usage_when_cost_response_is_empty() -> No
             }
         ],
     }
-    session = _FakeSession({"cost/utilityAccount": cost_response, "/reads": usage_response})
+    session = _FakeSession(
+        {
+            # REST-only fixture: no registers to enrich the daily reads with.
+            "dsm-graphql-v1": _NO_REGISTERS_RESPONSE,
+            "cost/utilityAccount": cost_response,
+            "/reads": usage_response,
+        }
+    )
     account = Account(
         customer=Customer(uuid=_CUSTOMER_UUID),
         uuid=_ELEC_ACCOUNT_UUID,
@@ -1038,6 +1069,8 @@ async def test_cost_reads_fall_back_to_usage_when_cost_response_is_empty() -> No
     assert [r["url"].rsplit("/ei/edge/apis/", maxsplit=1)[1] for r in session.requests] == [
         f"DataBrowser-v1/cws/cost/utilityAccount/{_ELEC_ACCOUNT_UUID}",
         f"DataBrowser-v1/cws/utilities/pge/utilityAccounts/{_ELEC_ACCOUNT_UUID}/reads",
+        # Then the registers probe, which this meter answers with a net register only.
+        "dsm-graphql-v1/cws/graphql",
     ]
     # The usage endpoint takes plain dates.
     assert session.requests[1]["params"] == {
@@ -1068,7 +1101,7 @@ async def test_usage_reads_parse_reads() -> None:
             },
         ],
     }
-    session = _FakeSession({"/reads": usage_response})
+    session = _FakeSession({"/reads": usage_response, "dsm-graphql-v1": _NO_REGISTERS_RESPONSE})
     account = Account(
         customer=Customer(uuid=_CUSTOMER_UUID),
         uuid=_ELEC_ACCOUNT_UUID,
@@ -1086,6 +1119,736 @@ async def test_usage_reads_parse_reads() -> None:
     assert [read.consumption for read in result] == [0.58, 0.4942]
     assert result[0].start_time == datetime(2026, 7, 10, tzinfo=tz)
     assert result[0].end_time == datetime(2026, 7, 10, 1, tzinfo=tz)
+
+
+_ELEC_UTILITY_ACCOUNT_ID = "1000000003"
+_SERVICE_POINT_UUID = "44444444-4444-11e5-bf2b-000000000004"
+
+# Shape of a dsm-graphql-v1 registers response for a meter with no export register.
+_NO_REGISTERS_RESPONSE = {
+    "data": {
+        "billingAccountByAuthContext": {
+            "serviceAgreementsConnection": {
+                "edges": [
+                    {
+                        "node": {
+                            "utilityId": _ELEC_UTILITY_ACCOUNT_ID,
+                            "serviceType": "ELECTRICITY",
+                            "servicePointsConnection": {
+                                "edges": [
+                                    {
+                                        "node": {
+                                            "uuid": _SERVICE_POINT_UUID,
+                                            "registers": [
+                                                {
+                                                    "serviceQuantityIdentifier": "NET_USAGE",
+                                                    "unitOfMeasure": "KWH",
+                                                    "availableReadsTimeInterval": (
+                                                        "2024-04-15T00:00:00-07:00/2026-09-01T00:00:00-07:00"
+                                                    ),
+                                                }
+                                            ],
+                                        }
+                                    }
+                                ]
+                            },
+                        }
+                    }
+                ]
+            }
+        }
+    }
+}
+
+
+def _registers_response(utility_id: str = _ELEC_UTILITY_ACCOUNT_ID) -> dict[str, Any]:
+    """Return a registers response for a meter that does publish import/export."""
+    return {
+        "data": {
+            "billingAccountByAuthContext": {
+                "serviceAgreementsConnection": {
+                    "edges": [
+                        {
+                            "node": {
+                                "utilityId": utility_id,
+                                "serviceType": "ELECTRICITY",
+                                "servicePointsConnection": {
+                                    "edges": [
+                                        {
+                                            "node": {
+                                                "uuid": _SERVICE_POINT_UUID,
+                                                "registers": [
+                                                    {
+                                                        "serviceQuantityIdentifier": sqi,
+                                                        "unitOfMeasure": "KWH",
+                                                        "availableReadsTimeInterval": (
+                                                            "2024-04-15T00:00:00-07:00/2027-01-01T00:00:00-08:00"
+                                                        ),
+                                                    }
+                                                    for sqi in ("DELIVERED", "RECEIVED", "NET_USAGE")
+                                                ],
+                                            }
+                                        }
+                                    ]
+                                },
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+
+def _register_reads_response(
+    reads: dict[tuple[str, str], tuple[float | None, float | None]],
+) -> dict[str, Any]:
+    """Build a readStreams response from {(start_iso, end_iso): (imported, exported)}.
+
+    Each direction is a list of streams, one per register behind it, which is how
+    the API returns it even when there is only one.
+    """
+
+    def stream(index: int) -> list[dict[str, Any]]:
+        return [
+            {
+                "reads": [
+                    {
+                        "timeInterval": f"{start}/{end}",
+                        "measuredAmount": None if values[index] is None else {"value": values[index]},
+                    }
+                    for (start, end), values in reads.items()
+                ]
+            }
+        ]
+
+    return {
+        "data": {
+            "billingAccountByAuthContext": {
+                "serviceAgreementsConnection": {
+                    "edges": [
+                        {
+                            "node": {
+                                "servicePointsConnection": {
+                                    "edges": [
+                                        {
+                                            "node": {
+                                                "readStreams": {
+                                                    "energyDelivered": stream(0),
+                                                    "energyReceived": stream(1),
+                                                }
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+
+def _elec_account() -> Account:
+    """Return the electric account used by the import/export tests."""
+    return Account(
+        customer=Customer(uuid=_CUSTOMER_UUID),
+        uuid=_ELEC_ACCOUNT_UUID,
+        utility_account_id=_ELEC_UTILITY_ACCOUNT_ID,
+        id=_ELEC_UTILITY_ACCOUNT_ID,
+        meter_type=MeterType.ELEC,
+        read_resolution=ReadResolution.QUARTER_HOUR,
+    )
+
+
+class _GraphQLRouter:
+    """Route the two GraphQL queries by their content rather than by call order.
+
+    The registers probe and the interval reads POST to the same URL, and the probe
+    is repeated on every call, so ordering alone cannot tell them apart.
+    """
+
+    wants_request = True
+
+    def __init__(self, registers: Any, reads: Any = None) -> None:
+        """Serve `registers` for the probe and `reads` for interval read windows."""
+        self.registers = registers
+        self.reads = reads
+        self.register_queries = 0
+        self.read_queries = 0
+        self.window_counts: list[int] = []
+
+    def __call__(self, request: dict[str, Any]) -> Any:
+        body = request.get("json") or {}
+        query = body.get("query", "")
+        if "registers" in query:
+            self.register_queries += 1
+            return self.registers
+        self.read_queries += 1
+        # Counts the readStreams fields in the document, not the variables, so a
+        # reintroduced alias batch trips the guard in
+        # test_register_windows_are_fetched_one_per_request.
+        self.window_counts.append(query.count("readStreams("))
+        if callable(self.reads):
+            return self.reads(body.get("variables") or {})
+        return self.reads
+
+
+@pytest.mark.asyncio
+async def test_cost_reads_carry_import_export_split() -> None:
+    """Interval reads get the gross import/export from the per-register streams."""
+    cost = {
+        "reads": [
+            {
+                "startTime": "2026-08-31T12:00:00.000-07:00",
+                "endTime": "2026-08-31T13:00:00.000-07:00",
+                "value": -5.3404,
+                "providedCost": -1.61,
+            },
+            {
+                "startTime": "2026-08-31T13:00:00.000-07:00",
+                "endTime": "2026-08-31T14:00:00.000-07:00",
+                "value": -3.9012,
+                "providedCost": -1.18,
+            },
+        ]
+    }
+    reads = _register_reads_response(
+        {
+            ("2026-08-31T19:00:00Z", "2026-08-31T20:00:00Z"): (0.0, 5.3404),
+            ("2026-08-31T20:00:00Z", "2026-08-31T21:00:00Z"): (0.2462, 4.1474),
+        }
+    )
+    session = _FakeSession(
+        {
+            "cost/utilityAccount": cost,
+            "dsm-graphql-v1": _GraphQLRouter(_registers_response(), reads),
+        }
+    )
+
+    result = await _pge(session).async_get_cost_reads(
+        _elec_account(), AggregateType.HOUR, datetime(2026, 8, 31), datetime(2026, 8, 31)
+    )
+
+    assert [(r.imported, r.exported) for r in result] == [(0.0, 5.3404), (0.2462, 4.1474)]
+    # The net is untouched; the split is additional information, not a replacement.
+    assert [r.consumption for r in result] == [-5.3404, -3.9012]
+    assert [r.provided_cost for r in result] == [-1.61, -1.18]
+
+
+@pytest.mark.asyncio
+async def test_import_export_left_unset_without_export_register() -> None:
+    """A meter without an export register is fetched exactly as before."""
+    cost = {
+        "reads": [
+            {
+                "startTime": "2026-08-31T12:00:00.000-07:00",
+                "endTime": "2026-08-31T13:00:00.000-07:00",
+                "value": 1.5,
+                "providedCost": 0.5,
+            }
+        ]
+    }
+    session = _FakeSession({"cost/utilityAccount": cost, "dsm-graphql-v1": _NO_REGISTERS_RESPONSE})
+    opower = _pge(session)
+
+    result = await opower.async_get_cost_reads(
+        _elec_account(), AggregateType.HOUR, datetime(2026, 8, 31), datetime(2026, 8, 31)
+    )
+
+    assert [(r.imported, r.exported) for r in result] == [(None, None)]
+    graphql_requests = [r for r in session.requests if "dsm-graphql-v1" in r["url"]]
+    assert len(graphql_requests) == 1, "should probe once and not ask for reads"
+
+    # The probe result is cached, so a second fetch makes no further GraphQL calls.
+    await opower.async_get_cost_reads(_elec_account(), AggregateType.HOUR, datetime(2026, 8, 31), datetime(2026, 8, 31))
+    assert len([r for r in session.requests if "dsm-graphql-v1" in r["url"]]) == 1
+
+
+@pytest.mark.asyncio
+async def test_import_export_skipped_for_bill_aggregation() -> None:
+    """The read streams have no bill resolution, so a bill aggregate must not ask."""
+    cost = {
+        "reads": [
+            {
+                "startTime": "2026-08-01T00:00:00.000-07:00",
+                "endTime": "2026-09-01T00:00:00.000-07:00",
+                "value": -673.272,
+                "providedCost": -198.14,
+            }
+        ]
+    }
+    session = _FakeSession({"cost/utilityAccount": cost})
+
+    await _pge(session).async_get_cost_reads(_elec_account(), AggregateType.BILL, datetime(2026, 8, 1), datetime(2026, 8, 31))
+
+    assert not [r for r in session.requests if "dsm-graphql-v1" in r["url"]]
+
+
+@pytest.mark.asyncio
+async def test_daily_reads_carry_import_export_split() -> None:
+    """Daily reads are enriched too, and it is the resolution that needs it most.
+
+    A day on a solar site is usually net-export, so splitting the daily net on its
+    sign reports almost no grid import at all.
+    """
+    cost = {
+        "reads": [
+            {
+                "startTime": "2026-08-05T00:00:00.000-07:00",
+                "endTime": "2026-08-06T00:00:00.000-07:00",
+                "value": -38.0691,
+                "providedCost": -11.42,
+            }
+        ]
+    }
+    reads = _register_reads_response({("2026-08-05T07:00:00Z", "2026-08-06T07:00:00Z"): (5.6558, 43.7249)})
+    router = _GraphQLRouter(_registers_response(), reads)
+    session = _FakeSession({"cost/utilityAccount": cost, "dsm-graphql-v1": router})
+
+    result = await _pge(session).async_get_cost_reads(
+        _elec_account(), AggregateType.DAY, datetime(2026, 8, 5), datetime(2026, 8, 5)
+    )
+
+    assert [(r.imported, r.exported) for r in result] == [(5.6558, 43.7249)]
+    assert router.read_queries == 1
+    variables = [r["json"]["variables"] for r in session.requests if "dsm-graphql-v1" in r["url"]]
+    assert variables[-1]["resolution"] == "DAY"
+
+
+@pytest.mark.asyncio
+async def test_import_export_ignores_graphql_errors() -> None:
+    """A GraphQL failure must not lose the cost reads that already succeeded."""
+    cost = {
+        "reads": [
+            {
+                "startTime": "2026-08-31T12:00:00.000-07:00",
+                "endTime": "2026-08-31T13:00:00.000-07:00",
+                "value": -5.3404,
+                "providedCost": -1.61,
+            }
+        ]
+    }
+    session = _FakeSession(
+        {
+            "cost/utilityAccount": cost,
+            "dsm-graphql-v1": {"errors": [{"message": "Not authorized"}]},
+        }
+    )
+
+    result = await _pge(session).async_get_cost_reads(
+        _elec_account(), AggregateType.HOUR, datetime(2026, 8, 31), datetime(2026, 8, 31)
+    )
+
+    assert len(result) == 1
+    assert (result[0].imported, result[0].exported) == (None, None)
+    assert result[0].consumption == -5.3404
+
+
+@pytest.mark.asyncio
+async def test_import_export_survives_an_unexpected_response_shape() -> None:
+    """A response shaped differently must not fail the reads it was enriching.
+
+    The streams have only been seen on one utility. If another serves, say, a list
+    where a dict is expected, the parser raises - and the cost reads it was
+    decorating are already complete and correct.
+    """
+    cost = {
+        "reads": [
+            {
+                "startTime": "2026-08-31T12:00:00.000-07:00",
+                "endTime": "2026-08-31T13:00:00.000-07:00",
+                "value": -5.3404,
+                "providedCost": -1.61,
+            }
+        ]
+    }
+    malformed: dict[str, Any] = {
+        "data": {
+            "billingAccountByAuthContext": {
+                "serviceAgreementsConnection": {
+                    "edges": [
+                        {
+                            "node": {
+                                "servicePointsConnection": {"edges": [{"node": {"readStreams": [{"energyDelivered": []}]}}]}
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+    }
+    session = _FakeSession(
+        {
+            "cost/utilityAccount": cost,
+            "dsm-graphql-v1": _GraphQLRouter(_registers_response(), malformed),
+        }
+    )
+
+    result = await _pge(session).async_get_cost_reads(
+        _elec_account(), AggregateType.HOUR, datetime(2026, 8, 31), datetime(2026, 8, 31)
+    )
+
+    assert [(r.consumption, r.imported, r.exported) for r in result] == [(-5.3404, None, None)]
+
+
+@pytest.mark.asyncio
+async def test_import_export_skips_intervals_the_utility_left_null() -> None:
+    """An interval the utility has not published keeps only the net."""
+    cost = {
+        "reads": [
+            {
+                "startTime": "2026-03-08T00:00:00.000-08:00",
+                "endTime": "2026-03-08T01:00:00.000-08:00",
+                "value": 0.3807,
+                "providedCost": 0.12,
+            },
+            {
+                "startTime": "2026-03-08T03:00:00.000-07:00",
+                "endTime": "2026-03-08T04:00:00.000-07:00",
+                "value": 0.3052,
+                "providedCost": 0.1,
+            },
+            {
+                "startTime": "2026-03-08T04:00:00.000-07:00",
+                "endTime": "2026-03-08T05:00:00.000-07:00",
+                "value": 0.5,
+                "providedCost": 0.16,
+            },
+        ]
+    }
+    reads = _register_reads_response(
+        {
+            ("2026-03-08T08:00:00Z", "2026-03-08T09:00:00Z"): (None, None),
+            ("2026-03-08T10:00:00Z", "2026-03-08T11:00:00Z"): (None, None),
+            ("2026-03-08T11:00:00Z", "2026-03-08T12:00:00Z"): (0.5, 0.0),
+        }
+    )
+    session = _FakeSession(
+        {
+            "cost/utilityAccount": cost,
+            "dsm-graphql-v1": _GraphQLRouter(_registers_response(), reads),
+        }
+    )
+
+    result = await _pge(session).async_get_cost_reads(
+        _elec_account(), AggregateType.HOUR, datetime(2026, 3, 8), datetime(2026, 3, 8)
+    )
+
+    assert [(r.imported, r.exported) for r in result] == [(None, None), (None, None), (0.5, 0.0)]
+
+
+@pytest.mark.asyncio
+async def test_import_export_keeps_both_halves_of_a_dst_fall_back_hour() -> None:
+    """The repeated local hour on a fall-back day must not collapse into one read.
+
+    The two 01:00 reads are equal as local datetimes under PEP 495, so anything
+    keyed on the local wall clock would merge them.
+    """
+    cost = {
+        "reads": [
+            {
+                "startTime": "2025-11-02T01:00:00.000-07:00",
+                "endTime": "2025-11-02T01:00:00.000-08:00",
+                "value": 0.5055,
+                "providedCost": 0.16,
+            },
+            {
+                "startTime": "2025-11-02T01:00:00.000-08:00",
+                "endTime": "2025-11-02T02:00:00.000-08:00",
+                "value": 0.3929,
+                "providedCost": 0.12,
+            },
+        ]
+    }
+    reads = _register_reads_response(
+        {
+            ("2025-11-02T08:00:00Z", "2025-11-02T09:00:00Z"): (0.5055, 0.0),
+            ("2025-11-02T09:00:00Z", "2025-11-02T10:00:00Z"): (0.3929, 0.0),
+        }
+    )
+    session = _FakeSession(
+        {
+            "cost/utilityAccount": cost,
+            "dsm-graphql-v1": _GraphQLRouter(_registers_response(), reads),
+        }
+    )
+
+    result = await _pge(session).async_get_cost_reads(
+        _elec_account(), AggregateType.HOUR, datetime(2025, 11, 2), datetime(2025, 11, 2)
+    )
+
+    assert len(result) == 2
+    assert [r.imported for r in result] == [0.5055, 0.3929]
+
+
+def _hourly_cost_reads(start: datetime, hours: int) -> dict[str, Any]:
+    """Return an hourly cost response of `hours` reads starting at `start` (PDT)."""
+    return {
+        "reads": [
+            {
+                "startTime": (start + timedelta(hours=n)).strftime("%Y-%m-%dT%H:%M:%S.000-07:00"),
+                "endTime": (start + timedelta(hours=n + 1)).strftime("%Y-%m-%dT%H:%M:%S.000-07:00"),
+                "value": 1.0,
+                "providedCost": 0.3,
+            }
+            for n in range(hours)
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_register_windows_are_fetched_one_per_request() -> None:
+    """A window is chunked to the cap, and each chunk is its own request.
+
+    The hourly cap is 720 hours, so five days is a single request. Aliasing the
+    field to batch several windows into one request looks like it works, but the
+    server does not isolate arguments per alias: every alias returns the same
+    payload, drawn from a mix of the windows. See the comment on
+    _REGISTER_READS_QUERY.
+    """
+
+    async def fetch(days: int) -> _GraphQLRouter:
+        router = _GraphQLRouter(_registers_response(), _register_reads_response({}))
+        session = _FakeSession(
+            {
+                "cost/utilityAccount": _hourly_cost_reads(datetime(2026, 6, 1), 24 * days),
+                "dsm-graphql-v1": router,
+            }
+        )
+        await _pge(session).async_get_cost_reads(
+            _elec_account(), AggregateType.HOUR, datetime(2026, 6, 1), datetime(2026, 6, 1) + timedelta(days=days)
+        )
+        return router
+
+    assert (await fetch(5)).read_queries == 1, "five days of hours fit in one request"
+
+    router = await fetch(70)
+    assert router.read_queries == 3, "70 days needs three chunks of at most 720 hours"
+    assert router.window_counts == [1, 1, 1], "never more than one window per request"
+
+
+@pytest.mark.asyncio
+async def test_one_unserved_window_does_not_lose_the_others() -> None:
+    """A window the utility has no data for must not discard the rest."""
+
+    def reads(variables: dict[str, Any]) -> Any:
+        if variables["timeInterval"].startswith("2026-01-31"):
+            return {"errors": [{"message": "No data returned from API"}]}
+        return _register_reads_response({("2026-08-05T07:00:00Z", "2026-08-05T08:00:00Z"): (0.25, 4.15)})
+
+    router = _GraphQLRouter(_registers_response(), reads)
+    session = _FakeSession({"cost/utilityAccount": {"reads": []}, "dsm-graphql-v1": router})
+
+    result = await _pge(session).async_get_interval_register_reads(
+        _elec_account(),
+        AggregateType.HOUR,
+        datetime(2026, 1, 1, tzinfo=ZoneInfo("America/Los_Angeles")),
+        datetime(2026, 4, 1, tzinfo=ZoneInfo("America/Los_Angeles")),
+    )
+
+    assert router.read_queries == 3
+    assert result, "the windows either side of the bad one must still be returned"
+
+
+@pytest.mark.asyncio
+async def test_register_availability_is_reread_on_every_call() -> None:
+    """The available range must not be cached; it moves and it gates the request.
+
+    PG&E's availableReadsTimeInterval ends around the previous midnight. Caching it
+    for the life of the session would clamp away the newest hours - exactly the ones
+    a caller asks for - and after a while would exclude everything.
+    """
+    router = _GraphQLRouter(_registers_response(), _register_reads_response({}))
+    session = _FakeSession(
+        {
+            "cost/utilityAccount": _hourly_cost_reads(datetime(2026, 8, 1), 24),
+            "dsm-graphql-v1": router,
+        }
+    )
+    opower = _pge(session)
+
+    for _ in range(3):
+        await opower.async_get_cost_reads(_elec_account(), AggregateType.HOUR, datetime(2026, 8, 1), datetime(2026, 8, 1))
+
+    assert router.register_queries == 3, "availability must be re-read, not cached"
+
+
+@pytest.mark.asyncio
+async def test_sub_hourly_reads_ask_for_the_matching_resolution() -> None:
+    """The registers are served at the requested resolution, sub-hourly included."""
+    reads = _register_reads_response({("2026-08-31T07:00:00Z", "2026-08-31T07:15:00Z"): (0.1208, 0.0)})
+    router = _GraphQLRouter(_registers_response(), reads)
+    session = _FakeSession(
+        {
+            "cost/utilityAccount": {
+                "reads": [
+                    {
+                        "startTime": "2026-08-31T00:00:00.000-07:00",
+                        "endTime": "2026-08-31T00:15:00.000-07:00",
+                        "value": 0.1208,
+                        "providedCost": 0.04,
+                    }
+                ]
+            },
+            "dsm-graphql-v1": router,
+        }
+    )
+
+    result = await _pge(session).async_get_cost_reads(
+        _elec_account(), AggregateType.QUARTER_HOUR, datetime(2026, 8, 31), datetime(2026, 8, 31)
+    )
+
+    assert (result[0].imported, result[0].exported) == (0.1208, 0.0)
+    variables = [r["json"]["variables"] for r in session.requests if "dsm-graphql-v1" in r["url"]]
+    assert variables[-1]["resolution"] == "QUARTER_HOUR"
+
+
+@pytest.mark.asyncio
+async def test_import_export_requires_the_spans_to_match() -> None:
+    """A register read only enriches a cost read covering exactly the same span.
+
+    Otherwise a whole hour's import could be attached to a read covering part of it,
+    breaking imported - exported == consumption.
+    """
+    cost = {
+        "reads": [
+            {
+                # 30 minutes, while the register stream is hourly.
+                "startTime": "2026-08-31T12:00:00.000-07:00",
+                "endTime": "2026-08-31T12:30:00.000-07:00",
+                "value": -2.0,
+                "providedCost": -0.6,
+            }
+        ]
+    }
+    reads = _register_reads_response({("2026-08-31T19:00:00Z", "2026-08-31T20:00:00Z"): (0.25, 4.15)})
+    session = _FakeSession({"cost/utilityAccount": cost, "dsm-graphql-v1": _GraphQLRouter(_registers_response(), reads)})
+
+    result = await _pge(session).async_get_cost_reads(
+        _elec_account(), AggregateType.HOUR, datetime(2026, 8, 31), datetime(2026, 8, 31)
+    )
+
+    assert (result[0].imported, result[0].exported) == (None, None)
+
+
+async def _probe_twice(first: Any) -> int:
+    """Run two hourly fetches, serving `first` to the first probe. Return probe count."""
+    attempts = {"n": 0}
+
+    def registers(request: dict[str, Any]) -> Any:
+        attempts["n"] += 1
+        return first if attempts["n"] == 1 else _registers_response()
+
+    registers.wants_request = True  # type: ignore[attr-defined]
+    session = _FakeSession(
+        {
+            "cost/utilityAccount": _hourly_cost_reads(datetime(2026, 8, 1), 1),
+            "dsm-graphql-v1": registers,
+        }
+    )
+    opower = _pge(session)
+    for _ in range(2):
+        await opower.async_get_cost_reads(_elec_account(), AggregateType.HOUR, datetime(2026, 8, 1), datetime(2026, 8, 1))
+    return attempts["n"]
+
+
+@pytest.mark.asyncio
+async def test_transient_probe_failure_is_not_cached_as_no_registers() -> None:
+    """A 5xx must not disable the split for the rest of the session."""
+    assert await _probe_twice(_FakeResponse({"error": "boom"}, status=500)) >= 2
+
+
+@pytest.mark.asyncio
+async def test_empty_probe_response_is_not_cached_as_no_registers() -> None:
+    """An empty body is a hiccup, not a meter without registers."""
+    assert await _probe_twice({"data": {"billingAccountByAuthContext": None}}) >= 2
+
+
+@pytest.mark.asyncio
+async def test_missing_graphql_endpoint_is_cached_as_no_registers() -> None:
+    """A 4xx is structural: the endpoint is absent for this utility, so stop asking."""
+    assert await _probe_twice(_FakeResponse({"error": "not found"}, status=404)) == 1
+
+
+@pytest.mark.asyncio
+async def test_partial_rest_split_still_asks_for_the_registers() -> None:
+    """A utility publishing `imported` but not `exported` has given us nothing usable."""
+    usage = {
+        "reads": [
+            {
+                "startTime": "2026-08-31T12:00:00.000-07:00",
+                "endTime": "2026-08-31T13:00:00.000-07:00",
+                "consumption": {"value": -3.9, "type": "ACTUAL"},
+                "imported": 0.25,
+                "exported": None,
+            }
+        ]
+    }
+    reads = _register_reads_response({("2026-08-31T19:00:00Z", "2026-08-31T20:00:00Z"): (0.25, 4.15)})
+    router = _GraphQLRouter(_registers_response(), reads)
+    session = _FakeSession({"utilityAccounts": usage, "dsm-graphql-v1": router})
+
+    result = await _pge(session).async_get_cost_reads(
+        _elec_account(), AggregateType.HOUR, datetime(2026, 8, 31), datetime(2026, 8, 31), usage_only=True
+    )
+
+    assert router.read_queries == 1, "a half-populated split is not a split"
+    assert (result[0].imported, result[0].exported) == (0.25, 4.15)
+
+
+@pytest.mark.asyncio
+async def test_import_export_matches_the_requested_service_agreement() -> None:
+    """A customer's other service agreement must not supply the registers."""
+    cost = {
+        "reads": [
+            {
+                "startTime": "2026-08-31T12:00:00.000-07:00",
+                "endTime": "2026-08-31T13:00:00.000-07:00",
+                "value": -5.3404,
+                "providedCost": -1.61,
+            }
+        ]
+    }
+    session = _FakeSession(
+        {
+            "cost/utilityAccount": cost,
+            # Registers exist, but on a different service agreement.
+            "dsm-graphql-v1": _registers_response(utility_id="9999999999"),
+        }
+    )
+
+    result = await _pge(session).async_get_cost_reads(
+        _elec_account(), AggregateType.HOUR, datetime(2026, 8, 31), datetime(2026, 8, 31)
+    )
+
+    assert (result[0].imported, result[0].exported) == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_usage_endpoint_import_export_used_without_graphql() -> None:
+    """When the utility publishes the split over REST, no GraphQL call is made."""
+    usage = {
+        "reads": [
+            {
+                "startTime": "2026-08-31T12:00:00.000-07:00",
+                "endTime": "2026-08-31T13:00:00.000-07:00",
+                "consumption": {"value": -5.3404, "type": "ACTUAL"},
+                "imported": 0.0,
+                # Exports are reported negative by some utilities; normalized to a magnitude.
+                "exported": -5.3404,
+            }
+        ]
+    }
+    session = _FakeSession({"utilityAccounts": usage})
+
+    result = await _pge(session).async_get_cost_reads(
+        _elec_account(), AggregateType.HOUR, datetime(2026, 8, 31), datetime(2026, 8, 31), usage_only=True
+    )
+
+    assert (result[0].imported, result[0].exported) == (0.0, 5.3404)
+    assert not [r for r in session.requests if "dsm-graphql-v1" in r["url"]]
 
 
 @pytest.mark.asyncio
@@ -1107,7 +1870,7 @@ async def test_hourly_requests_are_batched_and_ordered() -> None:
             ]
         }
 
-    session = _FakeSession({"cost/utilityAccount": cost})
+    session = _FakeSession({"cost/utilityAccount": cost, "dsm-graphql-v1": _NO_REGISTERS_RESPONSE})
     account = Account(
         customer=Customer(uuid=_CUSTOMER_UUID),
         uuid=_ELEC_ACCOUNT_UUID,

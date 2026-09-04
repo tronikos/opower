@@ -251,8 +251,8 @@ async def _output_account(
                 args.start_date,
                 args.end_date,
             )
-        rows = [(read.start_time, read.end_time, [read.consumption]) for read in usage_data]
-        headers = ["consumption"]
+        rows = [(read.start_time, read.end_time, [read.consumption, read.imported, read.exported]) for read in usage_data]
+        headers = ["consumption", "imported", "exported"]
     else:
         cost_data = await opower.async_get_cost_reads(
             account,
@@ -260,8 +260,11 @@ async def _output_account(
             args.start_date,
             args.end_date,
         )
-        rows = [(read.start_time, read.end_time, [read.consumption, read.provided_cost]) for read in cost_data]
-        headers = ["consumption", "provided_cost"]
+        rows = [
+            (read.start_time, read.end_time, [read.consumption, read.provided_cost, read.imported, read.exported])
+            for read in cost_data
+        ]
+        headers = ["consumption", "provided_cost", "imported", "exported"]
 
     if csv_path:
         with csv_path.open("w", newline="") as csv_file:
