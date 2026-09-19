@@ -3,8 +3,9 @@
 import asyncio
 import dataclasses
 import json
+import logging
 from datetime import date, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
@@ -839,6 +840,7 @@ async def test_get_forecast_parses_graphql_response() -> None:
                     {
                         "uuid": _GAS_ACCOUNT_UUID,
                         "preferredUtilityAccountId": "1000000004",
+                        "servicePointId": "not-a-utility-account-id",
                         "meterType": "GAS",
                         "readResolution": "DAY",
                     },
@@ -1001,6 +1003,455 @@ async def test_get_forecast_ignores_graphql_errors() -> None:
         }
     )
     assert await _pge(session).async_get_forecast() == []
+
+
+@pytest.mark.asyncio
+async def test_get_bills_parses_segments_and_preserves_nulls(caplog: pytest.LogCaptureFixture) -> None:
+    """Parse completed bills using exact UUID and utility ID account matches."""
+    caplog.set_level(logging.DEBUG)
+    customers = {
+        "customers": [
+            {
+                "uuid": _CUSTOMER_UUID,
+                "utilityAccounts": [
+                    {
+                        "uuid": _ELEC_ACCOUNT_UUID,
+                        "preferredUtilityAccountId": "1000000004",
+                        "meterType": "ELEC",
+                        "readResolution": "QUARTER_HOUR",
+                    },
+                    {
+                        "uuid": _GAS_ACCOUNT_UUID,
+                        "preferredUtilityAccountId": "1000000004",
+                        "meterType": "GAS",
+                        "readResolution": "DAY",
+                    },
+                ],
+            }
+        ]
+    }
+    older_bill = {
+        "billDate": "2026-08-21",
+        "timeInterval": "2026-06-23T00:00:00/2026-07-23T00:00:00",
+        "usageCharges": {"value": "NaN"},
+        "segments": [
+            {
+                "serviceAgreement": {
+                    "uuid": _ELEC_ACCOUNT_UUID,
+                    "utilityId": "different-electric-id",
+                    "serviceType": "ELECTRICITY",
+                },
+                "currentAmount": {"value": 120},
+                "serviceQuantities": [],
+            }
+        ],
+    }
+    graphql = {
+        "data": {
+            "billingAccountsConnection": {
+                "pageInfo": {"hasNextPage": False},
+                "edges": [
+                    {
+                        "node": {
+                            "urn": "billing-account",
+                            "bills": [
+                                older_bill,
+                                {
+                                    "billDate": "2026-08-21T00:00:00Z",
+                                    "timeInterval": "2026-07-23T04:00:00Z/2026-08-21T04:00:00Z",
+                                    "usageCharges": {"value": 146.29},
+                                    "segments": [
+                                        {
+                                            "serviceAgreement": {
+                                                "uuid": _ELEC_ACCOUNT_UUID,
+                                                "utilityId": "different-electric-id",
+                                                "serviceType": "ELECTRICITY",
+                                            },
+                                            "currentAmount": {"value": 189.37},
+                                            "serviceQuantities": [
+                                                {
+                                                    "unit": "kWh",
+                                                    "serviceQuantityIdentifier": "NET_USAGE",
+                                                    "serviceQuantity": {"value": 448},
+                                                },
+                                                {"unit": "HCF", "serviceQuantity": {"value": 1}},
+                                                {"unit": "MCF", "serviceQuantity": {"value": 2}},
+                                                {"unit": "mcf", "serviceQuantity": {"value": 3}},
+                                            ],
+                                        },
+                                        {
+                                            "serviceAgreement": {
+                                                "uuid": _ELEC_ACCOUNT_UUID,
+                                                "utilityId": "different-electric-id",
+                                                "serviceType": "ELECTRICITY",
+                                            },
+                                            "currentAmount": {"value": 5},
+                                            "serviceQuantities": [],
+                                        },
+                                        {
+                                            "serviceAgreement": {
+                                                "uuid": "different-gas-uuid",
+                                                "utilityId": "0001000000004",
+                                                "serviceType": "NATURAL_GAS",
+                                            },
+                                            "currentAmount": None,
+                                            "serviceQuantities": [
+                                                {
+                                                    "unit": "TH",
+                                                    "serviceQuantityIdentifier": "DELIVERED",
+                                                    "serviceQuantity": None,
+                                                }
+                                            ],
+                                        },
+                                    ],
+                                },
+                            ],
+                        }
+                    }
+                ],
+            }
+        }
+    }
+    billing_account_edges = cast("list[dict[str, Any]]", graphql["data"]["billingAccountsConnection"]["edges"])
+    billing_account_edges.append(billing_account_edges[0])
+    session = _FakeSession({"multi-account-v1": customers, "dsm-graphql-v1": graphql})
+
+    bills = await _pge(session).async_get_bills(count_per_billing_account=2)
+
+    assert len(bills) == 2
+    bill = bills[0]
+    assert bill.bill_date == date(2026, 8, 21)
+    assert bill.start_time == datetime(2026, 7, 23, 4, tzinfo=ZoneInfo("UTC"))
+    assert bill.end_time == datetime(2026, 8, 21, 4, tzinfo=ZoneInfo("UTC"))
+    assert bill.usage_charges == 146.29
+    assert [segment.account.uuid for segment in bill.segments] == [
+        _ELEC_ACCOUNT_UUID,
+        _ELEC_ACCOUNT_UUID,
+        _GAS_ACCOUNT_UUID,
+    ]
+    assert bill.segments[0].current_amount == 189.37
+    assert bill.segments[0].service_quantities[0].unit_of_measure is UnitOfMeasure.KWH
+    assert bill.segments[0].service_quantities[0].service_quantity_identifier == "NET_USAGE"
+    assert bill.segments[0].service_quantities[0].value == 448
+    assert bill.segments[0].service_quantities[1].unit_of_measure is UnitOfMeasure.CCF
+    assert bill.segments[0].service_quantities[2].unit_of_measure is None
+    assert "Unknown completed bill unit of measure" in caplog.text
+    assert bill.segments[2].current_amount is None
+    assert bill.segments[2].service_quantities[0].unit_of_measure is UnitOfMeasure.THERM
+    assert bill.segments[2].service_quantities[0].value is None
+    assert bills[1].bill_date == date(2026, 8, 21)
+    assert bills[1].end_time == datetime(2026, 7, 23, 7, tzinfo=ZoneInfo("UTC"))
+    assert bills[1].usage_charges is None
+
+    graphql_request = next(request for request in session.requests if "dsm-graphql-v1" in request["url"])
+    assert graphql_request["json"]["variables"] == {"last": 2}
+    assert "bills(last: $last, orderBy: ASCENDING)" in graphql_request["json"]["query"]
+    assert "serviceAgreement { uuid utilityId serviceType }" in graphql_request["json"]["query"]
+    assert "usageCharges" in graphql_request["json"]["query"]
+    assert "currentAmount" in graphql_request["json"]["query"]
+
+
+@pytest.mark.asyncio
+async def test_get_bills_skips_ambiguous_and_invalid_bills(caplog: pytest.LogCaptureFixture) -> None:
+    """Do not guess when a bill segment does not identify one account."""
+    second_electric_uuid = "44444444-4444-11e5-bf2b-000000000004"
+    customers = {
+        "customers": [
+            {
+                "uuid": _CUSTOMER_UUID,
+                "utilityAccounts": [
+                    {
+                        "uuid": _ELEC_ACCOUNT_UUID,
+                        "preferredUtilityAccountId": "shared",
+                        "meterType": "ELEC",
+                        "readResolution": "DAY",
+                    },
+                    {
+                        "uuid": _GAS_ACCOUNT_UUID,
+                        "preferredUtilityAccountId": "shared",
+                        "meterType": "GAS",
+                        "readResolution": "DAY",
+                    },
+                    {
+                        "uuid": second_electric_uuid,
+                        "preferredUtilityAccountId": "shared",
+                        "meterType": "ELEC",
+                        "readResolution": "DAY",
+                    },
+                ],
+            }
+        ]
+    }
+    graphql = {
+        "data": {
+            "billingAccountsConnection": {
+                "pageInfo": {"hasNextPage": False},
+                "edges": [
+                    {
+                        "node": {
+                            "bills": [
+                                {
+                                    "billDate": "2026-08-21",
+                                    "timeInterval": "2026-07-23T04:00:00Z/2026-08-21T04:00:00Z",
+                                    "usageCharges": None,
+                                    "segments": [
+                                        {
+                                            "serviceAgreement": {
+                                                "uuid": _GAS_ACCOUNT_UUID,
+                                                "utilityId": "shared",
+                                                "serviceType": "NATURAL_GAS",
+                                            },
+                                            "currentAmount": {"value": 10},
+                                            "serviceQuantities": [],
+                                        },
+                                        {
+                                            "serviceAgreement": {
+                                                "uuid": "unknown",
+                                                "utilityId": "shared",
+                                                "serviceType": "ELECTRICITY",
+                                            },
+                                            "currentAmount": None,
+                                            "serviceQuantities": [],
+                                        },
+                                    ],
+                                },
+                                {
+                                    "billDate": "not-a-date",
+                                    "timeInterval": "invalid",
+                                    "segments": [],
+                                },
+                                {
+                                    "billDate": "2026-07-21",
+                                    "timeInterval": 20260721,
+                                    "segments": [],
+                                },
+                                {
+                                    "billDate": "2026-05-21",
+                                    "timeInterval": "2026-04-21T04:00:00Z/2026-05-21T04:00:00Z",
+                                    "segments": [],
+                                },
+                                {
+                                    "billDate": "2026-04-21",
+                                    "timeInterval": "2026-03-21T04:00:00Z/2026-04-21T04:00:00Z",
+                                    "segments": [
+                                        {
+                                            "serviceAgreement": {
+                                                "uuid": "unknown",
+                                                "utilityId": "not-a-utility-account-id",
+                                                "serviceType": "NATURAL_GAS",
+                                            },
+                                            "serviceQuantities": [],
+                                        }
+                                    ],
+                                },
+                                {
+                                    "billDate": "2026-06-21",
+                                    "timeInterval": "2026-05-21T04:00:00Z/2026-06-21T04:00:00Z",
+                                    "segments": [
+                                        {
+                                            "serviceAgreement": {
+                                                "uuid": "unknown",
+                                                "utilityId": "shared",
+                                                "serviceType": "STEAM",
+                                            },
+                                            "serviceQuantities": [],
+                                        }
+                                    ],
+                                },
+                            ]
+                        }
+                    }
+                ],
+            }
+        }
+    }
+
+    caplog.set_level(logging.DEBUG)
+    opower = _pge(_FakeSession({"multi-account-v1": customers, "dsm-graphql-v1": graphql}))
+    bills = await opower.async_get_bills()
+    repeated_bills = await opower.async_get_bills()
+
+    assert bills == []
+    assert repeated_bills == bills
+    assert "a segment cannot be mapped to an account" in caplog.text
+    assert "invalid dates" in caplog.text
+    assert "without segments" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_get_bills_scopes_account_mapping_per_customer() -> None:
+    """Map identical utility account IDs only within the selected customer."""
+    second_customer_uuid = "55555555-5555-11e5-bf2b-000000000005"
+    second_account_uuid = "66666666-6666-11e5-bf2b-000000000006"
+    customers = {
+        "customers": [
+            {
+                "uuid": _CUSTOMER_UUID,
+                "utilityAccounts": [
+                    {
+                        "uuid": _ELEC_ACCOUNT_UUID,
+                        "preferredUtilityAccountId": "shared",
+                        "meterType": "ELEC",
+                        "readResolution": "DAY",
+                    }
+                ],
+            },
+            {
+                "uuid": second_customer_uuid,
+                "utilityAccounts": [
+                    {
+                        "uuid": second_account_uuid,
+                        "preferredUtilityAccountId": "shared",
+                        "utilityAccountId2": "only-second",
+                        "meterType": "ELEC",
+                        "readResolution": "DAY",
+                    }
+                ],
+            },
+        ]
+    }
+
+    def bill_response(bill_date: str, billing_account_urn: str = "billing-account") -> dict[str, Any]:
+        return {
+            "data": {
+                "billingAccountsConnection": {
+                    "pageInfo": {"hasNextPage": False},
+                    "edges": [
+                        {
+                            "node": {
+                                "urn": billing_account_urn,
+                                "bills": [
+                                    {
+                                        "billDate": bill_date,
+                                        "timeInterval": f"{bill_date}T00:00:00Z/{bill_date}T01:00:00Z",
+                                        "usageCharges": {"value": 1},
+                                        "segments": [
+                                            {
+                                                "serviceAgreement": {
+                                                    "uuid": "different",
+                                                    "utilityId": "shared",
+                                                    "serviceType": "ELECTRICITY",
+                                                },
+                                                "currentAmount": {"value": 2},
+                                                "serviceQuantities": [],
+                                            }
+                                        ],
+                                    }
+                                ],
+                            }
+                        }
+                    ],
+                }
+            }
+        }
+
+    def graphql_route(request: dict[str, Any]) -> dict[str, Any]:
+        selected_entities = request["headers"]["Opower-Selected-Entities"]
+        if second_customer_uuid in selected_entities:
+            return bill_response("2026-08-02")
+        return bill_response("2026-08-01")
+
+    graphql_route.wants_request = True  # type: ignore[attr-defined]
+    bills = await _pge(
+        _FakeSession(
+            {
+                "multi-account-v1": customers,
+                "dsm-graphql-v1": graphql_route,
+            }
+        )
+    ).async_get_bills()
+
+    assert [bill.bill_date for bill in bills] == [date(2026, 8, 2), date(2026, 8, 1)]
+    assert bills[0].segments[0].account.uuid == second_account_uuid
+    assert bills[1].segments[0].account.uuid == _ELEC_ACCOUNT_UUID
+
+    duplicate_response = bill_response("2026-08-03")
+    agreement = duplicate_response["data"]["billingAccountsConnection"]["edges"][0]["node"]["bills"][0]["segments"][0][
+        "serviceAgreement"
+    ]
+    agreement["uuid"] = _ELEC_ACCOUNT_UUID
+    agreement["utilityId"] = "ignored"
+    duplicate_bills = await _pge(
+        _FakeSession({"multi-account-v1": customers, "dsm-graphql-v1": duplicate_response})
+    ).async_get_bills()
+
+    assert len(duplicate_bills) == 1
+    assert duplicate_bills[0].segments[0].account.uuid == _ELEC_ACCOUNT_UUID
+
+    urnless_response = bill_response("2026-08-03", " ")
+    urnless_bills = await _pge(
+        _FakeSession({"multi-account-v1": customers, "dsm-graphql-v1": urnless_response})
+    ).async_get_bills()
+
+    assert len(urnless_bills) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_bills_rejects_nonpositive_count() -> None:
+    """A bill history request must ask for at least one bill."""
+    with pytest.raises(ValueError, match="greater than zero"):
+        await _pge(_FakeSession({})).async_get_bills(count_per_billing_account=0)
+
+
+@pytest.mark.asyncio
+async def test_get_bills_ignores_graphql_errors_and_keeps_truncated_connections() -> None:
+    """GraphQL failures return no bills, but fetched bills remain usable."""
+    error_session = _FakeSession(
+        {
+            "multi-account-v1": _CUSTOMERS_RESPONSE,
+            "dsm-graphql-v1": {"errors": [{"message": "Not authorized"}]},
+        }
+    )
+    assert await _pge(error_session).async_get_bills() == []
+
+    malformed_session = _FakeSession(
+        {
+            "multi-account-v1": _CUSTOMERS_RESPONSE,
+            "dsm-graphql-v1": {"data": []},
+        }
+    )
+    assert await _pge(malformed_session).async_get_bills() == []
+
+    truncated = {
+        "data": {
+            "billingAccountsConnection": {
+                "pageInfo": {"hasNextPage": True},
+                "edges": [
+                    {
+                        "node": {
+                            "urn": "truncated-billing-account",
+                            "bills": [
+                                {
+                                    "billDate": "2026-08-21",
+                                    "timeInterval": "2026-07-23T04:00:00Z/2026-08-21T04:00:00Z",
+                                    "usageCharges": 10,
+                                    "segments": {
+                                        "serviceAgreement": {"uuid": _ELEC_ACCOUNT_UUID},
+                                        "currentAmount": 12,
+                                        "serviceQuantities": {
+                                            "unit": "KWH",
+                                            "serviceQuantity": 3,
+                                        },
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ],
+            }
+        }
+    }
+    truncated_session = _FakeSession(
+        {
+            "multi-account-v1": _CUSTOMERS_RESPONSE,
+            "dsm-graphql-v1": truncated,
+        }
+    )
+    truncated_bills = await _pge(truncated_session).async_get_bills()
+    assert len(truncated_bills) == 1
+    assert truncated_bills[0].usage_charges is None
+    assert truncated_bills[0].segments[0].current_amount is None
+    assert truncated_bills[0].segments[0].service_quantities[0].value is None
 
 
 @pytest.mark.asyncio
