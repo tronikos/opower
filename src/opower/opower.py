@@ -514,6 +514,7 @@ class Opower:
         # Keyed by account uuid. None means "probed, this account has no separate
         # import/export registers", so we only ever probe once per account.
         self._register_streams: dict[str, _RegisterStreams | None] = {}
+        self._warned_no_completed_bills = False
 
     async def async_login(self) -> None:
         """Login to the utility website and authorize opower.com for access.
@@ -721,7 +722,6 @@ class Opower:
         bills: list[Bill] = []
         bills_by_urn: dict[tuple[str, date, datetime, datetime], Bill] = {}
         skipped_bill_count = 0
-        failed_customer_count = 0
         for customer in await self._async_get_customers():
             customer_accounts = [account for account in accounts if account.customer.uuid == customer["uuid"]]
             accounts_by_utility_id: dict[str, list[Account]] = {}
@@ -744,7 +744,6 @@ class Opower:
                 )
             except ApiException as err:
                 _LOGGER.debug("Ignoring GraphQL completed bills error: %s", err)
-                failed_customer_count += 1
                 continue
 
             data = _as_dict(_as_dict(result).get("data"))
@@ -780,7 +779,6 @@ class Opower:
         self._warn_completed_bill_failures(
             bills,
             skipped_bill_count,
-            failed_customer_count,
         )
         return sorted(
             bills,
@@ -788,21 +786,19 @@ class Opower:
             reverse=True,
         )
 
-    @staticmethod
     def _warn_completed_bill_failures(
+        self,
         bills: list[Bill],
         skipped_bill_count: int,
-        failed_customer_count: int,
     ) -> None:
         """Warn when failures make a completed-bill result indistinguishable from no data."""
-        if bills or not (skipped_bill_count or failed_customer_count):
+        if bills or not skipped_bill_count or self._warned_no_completed_bills:
             return
-        problems = []
-        if skipped_bill_count:
-            problems.append(f"{skipped_bill_count} bill(s) could not be parsed or mapped safely")
-        if failed_customer_count:
-            problems.append(f"{failed_customer_count} customer request(s) failed")
-        _LOGGER.warning("No completed bills returned; %s", "; ".join(problems))
+        _LOGGER.warning(
+            "No completed bills returned; %s bill(s) could not be parsed or mapped safely",
+            skipped_bill_count,
+        )
+        self._warned_no_completed_bills = True
 
     @staticmethod
     def _completed_bill_account(

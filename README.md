@@ -23,6 +23,7 @@ Use `async_get_cost_reads(account, AggregateType.BILL)` for the utility's existi
 per-account billing cost series. Use `async_get_bills()` when the distinct
 GraphQL bill totals and service-agreement quantities are needed.
 Run `python -m opower --bills` to inspect completed bills from the command line.
+This mode ignores other data-output options and cannot be combined with `--csv`.
 
 On net-metered accounts, energy charges may be deferred to an annual true-up.
 In that case, `usage_charges` can be `None` on monthly bills and

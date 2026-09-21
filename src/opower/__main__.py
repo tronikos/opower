@@ -112,7 +112,10 @@ async def _main() -> None:
     )
     parser.add_argument(
         "--bills",
-        help="If true, fetches completed bills instead of forecast and historical data.",
+        help=(
+            "Fetch completed bills instead of forecast and historical data. "
+            "Other data-output options are ignored; cannot be combined with --csv."
+        ),
         action="store_true",
     )
     args = parser.parse_args()

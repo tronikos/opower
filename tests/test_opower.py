@@ -1105,6 +1105,11 @@ async def test_get_bills_parses_segments_and_preserves_nulls(caplog: pytest.LogC
                                         },
                                     ],
                                 },
+                                {
+                                    "billDate": "not-a-date",
+                                    "timeInterval": "invalid",
+                                    "segments": [],
+                                },
                             ],
                         }
                     }
@@ -1116,7 +1121,7 @@ async def test_get_bills_parses_segments_and_preserves_nulls(caplog: pytest.LogC
     billing_account_edges.append(billing_account_edges[0])
     session = _FakeSession({"multi-account-v1": customers, "dsm-graphql-v1": graphql})
 
-    bills = await _pge(session).async_get_bills(count_per_billing_account=2)
+    bills = await _pge(session).async_get_bills(count_per_billing_account=3)
 
     assert len(bills) == 2
     bill = bills[0]
@@ -1142,10 +1147,11 @@ async def test_get_bills_parses_segments_and_preserves_nulls(caplog: pytest.LogC
     assert bills[1].bill_date == date(2026, 8, 21)
     assert bills[1].end_time == datetime(2026, 7, 23, 7, tzinfo=ZoneInfo("UTC"))
     assert bills[1].usage_charges is None
+    assert "Ignoring completed bill with invalid dates" in caplog.text
     assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
 
     graphql_request = next(request for request in session.requests if "dsm-graphql-v1" in request["url"])
-    assert graphql_request["json"]["variables"] == {"last": 2}
+    assert graphql_request["json"]["variables"] == {"last": 3}
     assert "bills(last: $last, orderBy: ASCENDING)" in graphql_request["json"]["query"]
     assert "serviceAgreement { uuid utilityId serviceType }" in graphql_request["json"]["query"]
     assert "usageCharges" in graphql_request["json"]["query"]
@@ -1278,7 +1284,7 @@ async def test_get_bills_skips_ambiguous_and_invalid_bills(caplog: pytest.LogCap
     assert "invalid dates" in caplog.text
     assert "without segments" in caplog.text
     warning_records = [record for record in caplog.records if record.levelno == logging.WARNING]
-    assert len(warning_records) == 2
+    assert len(warning_records) == 1
     assert all("6 bill(s) could not be parsed or mapped safely" in record.message for record in warning_records)
 
 
@@ -1398,11 +1404,38 @@ async def test_get_bills_rejects_nonpositive_count() -> None:
 
 
 @pytest.mark.asyncio
+async def test_normalized_account_identifiers_ignore_falsy_metadata() -> None:
+    """Falsy account metadata is excluded from normalized identifiers."""
+    customers = {
+        "customers": [
+            {
+                "uuid": _CUSTOMER_UUID,
+                "utilityAccounts": [
+                    {
+                        "uuid": _ELEC_ACCOUNT_UUID,
+                        "utilityAccountId": "1000000004",
+                        "utilityAccountId2": "",
+                        "preferredUtilityAccountId": "1000000004",
+                        "servicePointId": 0,
+                        "meterType": "ELEC",
+                        "readResolution": "DAY",
+                    }
+                ],
+            }
+        ]
+    }
+    opower = _pge(_FakeSession({"multi-account-v1": customers}))
+    account = (await opower.async_get_accounts())[0]
+
+    assert "0" not in opower._normalized_account_identifiers(account)
+
+
+@pytest.mark.asyncio
 async def test_get_bills_ignores_graphql_errors_and_keeps_truncated_connections(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """GraphQL failures return no bills, but fetched bills remain usable."""
-    caplog.set_level(logging.WARNING)
+    caplog.set_level(logging.DEBUG)
     error_session = _FakeSession(
         {
             "multi-account-v1": _CUSTOMERS_RESPONSE,
@@ -1410,7 +1443,8 @@ async def test_get_bills_ignores_graphql_errors_and_keeps_truncated_connections(
         }
     )
     assert await _pge(error_session).async_get_bills() == []
-    assert "1 customer request(s) failed" in caplog.text
+    assert "Ignoring GraphQL completed bills error" in caplog.text
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
 
     malformed_session = _FakeSession(
         {
