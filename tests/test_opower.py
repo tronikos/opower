@@ -1142,6 +1142,7 @@ async def test_get_bills_parses_segments_and_preserves_nulls(caplog: pytest.LogC
     assert bills[1].bill_date == date(2026, 8, 21)
     assert bills[1].end_time == datetime(2026, 7, 23, 7, tzinfo=ZoneInfo("UTC"))
     assert bills[1].usage_charges is None
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
 
     graphql_request = next(request for request in session.requests if "dsm-graphql-v1" in request["url"])
     assert graphql_request["json"]["variables"] == {"last": 2}
@@ -1276,6 +1277,9 @@ async def test_get_bills_skips_ambiguous_and_invalid_bills(caplog: pytest.LogCap
     assert "a segment cannot be mapped to an account" in caplog.text
     assert "invalid dates" in caplog.text
     assert "without segments" in caplog.text
+    warning_records = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warning_records) == 2
+    assert all("6 bill(s) could not be parsed or mapped safely" in record.message for record in warning_records)
 
 
 @pytest.mark.asyncio
@@ -1394,8 +1398,11 @@ async def test_get_bills_rejects_nonpositive_count() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_bills_ignores_graphql_errors_and_keeps_truncated_connections() -> None:
+async def test_get_bills_ignores_graphql_errors_and_keeps_truncated_connections(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """GraphQL failures return no bills, but fetched bills remain usable."""
+    caplog.set_level(logging.WARNING)
     error_session = _FakeSession(
         {
             "multi-account-v1": _CUSTOMERS_RESPONSE,
@@ -1403,6 +1410,7 @@ async def test_get_bills_ignores_graphql_errors_and_keeps_truncated_connections(
         }
     )
     assert await _pge(error_session).async_get_bills() == []
+    assert "1 customer request(s) failed" in caplog.text
 
     malformed_session = _FakeSession(
         {

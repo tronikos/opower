@@ -389,11 +389,13 @@ class BillSegment:
 class Bill:
     """A completed utility bill.
 
-    `usage_charges` is the variable charge for actual energy usage.
-    `current_amount` on each segment is the aggregate amount owed for that
-    service agreement and can include charges that are not proportional to usage.
-    Segments are returned as provided and can repeat an account. Bill period
-    timestamps are timezone-aware and normalized to UTC.
+    When present, `usage_charges` is the variable charge for actual energy
+    usage. On net-metered accounts, those charges can be deferred to an annual
+    true-up, leaving `usage_charges` unset and segment `current_amount` values
+    limited to the amounts invoiced that month. Segment current amounts can also
+    include charges that are not proportional to usage. Segments are returned
+    as provided and can repeat an account. Bill period timestamps are
+    timezone-aware and normalized to UTC.
     """
 
     bill_date: date
@@ -718,11 +720,21 @@ class Opower:
 
         bills: list[Bill] = []
         bills_by_urn: dict[tuple[str, date, datetime, datetime], Bill] = {}
+        skipped_bill_count = 0
+        failed_customer_count = 0
         for customer in await self._async_get_customers():
             customer_accounts = [account for account in accounts if account.customer.uuid == customer["uuid"]]
             accounts_by_utility_id: dict[str, list[Account]] = {}
             for account in customer_accounts:
-                for identifier in self._completed_bill_account_identifiers(account):
+                for identifier in self._normalized_account_identifiers(
+                    account,
+                    account_identifiers=(account.utility_account_id,),
+                    utility_account_keys=(
+                        "utilityAccountId",
+                        "utilityAccountId2",
+                        "preferredUtilityAccountId",
+                    ),
+                ):
                     accounts_by_utility_id.setdefault(identifier, []).append(account)
             try:
                 result = await self._async_post_graphql(
@@ -732,10 +744,11 @@ class Opower:
                 )
             except ApiException as err:
                 _LOGGER.debug("Ignoring GraphQL completed bills error: %s", err)
+                failed_customer_count += 1
                 continue
 
-            connection = _as_dict(_as_dict(result).get("data")).get("billingAccountsConnection") or {}
-            connection = _as_dict(connection)
+            data = _as_dict(_as_dict(result).get("data"))
+            connection = _as_dict(data.get("billingAccountsConnection"))
             if not self._graphql_connection_is_complete(connection):
                 _LOGGER.debug("GraphQL completed bills response has additional billing accounts")
 
@@ -750,6 +763,7 @@ class Opower:
                         accounts_by_utility_id,
                     )
                     if bill is None:
+                        skipped_bill_count += 1
                         continue
                     if billing_account_urn is None:
                         bills.append(bill)
@@ -763,11 +777,32 @@ class Opower:
                             )
                         ] = bill
         bills.extend(bills_by_urn.values())
+        self._warn_completed_bill_failures(
+            bills,
+            skipped_bill_count,
+            failed_customer_count,
+        )
         return sorted(
             bills,
             key=lambda bill: (bill.bill_date, bill.end_time),
             reverse=True,
         )
+
+    @staticmethod
+    def _warn_completed_bill_failures(
+        bills: list[Bill],
+        skipped_bill_count: int,
+        failed_customer_count: int,
+    ) -> None:
+        """Warn when failures make a completed-bill result indistinguishable from no data."""
+        if bills or not (skipped_bill_count or failed_customer_count):
+            return
+        problems = []
+        if skipped_bill_count:
+            problems.append(f"{skipped_bill_count} bill(s) could not be parsed or mapped safely")
+        if failed_customer_count:
+            problems.append(f"{failed_customer_count} customer request(s) failed")
+        _LOGGER.warning("No completed bills returned; %s", "; ".join(problems))
 
     @staticmethod
     def _completed_bill_account(
@@ -1338,54 +1373,34 @@ class Opower:
             for read in result["reads"]
         ]
 
-    def _normalized_account_identifiers(self, account: Account) -> set[str]:
+    def _normalized_account_identifiers(
+        self,
+        account: Account,
+        *,
+        account_identifiers: tuple[str | None, ...] | None = None,
+        utility_account_keys: tuple[str, ...] = (
+            "uuid",
+            "utilityAccountId",
+            "utilityAccountId2",
+            "preferredUtilityAccountId",
+            "servicePointId",
+        ),
+    ) -> set[str]:
         """Return account identifiers in the forms used by Opower APIs."""
-        identifiers = {
-            identifier
-            for identifier in (
+        if account_identifiers is None:
+            account_identifiers = (
                 account.uuid,
                 account.utility_account_id,
                 account.id,
             )
-            if identifier
-        }
+        identifiers = {str(identifier) for identifier in account_identifiers if identifier}
         for customer in self._customers:
             if str(customer.get("uuid", "")) != account.customer.uuid:
                 continue
             for utility_account in customer.get("utilityAccounts", []):
                 if str(utility_account.get("uuid", "")) != account.uuid:
                     continue
-                identifiers |= {
-                    str(utility_account[key])
-                    for key in (
-                        "uuid",
-                        "utilityAccountId",
-                        "utilityAccountId2",
-                        "preferredUtilityAccountId",
-                        "servicePointId",
-                    )
-                    if utility_account.get(key) is not None
-                }
-        return identifiers | {identifier.lstrip("0") or "0" for identifier in identifiers}
-
-    def _completed_bill_account_identifiers(self, account: Account) -> set[str]:
-        """Return normalized utility account identifiers used by completed bills."""
-        identifiers = {account.utility_account_id} if account.utility_account_id else set()
-        for customer in self._customers:
-            if str(customer.get("uuid", "")) != account.customer.uuid:
-                continue
-            for utility_account in customer.get("utilityAccounts", []):
-                if str(utility_account.get("uuid", "")) != account.uuid:
-                    continue
-                identifiers |= {
-                    str(utility_account[key])
-                    for key in (
-                        "utilityAccountId",
-                        "utilityAccountId2",
-                        "preferredUtilityAccountId",
-                    )
-                    if utility_account.get(key)
-                }
+                identifiers |= {str(utility_account[key]) for key in utility_account_keys if utility_account.get(key)}
         return identifiers | {identifier.lstrip("0") or "0" for identifier in identifiers}
 
     @staticmethod
