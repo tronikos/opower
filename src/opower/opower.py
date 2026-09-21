@@ -3,6 +3,7 @@
 import dataclasses
 import json
 import logging
+import math
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
 from enum import Enum
@@ -137,11 +138,50 @@ _DSS_SERVICE_TYPE_TO_METER = {
     "RECLAIMED_WATER": "WATER",
 }
 
+_COMPLETED_BILL_UNIT_ALIASES = {
+    "HCF": "CCF",
+    "TH": "THERM",
+    "THERMS": "THERM",
+    "THM": "THERM",
+}
+
 
 def _get_value(data: dict[str, Any] | None, key: str = "value", default: float = 0) -> float:
     """Extract `key` from a dict, returning default if missing or None."""
     val = (data or {}).get(key)
     return float(val) if val is not None else default
+
+
+def _get_optional_value(data: Any, key: str = "value") -> float | None:
+    """Extract `key` from a dict, preserving missing and null values."""
+    if not isinstance(data, dict):
+        return None
+    val = data.get(key)
+    if val is None:
+        return None
+    try:
+        value = float(val)
+    except (TypeError, ValueError):
+        _LOGGER.debug("Ignoring non-numeric optional value")
+        return None
+    if not math.isfinite(value):
+        _LOGGER.debug("Ignoring non-finite optional value")
+        return None
+    return value
+
+
+def _as_dict_list(value: Any) -> list[dict[str, Any]]:
+    """Normalize an object or list of objects to a list of dictionaries."""
+    if isinstance(value, dict):
+        return [value]
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    """Return a dictionary or an empty dictionary for another shape."""
+    return value if isinstance(value, dict) else {}
 
 
 def _abs_or_none(value: Any) -> float | None:
@@ -246,9 +286,9 @@ class _RegisterStreams:
     available_end: datetime | None
 
 
-def _parse_time_interval(value: str | None) -> tuple[datetime | None, datetime | None]:
+def _parse_time_interval(value: str | None, tz: ZoneInfo | None = None) -> tuple[datetime | None, datetime | None]:
     """Parse an ISO 8601 "<start>/<end>" interval into aware UTC datetimes."""
-    if not value or "/" not in value:
+    if not isinstance(value, str) or "/" not in value:
         return None, None
     start_str, end_str = value.split("/", 1)
     try:
@@ -256,8 +296,14 @@ def _parse_time_interval(value: str | None) -> tuple[datetime | None, datetime |
         end = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
     except ValueError:
         return None, None
-    if start.tzinfo is None or end.tzinfo is None:
-        return None, None
+    if start.tzinfo is None:
+        if tz is None:
+            return None, None
+        start = start.replace(tzinfo=tz)
+    if end.tzinfo is None:
+        if tz is None:
+            return None, None
+        end = end.replace(tzinfo=tz)
     return start.astimezone(UTC), end.astimezone(UTC)
 
 
@@ -319,6 +365,44 @@ class Forecast:
     forecasted_cost: float
     typical_usage: float
     typical_cost: float
+
+
+@dataclasses.dataclass
+class BillServiceQuantity:
+    """A quantity priced on a completed bill segment."""
+
+    unit_of_measure: UnitOfMeasure | None
+    service_quantity_identifier: str | None
+    value: float | None
+
+
+@dataclasses.dataclass
+class BillSegment:
+    """The portion of a completed bill associated with one utility account."""
+
+    account: Account
+    current_amount: float | None
+    service_quantities: list[BillServiceQuantity]
+
+
+@dataclasses.dataclass
+class Bill:
+    """A completed utility bill.
+
+    When present, `usage_charges` is the variable charge for actual energy
+    usage. On net-metered accounts, those charges can be deferred to an annual
+    true-up, leaving `usage_charges` unset and segment `current_amount` values
+    limited to the amounts invoiced that month. Segment current amounts can also
+    include charges that are not proportional to usage. Segments are returned
+    as provided and can repeat an account. Bill period timestamps are
+    timezone-aware and normalized to UTC.
+    """
+
+    bill_date: date
+    start_time: datetime
+    end_time: datetime
+    usage_charges: float | None
+    segments: list[BillSegment]
 
 
 @dataclasses.dataclass
@@ -430,6 +514,7 @@ class Opower:
         # Keyed by account uuid. None means "probed, this account has no separate
         # import/export registers", so we only ever probe once per account.
         self._register_streams: dict[str, _RegisterStreams | None] = {}
+        self._warned_no_completed_bills = False
 
     async def async_login(self) -> None:
         """Login to the utility website and authorize opower.com for access.
@@ -588,6 +673,226 @@ class Opower:
                         )
                     )
         return forecasts
+
+    async def async_get_bills(self, count_per_billing_account: int = 25) -> list[Bill]:
+        """Get completed bills, newest first.
+
+        Bill-level usage charges apply to the complete bill. Segment current
+        amounts and service quantities remain separate so consumers do not
+        accidentally attribute a multi-service bill total to one account.
+        Up to `count_per_billing_account` bills are returned for each billing
+        account. Older history is not returned. Results are best-effort:
+        failures for one customer do not prevent returning bills for others,
+        and an empty list can also mean the completed-bills endpoint is
+        unavailable or unauthorized.
+        """
+        if count_per_billing_account < 1:
+            raise ValueError("count_per_billing_account must be greater than zero")
+        accounts = await self.async_get_accounts()
+        tz = await aiozoneinfo.async_get_time_zone(self.utility.timezone())
+        account_map = {account.uuid: account for account in accounts}
+
+        query = """
+        query GetBills($last: Int) {
+          billingAccountsConnection(first: 100) {
+            pageInfo { hasNextPage }
+            edges {
+              node {
+                urn
+                bills(last: $last, orderBy: ASCENDING) {
+                  billDate
+                  timeInterval
+                  usageCharges { value }
+                  segments {
+                    serviceAgreement { uuid utilityId serviceType }
+                    currentAmount { value }
+                    serviceQuantities {
+                      unit
+                      serviceQuantityIdentifier
+                      serviceQuantity { value }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+
+        bills: list[Bill] = []
+        bills_by_urn: dict[tuple[str, date, datetime, datetime], Bill] = {}
+        skipped_bill_count = 0
+        for customer in await self._async_get_customers():
+            customer_accounts = [account for account in accounts if account.customer.uuid == customer["uuid"]]
+            accounts_by_utility_id: dict[str, list[Account]] = {}
+            for account in customer_accounts:
+                for identifier in self._normalized_account_identifiers(
+                    account,
+                    account_identifiers=(account.utility_account_id,),
+                    utility_account_keys=(
+                        "utilityAccountId",
+                        "utilityAccountId2",
+                        "preferredUtilityAccountId",
+                    ),
+                ):
+                    accounts_by_utility_id.setdefault(identifier, []).append(account)
+            try:
+                result = await self._async_post_graphql(
+                    query,
+                    self._get_headers(customer["uuid"]),
+                    {"last": count_per_billing_account},
+                )
+            except ApiException as err:
+                _LOGGER.debug("Ignoring GraphQL completed bills error: %s", err)
+                continue
+
+            data = _as_dict(_as_dict(result).get("data"))
+            connection = _as_dict(data.get("billingAccountsConnection"))
+            if not self._graphql_connection_is_complete(connection):
+                _LOGGER.debug("GraphQL completed bills response has additional billing accounts")
+
+            for edge in _as_dict_list(connection.get("edges")):
+                billing_account = _as_dict(edge.get("node"))
+                billing_account_urn = str(billing_account.get("urn") or "").strip() or None
+                for raw_bill in _as_dict_list(billing_account.get("bills")):
+                    bill = self._parse_completed_bill(
+                        raw_bill,
+                        tz,
+                        account_map,
+                        accounts_by_utility_id,
+                    )
+                    if bill is None:
+                        skipped_bill_count += 1
+                        continue
+                    if billing_account_urn is None:
+                        bills.append(bill)
+                    else:
+                        bills_by_urn[
+                            (
+                                billing_account_urn,
+                                bill.bill_date,
+                                bill.start_time,
+                                bill.end_time,
+                            )
+                        ] = bill
+        bills.extend(bills_by_urn.values())
+        self._warn_completed_bill_failures(
+            bills,
+            skipped_bill_count,
+        )
+        return sorted(
+            bills,
+            key=lambda bill: (bill.bill_date, bill.end_time),
+            reverse=True,
+        )
+
+    def _warn_completed_bill_failures(
+        self,
+        bills: list[Bill],
+        skipped_bill_count: int,
+    ) -> None:
+        """Warn when failures make a completed-bill result indistinguishable from no data."""
+        if bills or not skipped_bill_count or self._warned_no_completed_bills:
+            return
+        _LOGGER.warning(
+            "No completed bills returned; %s bill(s) could not be parsed or mapped safely",
+            skipped_bill_count,
+        )
+        self._warned_no_completed_bills = True
+
+    @staticmethod
+    def _completed_bill_account(
+        agreement: dict[str, Any],
+        account_map: dict[str, Account],
+        accounts_by_utility_id: dict[str, list[Account]],
+    ) -> Account | None:
+        """Map a bill segment's service agreement to exactly one account."""
+        account = account_map.get(str(agreement.get("uuid") or ""))
+        if account is not None:
+            return account
+        candidates_by_uuid: dict[str, Account] = {}
+        for identifier in Opower._graphql_identifiers(agreement, ("utilityId",)):
+            for candidate in accounts_by_utility_id.get(identifier, []):
+                candidates_by_uuid[candidate.uuid] = candidate
+        candidates = list(candidates_by_uuid.values())
+        if agreement.get("serviceType"):
+            candidates = [candidate for candidate in candidates if Opower._matches_meter_type(agreement, candidate.meter_type)]
+        return candidates[0] if len(candidates) == 1 else None
+
+    def _completed_bill_quantity(self, raw_quantity: dict[str, Any]) -> BillServiceQuantity:
+        """Parse one completed bill service quantity."""
+        raw_unit = raw_quantity.get("unit")
+        unit: UnitOfMeasure | None = None
+        if raw_unit is not None:
+            unit_value = str(raw_unit).upper()
+            unit_value = _COMPLETED_BILL_UNIT_ALIASES.get(unit_value, unit_value)
+            try:
+                unit = UnitOfMeasure(unit_value)
+            except ValueError:
+                _LOGGER.debug("Unknown completed bill unit of measure: %s", raw_unit)
+        identifier = raw_quantity.get("serviceQuantityIdentifier")
+        return BillServiceQuantity(
+            unit_of_measure=unit,
+            service_quantity_identifier=str(identifier) if identifier is not None else None,
+            value=_get_optional_value(raw_quantity.get("serviceQuantity")),
+        )
+
+    def _parse_completed_bill(
+        self,
+        raw_bill: dict[str, Any],
+        tz: ZoneInfo,
+        account_map: dict[str, Account],
+        accounts_by_utility_id: dict[str, list[Account]],
+    ) -> Bill | None:
+        """Parse one completed bill only when every segment maps safely."""
+        start_time, end_time = _parse_time_interval(raw_bill.get("timeInterval"), tz)
+        bill_date_value = raw_bill.get("billDate")
+        if start_time is None or end_time is None or not bill_date_value:
+            _LOGGER.debug("Ignoring completed bill with invalid dates")
+            return None
+        try:
+            bill_date_text = str(bill_date_value)
+            bill_date = date.fromisoformat(bill_date_text.split("T", 1)[0])
+        except ValueError:
+            _LOGGER.debug("Ignoring completed bill with invalid bill date")
+            return None
+        segments: list[BillSegment] = []
+        for raw_segment in _as_dict_list(raw_bill.get("segments")):
+            agreement = raw_segment.get("serviceAgreement") or {}
+            if not isinstance(agreement, dict):
+                agreement = {}
+            account = self._completed_bill_account(
+                agreement,
+                account_map,
+                accounts_by_utility_id,
+            )
+            if account is None:
+                _LOGGER.debug(
+                    "Ignoring completed bill dated %s because a segment cannot be mapped to an account",
+                    bill_date,
+                )
+                return None
+            segments.append(
+                BillSegment(
+                    account=account,
+                    current_amount=_get_optional_value(raw_segment.get("currentAmount")),
+                    service_quantities=[
+                        self._completed_bill_quantity(raw_quantity)
+                        for raw_quantity in _as_dict_list(raw_segment.get("serviceQuantities"))
+                    ],
+                )
+            )
+
+        if not segments:
+            _LOGGER.debug("Ignoring completed bill dated %s without segments", bill_date)
+            return None
+        return Bill(
+            bill_date=bill_date,
+            start_time=start_time,
+            end_time=end_time,
+            usage_charges=_get_optional_value(raw_bill.get("usageCharges")),
+            segments=segments,
+        )
 
     async def _async_get_customers(self) -> list[Any]:
         """Get customers associated to the user."""
@@ -1064,34 +1369,34 @@ class Opower:
             for read in result["reads"]
         ]
 
-    def _normalized_account_identifiers(self, account: Account) -> set[str]:
+    def _normalized_account_identifiers(
+        self,
+        account: Account,
+        *,
+        account_identifiers: tuple[str | None, ...] | None = None,
+        utility_account_keys: tuple[str, ...] = (
+            "uuid",
+            "utilityAccountId",
+            "utilityAccountId2",
+            "preferredUtilityAccountId",
+            "servicePointId",
+        ),
+    ) -> set[str]:
         """Return account identifiers in the forms used by Opower APIs."""
-        identifiers = {
-            identifier
-            for identifier in (
+        if account_identifiers is None:
+            account_identifiers = (
                 account.uuid,
                 account.utility_account_id,
                 account.id,
             )
-            if identifier
-        }
+        identifiers = {str(identifier) for identifier in account_identifiers if identifier}
         for customer in self._customers:
             if str(customer.get("uuid", "")) != account.customer.uuid:
                 continue
             for utility_account in customer.get("utilityAccounts", []):
                 if str(utility_account.get("uuid", "")) != account.uuid:
                     continue
-                identifiers |= {
-                    str(utility_account[key])
-                    for key in (
-                        "uuid",
-                        "utilityAccountId",
-                        "utilityAccountId2",
-                        "preferredUtilityAccountId",
-                        "servicePointId",
-                    )
-                    if utility_account.get(key) is not None
-                }
+                identifiers |= {str(utility_account[key]) for key in utility_account_keys if utility_account.get(key)}
         return identifiers | {identifier.lstrip("0") or "0" for identifier in identifiers}
 
     @staticmethod

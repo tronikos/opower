@@ -6,6 +6,32 @@ A Python library and command-line tool for getting historical and forecasted usa
 
 This library is used by the [Opower integration in Home Assistant](https://www.home-assistant.io/integrations/opower/).
 
+## Completed bills
+
+`Opower.async_get_bills()` returns completed bills, newest first, with a default
+limit of 25 per billing account. Bill-level `usage_charges` remain separate from
+each service agreement's `current_amount` and service quantities because a bill
+can cover more than one utility account. Missing values are returned as `None`;
+the library does not estimate or distribute bill totals across daily or interval
+usage. A bill is omitted when any of its segments cannot be mapped safely to a
+known account. Segments can repeat an account. Results are best-effort: a
+customer-specific request failure does not discard other customers' bills, and
+an empty result can also mean the completed-bills endpoint is unavailable or
+unauthorized.
+
+Use `async_get_cost_reads(account, AggregateType.BILL)` for the utility's existing
+per-account billing cost series. Use `async_get_bills()` when the distinct
+GraphQL bill totals and service-agreement quantities are needed.
+Run `python -m opower --bills` to inspect completed bills from the command line.
+This mode ignores other data-output options and cannot be combined with `--csv`.
+
+On net-metered accounts, energy charges may be deferred to an annual true-up.
+In that case, `usage_charges` can be `None` on monthly bills and
+`current_amount` can contain only the amount invoiced that month, such as a base
+charge. Neither value should be treated as the cost of energy used. Use
+`async_get_cost_reads(account, AggregateType.BILL)` when that per-account cost
+series is available.
+
 ## Supported Utilities
 
 - AES Indiana

@@ -5,6 +5,9 @@ from .helpers import create_cookie_jar
 from .opower import (
     Account,
     AggregateType,
+    Bill,
+    BillSegment,
+    BillServiceQuantity,
     CostRead,
     Forecast,
     MeterType,
@@ -22,6 +25,9 @@ from .utilities.base import MfaHandlerBase
 __all__ = [
     "Account",
     "AggregateType",
+    "Bill",
+    "BillSegment",
+    "BillServiceQuantity",
     "CannotConnect",
     "CostRead",
     "Forecast",

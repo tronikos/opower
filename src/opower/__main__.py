@@ -1,4 +1,4 @@
-# ruff: noqa: T201, ASYNC230, ASYNC250, PLR0915
+# ruff: noqa: T201, ASYNC230, ASYNC250, PLR0912, PLR0915
 """Demo usage of Opower library."""
 
 import argparse
@@ -110,7 +110,17 @@ async def _main() -> None:
         help="If true, fetches usage-only data from the realtime API. Not all utilities support the realtime API.",
         action="store_true",
     )
+    parser.add_argument(
+        "--bills",
+        help=(
+            "Fetch completed bills instead of forecast and historical data. "
+            "Other data-output options are ignored; cannot be combined with --csv."
+        ),
+        action="store_true",
+    )
     args = parser.parse_args()
+    if args.bills and args.csv:
+        parser.error("--bills cannot be combined with --csv")
 
     logging.basicConfig(level=logging.DEBUG - args.verbose + 1 if args.verbose > 0 else logging.INFO)
 
@@ -186,6 +196,11 @@ async def _main() -> None:
                 await opower.async_login()
         except InvalidAuth:
             logging.exception("Login failed")
+            return
+
+        if args.bills:
+            for bill in await opower.async_get_bills():
+                print("\nCompleted bill:", bill)
             return
 
         if not args.csv:
