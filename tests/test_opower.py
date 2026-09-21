@@ -386,7 +386,14 @@ async def test_five_minute_read_resolution(
             usage_only: bool = False,
         ) -> tuple[list[dict[str, object]], bool]:
             calls.append(aggregate_type)
-            return [{"start": start_date, "end": end_date, "usage_only": usage_only}], False
+            return [
+                {
+                    "startTime": start_date.isoformat() if start_date else None,
+                    "start": start_date,
+                    "end": end_date,
+                    "usage_only": usage_only,
+                }
+            ], False
 
         monkeypatch.setattr(opower, "_async_get_customers", fake_get_customers)
         monkeypatch.setattr(opower, "_async_fetch", fake_async_fetch)
@@ -3355,3 +3362,88 @@ def test_supported_utility_names_are_sorted_and_unique() -> None:
     assert len(names) == len(set(names))
     assert len(names) == len(get_supported_utilities())
     assert "Pacific Gas and Electric Company (PG&E)" in names
+
+
+@pytest.mark.asyncio
+async def test_batches_do_not_duplicate_reads_at_a_dst_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Overlapping reads at a batch boundary must be returned once.
+
+    The server treats endDate as a fixed 24 hour span, so a batch that ends on
+    the 23 hour day of a spring forward DST change returns one read past the
+    requested window. That read is the first read of the next batch, so without
+    de-duplication the hour is counted twice.
+    """
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(session, "pge", username="test", password="test")  # noqa: S106
+
+        async def fake_async_fetch(
+            account: Account,
+            aggregate_type: AggregateType,
+            start_date: Any = None,
+            end_date: Any = None,
+            usage_only: bool = False,
+        ) -> tuple[list[dict[str, Any]], bool]:
+            # Newest batch starts at the seam; the older batch overshoots into it.
+            if start_date.date() == date(2026, 3, 9):
+                return [{"startTime": "2026-03-09T00:00:00-07:00"}], False
+            return [
+                {"startTime": "2026-03-08T00:00:00-08:00"},
+                {"startTime": "2026-03-09T00:00:00-07:00"},
+            ], False
+
+        monkeypatch.setattr(opower, "_async_fetch", fake_async_fetch)
+
+        reads = await opower._async_get_dated_data(
+            _elec_account(),
+            AggregateType.HOUR,
+            datetime(2026, 2, 22),
+            datetime(2026, 4, 3),
+        )
+
+        start_times = [read["startTime"] for read in reads]
+        assert start_times == sorted(start_times)
+        assert len(start_times) == len(set(start_times))
+        assert start_times.count("2026-03-09T00:00:00-07:00") == 1
+
+
+@pytest.mark.asyncio
+async def test_last_batch_of_one_day_is_still_fetched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A trailing one day batch must be requested, not dropped.
+
+    The requested window is inclusive of the batch's end day, so when the range
+    start lands exactly one day before a batch boundary the remaining batch is a
+    single day wide. Treating that as an empty range dropped the first day.
+    """
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(session, "pge", username="test", password="test")  # noqa: S106
+
+        windows: list[tuple[date, date]] = []
+
+        async def fake_async_fetch(
+            account: Account,
+            aggregate_type: AggregateType,
+            start_date: Any = None,
+            end_date: Any = None,
+            usage_only: bool = False,
+        ) -> tuple[list[dict[str, Any]], bool]:
+            windows.append((start_date.date(), end_date.date()))
+            return [{"startTime": start_date.isoformat()}], False
+
+        monkeypatch.setattr(opower, "_async_fetch", fake_async_fetch)
+
+        # HOUR batches are 26 days, so asking for 26 days leaves a one day tail.
+        await opower._async_get_dated_data(
+            _elec_account(),
+            AggregateType.HOUR,
+            datetime(2026, 7, 5),
+            datetime(2026, 7, 31),
+        )
+
+        assert windows == [
+            (date(2026, 7, 6), date(2026, 8, 1)),
+            (date(2026, 7, 5), date(2026, 7, 5)),
+        ]

@@ -1844,12 +1844,16 @@ class Opower:
         # until we reach start or there is no fetched data
         # (non bill data are available up to 3 years ago).
         result: list[Any] = []
+        seen_start_times: set[Any] = set()
         req_end = end
         while True:
             req_start = start
             if max_request_days is not None:
                 req_start = max(start, req_end.shift(days=-max_request_days))
-            if req_start >= req_end:
+            # req_start == req_end is a valid single day request: the window is
+            # inclusive of req_end's day, so the last batch of a range whose
+            # start lands exactly one day before a batch boundary is one day wide.
+            if req_start > req_end:
                 return result
             reads, from_dss_bills = await self._async_fetch(account, aggregate_type, req_start, req_end, usage_only)
             if from_dss_bills:
@@ -1859,7 +1863,13 @@ class Opower:
                 return reads
             if not reads:
                 return result
-            result = reads + result
+            # A batch can overlap the one after it: the server treats endDate as a
+            # fixed 24 hour span, so on the 23 hour day of a spring forward DST
+            # change it returns one read past the requested window, which is the
+            # first read of the next batch. Keep the copy from the later batch.
+            new_reads = [read for read in reads if read["startTime"] not in seen_start_times]
+            seen_start_times.update(read["startTime"] for read in new_reads)
+            result = new_reads + result
             req_end = req_start.shift(days=-1)
 
     async def _async_fetch_dss_bills(self) -> list[Any]:
