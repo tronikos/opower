@@ -51,6 +51,7 @@ class EvergyLoginHandler:
         self.interactionId: str
         self.flowId: str
         self.ID: str
+        self.new_flow: bool = False
 
     async def get_auth_data(self) -> None:
         """Parse davinci widget for api data."""
@@ -224,9 +225,17 @@ class EvergyLoginHandler:
             data = await resp.json()
             self.ID = data["id"]
             self.connectionId = data["connectionId"]
+            """Check to see if this login flow retrieves access_token"""
+            self.access_token = data.get("access_token")
+            if self.access_token is not None:
+                self.new_flow = True
 
     async def get_new_connection_cookie(self) -> None:
         """Set complete to generate cookie."""
+        """Exit early if access_token retrieved in prior step."""
+        if self.new_flow:
+            return
+
         login_set_cookie_url = (
             self.auth_data["api_root"]
             + "/"
@@ -258,6 +267,10 @@ class EvergyLoginHandler:
 
     async def get_new_access_token(self) -> None:
         """Set cookie and generate new access_token."""
+        """Exit early if access_token retrieved in prior step."""
+        if self.new_flow:
+            return
+
         login_set_cookie_url = (
             self.auth_data["api_root"]
             + "/"
