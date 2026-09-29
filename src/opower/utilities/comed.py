@@ -12,8 +12,7 @@ class ComEd(Exelon, UtilityBase):
         """Distinct recognizable name of the utility."""
         return "Commonwealth Edison (ComEd)"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         return "cec"
 
@@ -26,3 +25,13 @@ class ComEd(Exelon, UtilityBase):
     def login_domain() -> str:
         """Return the domain that hosts the login page."""
         return "secure.comed.com"
+
+    @staticmethod
+    def eu_domain() -> str:
+        """Return the azure authentication domain for this utility."""
+        return "eudapi.comed.com"
+
+    @staticmethod
+    def mobile_client() -> tuple[str, str]:
+        """Return the client id and mobile id pair used by this utility."""
+        return "b587ed2d-28a5-462c-8c1f-835f9d73f7c3", "msauth.com.comed.mobile"

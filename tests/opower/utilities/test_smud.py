@@ -87,3 +87,22 @@ class TestSMUDOktaResponseSamlResponseValueParser(unittest.TestCase):
         assert result is not None
         self.assertEqual("PD94b", result[0:5])
         self.assertEqual("uc2U+", result[-5:])
+
+    def test_parse_is_independent_of_attribute_order(self) -> None:
+        """The value must be looked up by name, not by its position in the tag."""
+        for html in (
+            '<input name="SAMLResponse" type="hidden" value="TOKEN"/>',
+            '<input name="SAMLResponse" value="TOKEN" type="hidden"/>',
+            '<input type="hidden" name="SAMLResponse" value="TOKEN"/>',
+            '<input name="SAMLResponse" value="TOKEN"/>',
+        ):
+            with self.subTest(html=html):
+                parser = SMUDOktaResponseSamlResponseValueParser()
+                parser.feed(html)
+                self.assertEqual("TOKEN", parser.saml_response)
+
+    def test_parse_without_saml_response(self) -> None:
+        """A page with no SAMLResponse yields None rather than raising."""
+        parser = SMUDOktaResponseSamlResponseValueParser()
+        parser.feed("<html><body>Login failed</body></html>")
+        self.assertIsNone(parser.saml_response)

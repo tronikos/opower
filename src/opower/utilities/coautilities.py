@@ -1,5 +1,6 @@
 """City of Austin Utilities."""
 
+import logging
 from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -7,21 +8,47 @@ import aiohttp
 from yarl import URL
 
 from ..const import USER_AGENT
-from ..exceptions import InvalidAuth
+from ..exceptions import CannotConnect, InvalidAuth
 from .base import UtilityBase
 from .helpers import get_form_action_url_and_hidden_inputs
+
+_LOGGER = logging.getLogger(__name__)
+
+
+async def _post_form(
+    session: aiohttp.ClientSession,
+    url: str,
+    data: dict[str, str],
+    expected_fields: set[str],
+) -> tuple[str, dict[str, str]]:
+    """POST a form and return the action and hidden inputs of the form in the reply."""
+    async with session.post(
+        url,
+        headers={"User-Agent": USER_AGENT},
+        data=data,
+        raise_for_status=True,
+    ) as response:
+        html = await response.text()
+    action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(html)
+    if set(hidden_inputs.keys()) != expected_fields:
+        raise CannotConnect(f"Expected form fields {sorted(expected_fields)}, got {sorted(hidden_inputs)}")
+    return action_url, hidden_inputs
 
 
 class COAUtilities(UtilityBase):
     """City of Austin Utilities."""
+
+    def __init__(self) -> None:
+        """Initialize."""
+        super().__init__()
+        self._web_user_id: str | None = None
 
     @staticmethod
     def name() -> str:
         """Distinct recognizable name of the utility."""
         return "City of Austin Utilities"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         return "coa"
 
@@ -33,13 +60,22 @@ class COAUtilities(UtilityBase):
         """
         return "America/Chicago"
 
+    def customer_uuid(self) -> str | None:
+        """Return the webUserId captured during login."""
+        return self._web_user_id
+
     @staticmethod
     def is_dss() -> bool:
         """Check if Utility using DSS version of the portal."""
         return True
 
     @staticmethod
+    def uses_bill_trends_for_reads() -> bool:
+        """COA DSS uses SAML-only sessions so DataBrowser-v1 is inaccessible via Bearer token."""
+        return True
+
     async def async_login(
+        self,
         session: aiohttp.ClientSession,
         username: str,
         password: str,
@@ -120,18 +156,11 @@ class COAUtilities(UtilityBase):
         ) as response:
             html = await response.text()
             action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(html)
-            assert set(hidden_inputs.keys()) == {"RelayState", "SAMLResponse"}
+            if set(hidden_inputs.keys()) != {"RelayState", "SAMLResponse"}:
+                raise CannotConnect("Unexpected SAML response form fields")
 
         # Getting Open Token from opower
-        async with session.post(
-            action_url,
-            headers={"User-Agent": USER_AGENT},
-            data=hidden_inputs,
-            raise_for_status=True,
-        ) as response:
-            html = await response.text()
-            action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(html)
-            assert set(hidden_inputs.keys()) == {"OCIS_REQ_SP"}
+        action_url, hidden_inputs = await _post_form(session, action_url, hidden_inputs, {"OCIS_REQ_SP"})
 
         session.cookie_jar.update_cookies({"dssPortalCW": "1"})
 
@@ -145,7 +174,8 @@ class COAUtilities(UtilityBase):
             await response.text()
             parsed_url = urlparse(str(response.url))
             parsed_query = parse_qs(parsed_url.query)
-            assert "token" in parsed_query
+            if "token" not in parsed_query:
+                raise CannotConnect("No token in the City of Austin SSO redirect")
             token = parsed_query["token"][0]
 
         # Finally exchange this token to Auth token
@@ -156,4 +186,44 @@ class COAUtilities(UtilityBase):
             raise_for_status=True,
         ) as response:
             content = await response.json()
-            return str(content["sessionToken"])
+            session_token = str(content["sessionToken"])
+
+        # After a successful OTT exchange, call user-details with the Bearer token.
+        # Post-SSO this endpoint returns the real user object including webUserId
+        # (a UUID). We store it so _async_get_customers can include it as
+        # urn:opower:customer:uuid in the Opower-Selected-Entities header —
+        # the /customers endpoint requires at least one customer UUID or it
+        # returns 403 EMPTY_AUTHORIZED_CUSTOMERS_LIST.
+        async with session.get(
+            "https://dss-coa.opower.com/webcenter/edge/apis/identity-management-v1/cws/v1/auth/coa/user-details",
+            headers={
+                "User-Agent": USER_AGENT,
+                "Authorization": f"Bearer {session_token}",
+                "Opower-Selected-Entities": '["urn:session:account:provider:dsst"]',
+                "Opower-Auth-Mode": "sso",
+            },
+        ) as user_response:
+            if user_response.status == 200:
+                user_data = await user_response.json()
+                self._web_user_id = user_data.get("webUserId")
+                _LOGGER.debug("user-details webUserId=%s", self._web_user_id)
+            else:
+                _LOGGER.debug("user-details returned status=%s", user_response.status)
+
+        # Sync user details to establish customer session context on the server.
+        # The browser does this immediately after login.
+        async with session.put(
+            "https://dss-coa.opower.com/webcenter/edge/apis/customer-sync-v1/cws/v1/coa/sync",
+            headers={
+                "User-Agent": USER_AGENT,
+                "Authorization": f"Bearer {session_token}",
+                "Opower-Selected-Entities": '["urn:session:account:provider:dsst"]',
+                "Opower-Auth-Mode": "sso",
+            },
+            json={"operations": [{"type": "USER_DETAILS"}]},
+        ) as sync_response:
+            sync_text = await sync_response.text()
+            _LOGGER.debug("customer-sync status=%s body=%s", sync_response.status, sync_text)
+            sync_response.raise_for_status()
+
+        return session_token

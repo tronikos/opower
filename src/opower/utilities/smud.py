@@ -22,19 +22,18 @@
 
 import logging
 from html.parser import HTMLParser
-from typing import Any, ClassVar
+from typing import Any
 from urllib.parse import parse_qs
 
 from aiohttp import ClientResponse, ClientSession
 from aiohttp.client_exceptions import ClientResponseError
 from yarl import URL
 
-import opower
-
 from ..const import USER_AGENT
+from ..exceptions import CannotConnect, InvalidAuth
 from .base import UtilityBase
 
-_LOGGER = logging.getLogger(__file__)
+_LOGGER = logging.getLogger(__name__)
 
 
 class SMUDLoginParser(HTMLParser):
@@ -90,24 +89,32 @@ class SMUDOktaResponseSamlResponseValueParser(HTMLParser):
     """HTML parser to extract SAMLResponse token from OKTA response for Opower SSO."""
 
     # <input name="SAMLResponse" type="hidden" value="..."/>
+    def __init__(self) -> None:
+        """Initialize."""
+        super().__init__()
+        self.saml_response: str | None = None
+
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Try to extract the SAMLResponse value."""
-        if tag == "input":
-            for name, value in attrs:
-                if name == "name" and value == "SAMLResponse":
-                    self.saml_response = attrs[2][1]
+        if tag == "input" and ("name", "SAMLResponse") in attrs:
+            self.saml_response = next((value for name, value in attrs if name == "value"), None)
 
 
 class SMUD(UtilityBase):
     """Sacramento Municipal Utility District (SMUD)."""
+
+    def __init__(self) -> None:
+        """Initialize."""
+        super().__init__()
+        # Store cookies so we can log what is new after each request.
+        self.cookies: dict[str, list[str]] = {}
 
     @staticmethod
     def name() -> str:
         """Distinct recognizable name of the utility."""
         return "Sacramento Municipal Utility District (SMUD)"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         return "smud"
 
@@ -116,8 +123,8 @@ class SMUD(UtilityBase):
         """Return the timezone."""
         return "America/Los_Angeles"
 
-    @staticmethod
     async def async_login(
+        self,
         session: ClientSession,
         username: str,
         password: str,
@@ -136,7 +143,6 @@ class SMUD(UtilityBase):
             except ClientResponseError:
                 _LOGGER.debug("Failed to login to SMUD with existing cookies")
                 session.cookie_jar.clear()
-                pass
 
         smud_login_page_url = "https://myaccount.smud.org/"
 
@@ -148,7 +154,7 @@ class SMUD(UtilityBase):
             raise_for_status=True,
         )
 
-        await SMUD.log_response(myaccount_response, session)
+        await self.log_response(myaccount_response, session)
 
         # Parse the verification token which will be used during login.
         # NB: Although the response cookies contain a `__RequestVerificationToken`, it does not match
@@ -172,11 +178,11 @@ class SMUD(UtilityBase):
             raise_for_status=True,
         )
 
-        await SMUD.log_response(login_response, session)
+        await self.log_response(login_response, session)
 
         login_response_body = await login_response.text()
         if "could not be authenticated" in login_response_body:
-            raise opower.InvalidAuth
+            raise InvalidAuth("Username/Password are invalid")
 
         smud_energyusage_page_url = "https://myaccount.smud.org/manage/opowerresidential/energyusage"
 
@@ -189,9 +195,9 @@ class SMUD(UtilityBase):
             raise_for_status=True,
         )
 
-        await SMUD.log_response(energyusage_response, session)
+        await self.log_response(energyusage_response, session)
 
-        okta_login_2_url = SMUD.get_okta_url_from_response_redirect(energyusage_response)
+        okta_login_2_url = self.get_okta_url_from_response_redirect(energyusage_response)
 
         _LOGGER.debug("Fetching second OKTA login page: %s", okta_login_2_url)
 
@@ -201,12 +207,13 @@ class SMUD(UtilityBase):
             raise_for_status=True,
         )
 
-        await SMUD.log_response(smud_okta_response, session)
+        await self.log_response(smud_okta_response, session)
 
         parser = SMUDOktaResponseSamlResponseValueParser()
         parser.feed(await smud_okta_response.text())
         saml_response = parser.saml_response
-        assert saml_response
+        if not saml_response:
+            raise CannotConnect("Could not find the SAMLResponse in the SMUD Okta response")
 
         _LOGGER.debug(
             "Parsed SAMLResponse: %s...%s (%d characters)",
@@ -225,7 +232,7 @@ class SMUD(UtilityBase):
             raise_for_status=True,
         )
 
-        await SMUD.log_response(smud_ssotransition_response, session)
+        await self.log_response(smud_ssotransition_response, session)
 
         # This is the action of the #appForm form in the smud_okta_response HTML.
         opower_sso_url = "https://idcs-8d184356671642c58ea38b42e6420ed2.identity.oraclecloud.com/fed/v1/sp/sso"
@@ -242,7 +249,7 @@ class SMUD(UtilityBase):
             raise_for_status=True,
             allow_redirects=True,
         )
-        await SMUD.log_response(opower_sso_response, session)
+        await self.log_response(opower_sso_response, session)
 
         login_parser.feed(await opower_sso_response.text())
         ocis_req_sp = login_parser.ocis_req_sp
@@ -267,7 +274,7 @@ class SMUD(UtilityBase):
             max_redirects=10,
         )
 
-        await SMUD.log_response(identity_oraclecloud_login_response, session)
+        await self.log_response(identity_oraclecloud_login_response, session)
 
         okta_saml_request_url = identity_oraclecloud_login_response.real_url
         _LOGGER.debug(
@@ -277,8 +284,8 @@ class SMUD(UtilityBase):
 
         return
 
-    @classmethod
-    def get_okta_url_from_response_redirect(cls, energyusage_response: ClientResponse) -> str:
+    @staticmethod
+    def get_okta_url_from_response_redirect(energyusage_response: ClientResponse) -> str:
         """Get the OKTA URL to open next from the last redirect of the previous response."""
         # https://smud.okta.com/login/sessionCookieRedirect
         #   ?token=20111...6QJMn
@@ -290,11 +297,7 @@ class SMUD(UtilityBase):
 
         return str(query_parts["redirectUrl"][0])
 
-    # Store cookies so we can log what is new after each request.
-    cookies: ClassVar[dict[str, list[str]]] = {}
-
-    @staticmethod
-    async def log_response(response: ClientResponse, session: ClientSession) -> None:
+    async def log_response(self, response: ClientResponse, session: ClientSession) -> None:
         """Log any redirects and new cookies. Log full HTML when -vv is set."""
         host = response.host  # Is this the request URL or the final redirected url?
 
@@ -306,13 +309,13 @@ class SMUD(UtilityBase):
 
         if len(session.cookie_jar.filter_cookies(response.url)) > 0:
             response_cookie_names = list(session.cookie_jar.filter_cookies(response.url).keys())
-            last_cookie_names = SMUD.cookies.get(host, [])
+            last_cookie_names = self.cookies.get(host, [])
             response_new_cookie_names = set(response_cookie_names) - set(last_cookie_names)
 
             if len(response_new_cookie_names) > 0:
                 _LOGGER.debug("Set new cookies: `%s`", "`, `".join(response_new_cookie_names))
 
-                SMUD.cookies[host] = last_cookie_names + response_cookie_names
+                self.cookies[host] = last_cookie_names + response_cookie_names
 
         response_html = await response.text()
         _LOGGER.log(logging.DEBUG - 1, "Response %s:", response.url)

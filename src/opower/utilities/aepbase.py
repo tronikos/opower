@@ -8,7 +8,7 @@ from typing import Any
 import aiohttp
 
 from ..const import USER_AGENT
-from ..exceptions import InvalidAuth
+from ..exceptions import CannotConnect, InvalidAuth
 
 
 class AEPLoginParser(HTMLParser):
@@ -43,13 +43,16 @@ class AEPLoginParser(HTMLParser):
 class AEPBase(ABC):
     """Base Abstract class for American Electric Power."""
 
-    _subdomain: str | None = None
+    def __init__(self) -> None:
+        """Initialize."""
+        super().__init__()
+        self._subdomain: str | None = None
 
-    @classmethod
-    def subdomain(cls) -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
-        assert cls._subdomain, "async_login not called"
-        return cls._subdomain
+        if not self._subdomain:
+            raise CannotConnect("async_login was not called before subdomain")
+        return self._subdomain
 
     @staticmethod
     def timezone() -> str:
@@ -61,9 +64,8 @@ class AEPBase(ABC):
     def hostname() -> str:
         """Return the hostname for login."""
 
-    @classmethod
     async def async_login(
-        cls,
+        self,
         session: aiohttp.ClientSession,
         username: str,
         password: str,
@@ -76,7 +78,7 @@ class AEPBase(ABC):
         login_parser = AEPLoginParser(username, password)
 
         # Get the login page and parse the ASP.Net Form Field that have generated names
-        usage_url = f"https://www.{cls.hostname()}/account/usage/"
+        usage_url = f"https://www.{self.hostname()}/account/usage/"
         async with session.get(
             usage_url,
             headers={"User-Agent": USER_AGENT},
@@ -103,11 +105,12 @@ class AEPBase(ABC):
             raise InvalidAuth(match.group(1).strip())
 
         match = re.search(r"https://([^.]*).opower.com", html)
-        assert match
-        cls._subdomain = match.group(1)
+        if not match:
+            raise CannotConnect("Could not find the opower.com subdomain on the AEP usage page")
+        self._subdomain = match.group(1)
 
         async with session.get(
-            f"https://www.{cls.hostname()}/account/oauth/ValidToken",
+            f"https://www.{self.hostname()}/account/oauth/ValidToken",
             headers={
                 "User-Agent": USER_AGENT,
                 "Accept": "application/json, text/javascript, */*; q=0.01",
@@ -117,4 +120,9 @@ class AEPBase(ABC):
             raise_for_status=True,
         ) as token_resp:
             token_data = await token_resp.json()
-            return str(token_data[0]["data"]["AccessToken"])
+            if not token_data or not isinstance(token_data, list) or not token_data:
+                raise InvalidAuth("Failed to retrieve access token from AEP")
+            data = token_data[0].get("data")
+            if not data or not data.get("AccessToken"):
+                raise InvalidAuth("Invalid token response structure from AEP")
+            return str(data["AccessToken"])

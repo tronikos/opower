@@ -12,8 +12,7 @@ class BGE(Exelon, UtilityBase):
         """Distinct recognizable name of the utility."""
         return "Baltimore Gas and Electric (BGE)"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         return "bgec"
 
@@ -21,3 +20,13 @@ class BGE(Exelon, UtilityBase):
     def login_domain() -> str:
         """Return the domain that hosts the login page."""
         return "secure.bge.com"
+
+    @staticmethod
+    def eu_domain() -> str:
+        """Return the azure authentication domain for this utility."""
+        return "eudapi.bge.com"
+
+    @staticmethod
+    def mobile_client() -> tuple[str, str]:
+        """Return the client id and mobile id pair used by this utility."""
+        return "202e1b60-9ba3-4e49-ab43-a1ebd438aa97", "msauth.com.exelon.mobile.bge"

@@ -6,7 +6,7 @@ import aiohttp
 from pyotp import TOTP
 
 from ..const import USER_AGENT
-from ..exceptions import InvalidAuth
+from ..exceptions import CannotConnect, InvalidAuth
 from .base import UtilityBase
 
 RETURN_URL = "/en/accounts-billing/my-account/energy-use"
@@ -20,8 +20,7 @@ class ConEd(UtilityBase):
         """Distinct recognizable name of the utility."""
         return "Consolidated Edison (ConEd)"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         return "cned"
 
@@ -45,16 +44,15 @@ class ConEd(UtilityBase):
         """Check if Utility supports realtime usage reads."""
         return True
 
-    @classmethod
     async def async_login(
-        cls,
+        self,
         session: aiohttp.ClientSession,
         username: str,
         password: str,
         login_data: dict[str, Any],
     ) -> str:
         """Login to the utility website."""
-        hostname = cls.hostname()
+        hostname = self.hostname()
         login_base = "https://www." + hostname + "/sitecore/api/ssc/ConEdWeb-Foundation-Login-Areas-LoginAPI/User/0"
         login_headers = {
             "User-Agent": USER_AGENT,
@@ -86,10 +84,10 @@ class ConEd(UtilityBase):
                 redirectUrl = result["authRedirectUrl"]
             elif result["newDevice"]:
                 if not result["noMfa"]:
-                    if not cls._totp_secret:
+                    if not self._totp_secret:
                         raise InvalidAuth("TOTP secret is required for MFA accounts")
 
-                    mfaCode = TOTP(cls._totp_secret).now()
+                    mfaCode = TOTP(self._totp_secret).now()
 
                     async with session.post(
                         login_base + "/VerifyFactor",
@@ -108,7 +106,8 @@ class ConEd(UtilityBase):
             else:
                 raise InvalidAuth("Login Failed")
 
-            assert redirectUrl
+            if not redirectUrl:
+                raise CannotConnect("ConEd login did not return a redirect URL")
             async with session.get(
                 redirectUrl,
                 headers={

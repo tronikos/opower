@@ -16,8 +16,7 @@ class BurbankWaterAndPower(UtilityBase):
         """Distinct recognizable name of the utility."""
         return "Burbank Water and Power (BWP)"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         return "bwp"
 
@@ -26,8 +25,8 @@ class BurbankWaterAndPower(UtilityBase):
         """Return the timezone."""
         return "America/Los_Angeles"
 
-    @staticmethod
     async def async_login(
+        self,
         session: aiohttp.ClientSession,
         username: str,
         password: str,

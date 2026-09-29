@@ -6,8 +6,35 @@ A Python library and command-line tool for getting historical and forecasted usa
 
 This library is used by the [Opower integration in Home Assistant](https://www.home-assistant.io/integrations/opower/).
 
+## Completed bills
+
+`Opower.async_get_bills()` returns completed bills, newest first, with a default
+limit of 25 per billing account. Bill-level `usage_charges` remain separate from
+each service agreement's `current_amount` and service quantities because a bill
+can cover more than one utility account. Missing values are returned as `None`;
+the library does not estimate or distribute bill totals across daily or interval
+usage. A bill is omitted when any of its segments cannot be mapped safely to a
+known account. Segments can repeat an account. Results are best-effort: a
+customer-specific request failure does not discard other customers' bills, and
+an empty result can also mean the completed-bills endpoint is unavailable or
+unauthorized.
+
+Use `async_get_cost_reads(account, AggregateType.BILL)` for the utility's existing
+per-account billing cost series. Use `async_get_bills()` when the distinct
+GraphQL bill totals and service-agreement quantities are needed.
+Run `python -m opower --bills` to inspect completed bills from the command line.
+This mode ignores other data-output options and cannot be combined with `--csv`.
+
+On net-metered accounts, energy charges may be deferred to an annual true-up.
+In that case, `usage_charges` can be `None` on monthly bills and
+`current_amount` can contain only the amount invoiced that month, such as a base
+charge. Neither value should be treated as the cost of energy used. Use
+`async_get_cost_reads(account, AggregateType.BILL)` when that per-account cost
+series is available.
+
 ## Supported Utilities
 
+- AES Indiana
 - American Electric Power (AEP) subsidiaries
   - AEP Ohio
   - AEP Texas
@@ -16,14 +43,14 @@ This library is used by the [Opower integration in Home Assistant](https://www.h
   - Kentucky Power
   - Public Service Company of Oklahoma (PSO)
   - Southwestern Electric Power Company (SWEPCO)
-- Arizona Public Service (APS)
 - Burbank Water and Power (BWP)
 - City of Austin Utilities
-- Consolidated Edison (ConEd)
+- Clark Public Utilities
+- Consolidated Edison (ConEd) and subsidiaries
   - Orange & Rockland Utilities (ORU)
 - Duquesne Light Company (DQE)
-- Enmax Energy
 - Evergy
+- Eversource
 - Exelon subsidiaries
   - Atlantic City Electric
   - Baltimore Gas and Electric (BGE)
@@ -32,17 +59,14 @@ This library is used by the [Opower integration in Home Assistant](https://www.h
   - PECO Energy Company (PECO)
   - Potomac Electric Power Company (Pepco)
 - Glendale Water and Power (GWP)
-- National Grid subsidiaries
-  - National Grid Massachusetts
-  - National Grid NY Long Island
-  - National Grid NY Metro
-  - National Grid NY Upstate
+- Northern Indiana Public Service Company (NIPSCO)
 - Pacific Gas & Electric (PG&E)
-- Portland General Electric (PGE)
 - Puget Sound Energy (PSE)
+- Rhode Island Energy (RIEnergy)
 - Sacramento Municipal Utility District (SMUD)
 - Seattle City Light (SCL)
 - Southern Maryland Electric Cooperative (SMECO)
+- Southwest Gas
 
 ## Contributing
 
@@ -84,7 +108,25 @@ pytest
 python -m opower --help
 # To output debug logs and API responses to a file run:
 python -m opower -vv 2> out.txt
+```
 
+Instead of passing credentials on the command line or typing them at the prompts,
+you can put them in the environment or in a `.env` file in the current directory:
+
+```sh
+OPOWER_UTILITY=pge
+OPOWER_USERNAME=user@example.com
+OPOWER_PASSWORD=secret
+# Only for utilities with TOTP-based MFA
+OPOWER_TOTP_SECRET=...
+# Only for utilities with interactive MFA, e.g. PG&E
+OPOWER_LOGIN_DATA_FILE=login_data.txt
+```
+
+Real environment variables take precedence over the `.env` file, and command line
+arguments take precedence over both.
+
+```sh
 # Build package
 python -m pip install build
 python -m build

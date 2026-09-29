@@ -11,8 +11,7 @@ class Oru(ConEd):
         """Distinct recognizable name of the utility."""
         return "Orange & Rockland Utilities (ORU)"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         return "oru"
 

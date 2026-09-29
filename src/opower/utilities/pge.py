@@ -45,6 +45,9 @@ class PgeMfaHandler(MfaHandlerBase):
         self._session = session
         self._password = password
         self._data = data
+        # async_get_mfa_options may legitimately return no options, in which
+        # case async_submit_mfa_code is called without a prior selection.
+        self._option_id: str | None = None
 
     async def async_get_mfa_options(self) -> dict[str, str]:
         """Return a dictionary of MFA options available to the user."""
@@ -149,8 +152,7 @@ class PGE(UtilityBase):
         """Distinct recognizable name of the utility."""
         return "Pacific Gas and Electric Company (PG&E)"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         return "pge"
 
@@ -159,8 +161,8 @@ class PGE(UtilityBase):
         """Return the timezone."""
         return "America/Los_Angeles"
 
-    @staticmethod
     async def async_login(
+        self,
         session: aiohttp.ClientSession,
         username: str,
         password: str,

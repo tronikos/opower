@@ -7,7 +7,7 @@ from typing import Any
 import aiohttp
 
 from ..const import USER_AGENT
-from ..exceptions import InvalidAuth
+from ..exceptions import CannotConnect, InvalidAuth
 from .base import UtilityBase
 
 
@@ -63,8 +63,7 @@ class PSE(UtilityBase):
         """Distinct recognizable name of the utility."""
         return "Puget Sound Energy (PSE)"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
         return "pse"
 
@@ -73,8 +72,8 @@ class PSE(UtilityBase):
         """Return the timezone."""
         return "America/Los_Angeles"
 
-    @staticmethod
     async def async_login(
+        self,
         session: aiohttp.ClientSession,
         username: str,
         password: str,
@@ -93,7 +92,8 @@ class PSE(UtilityBase):
         ) as resp:
             login_parser.feed(await resp.text())
 
-            assert login_parser.verification_token, "Failed to parse __RequestVerificationToken"
+            if not login_parser.verification_token:
+                raise CannotConnect("Failed to parse __RequestVerificationToken from the PSE login page")
 
         await session.post(
             "https://www.pse.com/api/pseauthentication/AsyncSignIn",
@@ -128,6 +128,7 @@ class PSE(UtilityBase):
         ) as resp:
             usage_parser.feed(await resp.text())
 
-            assert usage_parser.opower_access_token, "Failed to parse OPower bearer token"
+            if not usage_parser.opower_access_token:
+                raise CannotConnect("Failed to parse the Opower bearer token from the PSE usage page")
 
         return usage_parser.opower_access_token

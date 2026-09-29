@@ -8,10 +8,10 @@ from typing import Any
 import aiohttp
 
 from ..const import USER_AGENT
-from ..exceptions import InvalidAuth
+from ..exceptions import CannotConnect, InvalidAuth
 from .base import UtilityBase
 
-_LOGGER = logging.getLogger(__file__)
+_LOGGER = logging.getLogger(__name__)
 
 
 class EvergyDavinciWidgetParser(HTMLParser):
@@ -50,8 +50,8 @@ class EvergyLoginHandler:
         self.connectionId: str
         self.interactionId: str
         self.flowId: str
-        self.ID: str
         self.new_flow: bool = False
+        self.id: str
 
     async def get_auth_data(self) -> None:
         """Parse davinci widget for api data."""
@@ -69,7 +69,8 @@ class EvergyLoginHandler:
             parse_auth_data.feed(await resp.text())
             self.auth_data = parse_auth_data.data
 
-            assert self.auth_data, "Failed to get davinci widget data"
+            if not self.auth_data:
+                raise CannotConnect("Failed to get davinci widget data from the Evergy login page")
 
     async def get_sdktoken(self) -> None:
         """First get the access_token."""
@@ -112,7 +113,7 @@ class EvergyLoginHandler:
             raise_for_status=True,
         ) as resp:
             data = await resp.json()
-            self.ID = data["id"]
+            self.id = data["id"]
             self.connectionId = data["connectionId"]
             self.interactionId = data["interactionId"]
             self.flowId = data["flowId"]
@@ -139,14 +140,14 @@ class EvergyLoginHandler:
             },
             data=json.dumps(
                 {
-                    "id": self.ID,
+                    "id": self.id,
                     "eventName": "continue",
                 }
             ),
             raise_for_status=True,
         ) as resp:
             data = await resp.json()
-            self.ID = data["id"]
+            self.id = data["id"]
 
     async def submit_login_form(self, username: str, password: str) -> None:
         """Login to the utility website."""
@@ -170,7 +171,7 @@ class EvergyLoginHandler:
             },
             data=json.dumps(
                 {
-                    "id": self.ID,
+                    "id": self.id,
                     "nextEvent": {
                         "constructType": "skEvent",
                         "eventName": "continue",
@@ -191,13 +192,13 @@ class EvergyLoginHandler:
             raise_for_status=True,
         ) as resp:
             data = await resp.json()
-            """If the submitted login form returns a different flowId, then the username doesn't exist."""
-            if data["flowId"] != self.flowId :
+            # A different flowId in the reply means the username doesn't exist.
+            if data["flowId"] != self.flowId:
                 raise InvalidAuth("No such username. Login failed.")
-            """If the submitted login form returns the same ID, then the password isn't correct."""
-            if data["id"] == self.ID:
+            # The same id coming back means the password isn't correct.
+            if data["id"] == self.id:
                 raise InvalidAuth("Wrong password. Login failed.")
-            self.ID = data["id"]
+            self.id = data["id"]
 
     async def get_new_connection_id(self) -> None:
         """Retrieve new connection id."""
@@ -219,11 +220,11 @@ class EvergyLoginHandler:
                 "Content-Type": "application/json",
                 "Origin": "https://www.evergy.com",
             },
-            data=json.dumps({"id": self.ID, "eventName": "continue"}),
+            data=json.dumps({"id": self.id, "eventName": "continue"}),
             raise_for_status=True,
         ) as resp:
             data = await resp.json()
-            self.ID = data["id"]
+            self.id = data["id"]
             self.connectionId = data["connectionId"]
             """Check to see if this login flow retrieves access_token"""
             self.access_token = data.get("access_token")
@@ -257,13 +258,13 @@ class EvergyLoginHandler:
                 {
                     "eventName": "complete",
                     "parameters": {},
-                    "id": self.ID,
+                    "id": self.id,
                 }
             ),
             raise_for_status=True,
         ) as resp:
             data = await resp.json()
-            self.ID = data["id"]
+            self.id = data["id"]
 
     async def get_new_access_token(self) -> None:
         """Set cookie and generate new access_token."""
@@ -292,13 +293,13 @@ class EvergyLoginHandler:
                 {
                     "eventName": "complete",
                     "parameters": {},
-                    "id": self.ID,
+                    "id": self.id,
                 }
             ),
             raise_for_status=True,
         ) as resp:
             data = await resp.json()
-            self.ID = data["id"]
+            self.id = data["id"]
             self.access_token = data["access_token"]
 
     async def postprocessing_api(self) -> None:
@@ -319,49 +320,53 @@ class EvergyLoginHandler:
             await resp.json(content_type=None)
 
     async def login(self, username: str, password: str) -> None:
-        """First parse davinci widget for api data."""
-        await EvergyLoginHandler.get_auth_data(self)
-        """Get the access_token."""
-        await EvergyLoginHandler.get_sdktoken(self)
-        """Start the flow."""
-        await EvergyLoginHandler.start_flow(self)
-        """Retrieve submit form."""
-        await EvergyLoginHandler.get_login_form(self)
-        """Submit login form."""
-        await EvergyLoginHandler.submit_login_form(self, username, password)
-        """Retrieve new connection id."""
-        await EvergyLoginHandler.get_new_connection_id(self)
-        """Set complete to generate cookie."""
-        await EvergyLoginHandler.get_new_connection_cookie(self)
-        """Set cookie and generate new access_token."""
-        await EvergyLoginHandler.get_new_access_token(self)
-        """Postprocess url at Evergy to get access by cookie."""
-        await EvergyLoginHandler.postprocessing_api(self)
+        """Run the full davinci widget login flow."""
+        # Parse the davinci widget for api data.
+        await self.get_auth_data()
+        # Get the access_token.
+        await self.get_sdktoken()
+        # Start the flow.
+        await self.start_flow()
+        # Retrieve the submit form.
+        await self.get_login_form()
+        # Submit the login form.
+        await self.submit_login_form(username, password)
+        # Retrieve the new connection id.
+        await self.get_new_connection_id()
+        # Set complete to generate the cookie.
+        await self.get_new_connection_cookie()
+        # Set the cookie and generate a new access_token.
+        await self.get_new_access_token()
+        # Postprocess the url at Evergy to get access by cookie.
+        await self.postprocessing_api()
 
 
 class Evergy(UtilityBase):
     """Evergy."""
 
-    _subdomain: str | None = None
+    def __init__(self) -> None:
+        """Initialize."""
+        super().__init__()
+        self._subdomain: str | None = None
 
     @staticmethod
     def name() -> str:
         """Distinct recognizable name of the utility."""
         return "Evergy"
 
-    @staticmethod
-    def subdomain() -> str:
+    def subdomain(self) -> str:
         """Return the opower.com subdomain for this utility."""
-        assert Evergy._subdomain, "async_login not called"
-        return Evergy._subdomain
+        if not self._subdomain:
+            raise CannotConnect("async_login was not called before subdomain")
+        return self._subdomain
 
     @staticmethod
     def timezone() -> str:
         """Return the timezone."""
         return "America/Chicago"
 
-    @staticmethod
     async def async_login(
+        self,
         session: aiohttp.ClientSession,
         username: str,
         password: str,
@@ -378,9 +383,12 @@ class Evergy(UtilityBase):
             headers={"User-Agent": USER_AGENT},
             raise_for_status=False,
         ) as resp:
-            opower_access_token = resp.headers["jwt"].removeprefix("Bearer ")
-
-            assert opower_access_token, "Failed to parse OPower bearer token"
+            # The header is absent when the session was not established, so do
+            # not index into it blindly.
+            jwt_header = resp.headers.get("jwt", "")
+            opower_access_token = jwt_header.removeprefix("Bearer ")
+            if not opower_access_token:
+                raise CannotConnect(f"Failed to parse the Opower bearer token from Evergy (status {resp.status})")
 
         async with session.get(
             "https://www.evergy.com/sc-api/account/getaccountpremiseselector",
@@ -392,12 +400,12 @@ class Evergy(UtilityBase):
             data = await resp.json(content_type=None)
             # shape is: [{"accountNumber": 123456789, "oPowerDomain": "kcpl.opower.com", ...}]
             domain: str = data[0]["oPowerDomain"]
-            Evergy._subdomain = domain.split(".", 1)[0]
-            _LOGGER.debug("detected Evergy subdomain: %s", Evergy._subdomain)
-            if Evergy._subdomain not in {"kcpk", "kcpl"}:
+            self._subdomain = domain.split(".", 1)[0]
+            _LOGGER.debug("detected Evergy subdomain: %s", self._subdomain)
+            if self._subdomain not in {"kcpk", "kcpl"}:
                 _LOGGER.warning(
                     "unexpected Evergy subdomain %s, continuing",
-                    Evergy._subdomain,
+                    self._subdomain,
                 )
 
         return opower_access_token

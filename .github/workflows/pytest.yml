@@ -27,3 +27,9 @@ jobs:
 
       - name: Run tests with pytest
         run: pytest
+
+      # These log in to live utility websites, so they are informational only:
+      # a utility being down or changing its login flow must not fail the build.
+      - name: Run network tests against live utility websites
+        continue-on-error: true
+        run: pytest -m network
