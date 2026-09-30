@@ -19,19 +19,16 @@ ACCOUNT_PARAMS = "pageNumber=1&pageSize=5"
 def _login_responses(account_payloads: dict[str, Any]) -> dict[str, _MockResponse]:
     """Build a full canned login flow ending in per-account widget payloads."""
     return {
-        LOGIN_PAGE: _MockResponse(text='<html>&quot;formToken&quot;:&quot;tok-abc&quot;</html>'),
-        MSLOGIN: _MockResponse(
-            payload={"IsSuccess": True, "status": "SUCCESS", "OktaUsername": "user@example.com"}
-        ),
+        LOGIN_PAGE: _MockResponse(text="<html>&quot;formToken&quot;:&quot;tok-abc&quot;</html>"),
+        MSLOGIN: _MockResponse(payload={"IsSuccess": True, "status": "SUCCESS", "OktaUsername": "user@example.com"}),
         OKTA_AUTHN: _MockResponse(payload={"status": "SUCCESS", "sessionToken": "sessTok123"}),
         OKTA_AUTHORIZE: _MockResponse(text="<html>data.code = 'testauthcode'</html>"),
         OKTA_TOKEN: _MockResponse(payload={"access_token": "oktaAccessToken"}),
-        ACCOUNT_API: _MockResponse(
-            payload={"Accounts": [{"BillingAccountIdentifier": aid} for aid in account_payloads]}
-        ),
+        ACCOUNT_API: _MockResponse(payload={"Accounts": [{"BillingAccountIdentifier": aid} for aid in account_payloads]}),
         **{
-            f"https://www.eversource.com/cg/customer/api/accountbilling/"
-            f"getOpowerWidgetData/{aid}": _MockResponse(payload=payload)
+            f"https://www.eversource.com/cg/customer/api/accountbilling/getOpowerWidgetData/{aid}": _MockResponse(
+                payload=payload
+            )
             for aid, payload in account_payloads.items()
         },
     }
@@ -72,18 +69,12 @@ class TestEversource(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(token, "the_opower_token")
         # Exactly two widget attempts, in listed-account order:
-        widget_urls = [
-            r["url"]
-            for r in session.requests
-            if "/getOpowerWidgetData/" in r["url"]
-        ]
+        widget_urls = [r["url"] for r in session.requests if "/getOpowerWidgetData/" in r["url"]]
         self.assertEqual(
             widget_urls,
             [
-                "https://www.eversource.com/cg/customer/api/accountbilling/"
-                "getOpowerWidgetData/dormant-account",
-                "https://www.eversource.com/cg/customer/api/accountbilling/"
-                "getOpowerWidgetData/active-account",
+                "https://www.eversource.com/cg/customer/api/accountbilling/getOpowerWidgetData/dormant-account",
+                "https://www.eversource.com/cg/customer/api/accountbilling/getOpowerWidgetData/active-account",
             ],
         )
 
@@ -105,10 +96,7 @@ class TestEversource(unittest.IsolatedAsyncioTestCase):
         """A non-200 widget answer is a server failure, reported as CannotConnect."""
         session = _MockSession(_login_responses({"some-account": {"jwtToken": "tok"}}))
         # Replace the canned 200 widget response with a 500
-        widget_url = (
-            "https://www.eversource.com/cg/customer/api/accountbilling/"
-            "getOpowerWidgetData/some-account"
-        )
+        widget_url = "https://www.eversource.com/cg/customer/api/accountbilling/getOpowerWidgetData/some-account"
         session._responses[widget_url].status = 500
 
         with self.assertRaises(CannotConnect):

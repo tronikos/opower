@@ -71,9 +71,7 @@ async def _async_list_account_ids(
                 raise CannotConnect(f"Account lookup failed: {err}") from err
             return account_ids
 
-        accounts: Any = (
-            account_response.get("Accounts", []) if isinstance(account_response, dict) else []
-        )
+        accounts: Any = account_response.get("Accounts", []) if isinstance(account_response, dict) else []
         page_ids = [
             str(account.get("BillingAccountIdentifier"))
             for account in accounts
@@ -99,10 +97,7 @@ async def _async_get_account_opower_token(
     with a null body and no token (home-assistant/core#172379,
     tronikos/opower#203), so every non-success is reported instead of raising.
     """
-    widget_url = (
-        "https://www.eversource.com/cg/customer/api/accountbilling/"
-        f"getOpowerWidgetData/{account_id}"
-    )
+    widget_url = f"https://www.eversource.com/cg/customer/api/accountbilling/getOpowerWidgetData/{account_id}"
     try:
         async with session.get(
             widget_url,
@@ -397,9 +392,7 @@ class Eversource(UtilityBase):
         # afterwards (all accounts are enumerated via the Opower API).
         account_tries: list[str] = []
         for account_id in account_ids:
-            found, token_or_reason = await _async_get_account_opower_token(
-                session, okta_access_token, account_id
-            )
+            found, token_or_reason = await _async_get_account_opower_token(session, okta_access_token, account_id)
             if found:
                 opower_token = token_or_reason
                 _LOGGER.debug(
