@@ -199,8 +199,8 @@ class EvergyLoginHandler:
                 raise InvalidAuth("Wrong password. Login failed.")
             self.id = data["id"]
 
-    async def get_new_connection_id(self) -> None:
-        """Retrieve new connection id."""
+    async def get_new_connection_id(self) -> bool:
+        """Retrieve new connection id. Return True if the response already has the access_token."""
         login_template_url = (
             self.auth_data["api_root"]
             + "/"
@@ -225,6 +225,11 @@ class EvergyLoginHandler:
             data = await resp.json()
             self.id = data["id"]
             self.connectionId = data["connectionId"]
+            if token := data.get("access_token"):
+                _LOGGER.debug("Got access_token from customHTMLTemplate, skipping setCookieWithoutUser")
+                self.access_token = token
+                return True
+            return False
 
     async def get_new_connection_cookie(self) -> None:
         """Set complete to generate cookie."""
@@ -318,12 +323,12 @@ class EvergyLoginHandler:
         await self.get_login_form()
         # Submit the login form.
         await self.submit_login_form(username, password)
-        # Retrieve the new connection id.
-        await self.get_new_connection_id()
-        # Set complete to generate the cookie.
-        await self.get_new_connection_cookie()
-        # Set the cookie and generate a new access_token.
-        await self.get_new_access_token()
+        # Since Sept 2026 the token may come back directly; older flows need two more steps.
+        if not await self.get_new_connection_id():
+            # Set complete to generate the cookie.
+            await self.get_new_connection_cookie()
+            # Set the cookie and generate a new access_token.
+            await self.get_new_access_token()
         # Postprocess the url at Evergy to get access by cookie.
         await self.postprocessing_api()
 
