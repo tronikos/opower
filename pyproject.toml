@@ -30,6 +30,8 @@ markers = [
 # Keep the default run hermetic: the network tests log in to ~36 third-party
 # sites, so letting them gate CI makes it fail for reasons unrelated to a change.
 addopts = "-m 'not network'"
+# Lets tests import shared helpers from the tests package (tests.mock_http).
+pythonpath = ["."]
 
 [project.urls]
 "Homepage" = "https://github.com/tronikos/opower"
