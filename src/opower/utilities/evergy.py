@@ -226,7 +226,7 @@ class EvergyLoginHandler:
             self.id = data["id"]
             self.connectionId = data["connectionId"]
             if token := data.get("access_token"):
-                _LOGGER.debug("Got access_token from: customHTMLTemplate, skipping setCookieWithoutUser")
+                _LOGGER.debug("Got access_token from customHTMLTemplate, skipping setCookieWithoutUser")
                 self.access_token = token
                 return True
             return False
