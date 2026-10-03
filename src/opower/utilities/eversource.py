@@ -5,6 +5,7 @@ import hashlib
 import logging
 import re
 import secrets
+from enum import Enum, auto
 from typing import Any
 
 import aiohttp
@@ -29,6 +30,107 @@ def _generate_pkce() -> tuple[str, str]:
     code_challenge = base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode()).digest()).decode().rstrip("=")
 
     return code_verifier, code_challenge
+
+
+_ACCOUNT_PAGE_SIZE = 5
+_MAX_ACCOUNTS_TO_TRY = 50
+
+
+class _WidgetResult(Enum):
+    """Outcome of asking one account's widget data API for the Opower token."""
+
+    TOKEN = auto()
+    # Closed or dormant accounts answer HTTP 200 with a null body.
+    NO_TOKEN = auto()
+    ERROR = auto()
+
+
+async def _async_list_account_ids(
+    session: aiohttp.ClientSession,
+    okta_access_token: str,
+) -> list[str]:
+    """List the customer's account ids, paginating and de-duplicating.
+
+    :raises CannotConnect: if the account API is unreachable
+    """
+    account_url = "https://www.eversource.com/cg/customer/api/account"
+    account_ids: list[str] = []
+    page = 1
+    while True:
+        try:
+            async with session.get(
+                account_url,
+                params={"pageNumber": page, "pageSize": _ACCOUNT_PAGE_SIZE},
+                headers={
+                    "Authorization": f"Bearer {okta_access_token}",
+                    "Accept": "application/json",
+                    "User-Agent": USER_AGENT,
+                },
+            ) as resp:
+                if resp.status != 200:
+                    if not account_ids:
+                        raise CannotConnect("Failed to get account information")
+                    return account_ids
+                account_response: Any = await resp.json()
+        except (aiohttp.ClientError, ValueError) as err:
+            if not account_ids:
+                raise CannotConnect(f"Account lookup failed: {err}") from err
+            return account_ids
+
+        accounts: Any = account_response.get("Accounts", []) if isinstance(account_response, dict) else []
+        page_ids = [
+            str(account.get("BillingAccountIdentifier"))
+            for account in accounts
+            if isinstance(account, dict) and account.get("BillingAccountIdentifier")
+        ]
+        new_ids = [account_id for account_id in page_ids if account_id not in account_ids]
+        if not new_ids:
+            return account_ids
+        account_ids.extend(new_ids)
+        if len(accounts) < _ACCOUNT_PAGE_SIZE:
+            return account_ids
+        if len(account_ids) >= _MAX_ACCOUNTS_TO_TRY:
+            _LOGGER.warning("Stopped listing Eversource accounts after %d; later accounts are not tried", len(account_ids))
+            return account_ids
+        page += 1
+
+
+async def _async_get_account_opower_token(
+    session: aiohttp.ClientSession,
+    okta_access_token: str,
+    account_id: str,
+) -> tuple[_WidgetResult, str]:
+    """Fetch one account's widget data and extract the Opower JWT token.
+
+    Returns the result and either the token or the reason there is none.
+    Failures are reported instead of raised so the caller can try the next account.
+    """
+    widget_url = f"https://www.eversource.com/cg/customer/api/accountbilling/getOpowerWidgetData/{account_id}"
+    try:
+        async with session.get(
+            widget_url,
+            headers={
+                "Authorization": f"Bearer {okta_access_token}",
+                "Accept": "application/json",
+                "User-Agent": USER_AGENT,
+            },
+        ) as resp:
+            if resp.status != 200:
+                return _WidgetResult.ERROR, f"HTTP {resp.status}"
+
+            try:
+                widget_response: Any = await resp.json()
+            except (ValueError, aiohttp.ContentTypeError):
+                return _WidgetResult.ERROR, "invalid body"
+
+            if not isinstance(widget_response, dict):
+                return _WidgetResult.NO_TOKEN, "no token"
+            opower_token = widget_response.get("jwtToken")
+            if not isinstance(opower_token, str) or not opower_token:
+                return _WidgetResult.NO_TOKEN, "no token"
+            return _WidgetResult.TOKEN, opower_token
+    except aiohttp.ClientError as err:
+        return _WidgetResult.ERROR, f"connection error: {err}"
 
 
 class Eversource(UtilityBase):
@@ -282,65 +384,35 @@ class Eversource(UtilityBase):
         except aiohttp.ClientError as err:
             raise CannotConnect(f"Token exchange failed: {err}") from err
 
-        # Step 6: Get account ID from Eversource API
-        _LOGGER.debug("Getting account information")
-        account_url = "https://www.eversource.com/cg/customer/api/account"
+        # Step 6: List the customer's accounts. The list includes closed or
+        # dormant accounts.
+        account_ids = await _async_list_account_ids(session, okta_access_token)
 
-        try:
-            async with session.get(
-                account_url,
-                params={"pageNumber": 1, "pageSize": 5},
-                headers={
-                    "Authorization": f"Bearer {okta_access_token}",
-                    "Accept": "application/json",
-                    "User-Agent": USER_AGENT,
-                },
-            ) as resp:
-                if resp.status != 200:
-                    raise CannotConnect("Failed to get account information")
+        if not account_ids:
+            raise InvalidAuth("No accounts found")
 
-                account_response = await resp.json()
-                accounts = account_response.get("Accounts", [])
-
-                if not accounts:
-                    raise InvalidAuth("No accounts found")
-
-                account_id = accounts[0].get("BillingAccountIdentifier")
-                _LOGGER.debug("Got account ID: %s", account_id)
-
-        except aiohttp.ClientError as err:
-            raise CannotConnect(f"Account lookup failed: {err}") from err
-
-        # Step 7: Get Opower token from widget data API
-        _LOGGER.debug("Getting Opower token from widget data API")
-        widget_url = f"https://www.eversource.com/cg/customer/api/accountbilling/getOpowerWidgetData/{account_id}"
-
-        try:
-            async with session.get(
-                widget_url,
-                headers={
-                    "Authorization": f"Bearer {okta_access_token}",
-                    "Accept": "application/json",
-                    "User-Agent": USER_AGENT,
-                },
-            ) as resp:
-                if resp.status != 200:
-                    raise CannotConnect("Failed to get Opower widget data")
-
-                widget_response = await resp.json()
-                opower_token: str | None = widget_response.get("jwtToken")
-
-                if not opower_token:
-                    raise InvalidAuth("No Opower token in widget response")
-
+        # Step 7: Get the Opower token: try each account's widget data API in
+        # order until one issues a JWT. The token is customer-scoped, so which
+        # account issues it does not restrict the data this library reads
+        # afterwards (all accounts are enumerated via the Opower API).
+        account_tries: list[str] = []
+        all_tokenless = True
+        for account_id in account_ids:
+            result, token_or_reason = await _async_get_account_opower_token(session, okta_access_token, account_id)
+            if result is _WidgetResult.TOKEN:
+                opower_token = token_or_reason
                 _LOGGER.debug(
-                    "Got Opower token: %s...%s (%d chars)",
+                    "Got Opower token via account %s: %s...%s (%d chars)",
+                    account_id,
                     opower_token[:10],
                     opower_token[-10:],
                     len(opower_token),
                 )
-
                 return opower_token
+            account_tries.append(f"{account_id}: {token_or_reason}")
+            all_tokenless = all_tokenless and result is _WidgetResult.NO_TOKEN
 
-        except aiohttp.ClientError as err:
-            raise CannotConnect(f"Widget data request failed: {err}") from err
+        _LOGGER.debug("No Opower token from any account: %s", "; ".join(account_tries))
+        if all_tokenless:
+            raise InvalidAuth("No Opower token in any account widget response")
+        raise CannotConnect("Failed to get Opower widget data")
