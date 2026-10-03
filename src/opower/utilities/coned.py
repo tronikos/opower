@@ -74,20 +74,24 @@ class ConEd(UtilityBase):
         if device is not None:
             jar.update_cookies({DEVICE_COOKIE: device.value}, base_url)
         # Reuse the caller's connector (TLS, proxy, connection limits) without owning it.
-        async with aiohttp.ClientSession(
-            connector=session.connector,
-            connector_owner=False,
-            cookie_jar=jar,
-            headers={"User-Agent": USER_AGENT},
-            trust_env=session.trust_env,
-            timeout=session.timeout,
-        ) as login_session:
-            token = await self._async_login(login_session, base, username, password)
-        # Copy the whole Morsel back so domain, expiry and Secure are kept.
-        for cookie in jar:
-            if cookie.key == DEVICE_COOKIE:
-                session.cookie_jar.update_cookies([(cookie.key, cookie)], base_url)
-        return token
+        connector = session.connector
+        try:
+            async with aiohttp.ClientSession(
+                connector=connector,
+                connector_owner=connector is None,
+                cookie_jar=jar,
+                headers={"User-Agent": USER_AGENT},
+                trust_env=session.trust_env,
+                timeout=session.timeout,
+            ) as login_session:
+                return await self._async_login(login_session, base, username, password)
+        finally:
+            # Keep the device cookie even if a later step failed, as the shared
+            # session did before. Copy the whole Morsel so domain, expiry and
+            # Secure are kept.
+            for cookie in jar:
+                if cookie.key == DEVICE_COOKIE:
+                    session.cookie_jar.update_cookies([(cookie.key, cookie)], base_url)
 
     async def _async_login(
         self,
@@ -123,6 +127,8 @@ class ConEd(UtilityBase):
         if "authRedirectUrl" in result:
             redirectUrl = result["authRedirectUrl"]
         elif result["newDevice"]:
+            # With noMfa and no authRedirectUrl there is nothing to follow, so the
+            # redirect URL check below raises; that response has not been observed.
             if not result["noMfa"]:
                 if not self._totp_secret:
                     raise InvalidAuth("TOTP secret is required for MFA accounts")

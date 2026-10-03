@@ -227,6 +227,20 @@ class TestConEdLogin(unittest.IsolatedAsyncioTestCase):
         device = [c.value for c in session.cookie_jar if c.key == "CE_DEVICE_ID"]
         self.assertEqual(device, [DEVICE_ID])
 
+    async def test_device_cookie_is_copied_back_when_login_fails(self) -> None:
+        """A device cookie issued before a failing step still reaches the caller's session."""
+        fake = _FakeConEd(token=None)
+        server = TestServer(fake.app, host="127.0.0.1")
+        await server.start_server()
+        self.addAsyncCleanup(server.close)
+        session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=_LoopbackResolver()))
+        self.addAsyncCleanup(session.close)
+        utility = _local_coned(f"http://localhost:{server.port}")
+        with self.assertRaises(CannotConnect):
+            await utility.async_login(session, "user@example.com", "pw", {})
+        device = [c.value for c in session.cookie_jar if c.key == "CE_DEVICE_ID"]
+        self.assertEqual(device, [DEVICE_ID])
+
     async def test_remembered_device_cookie_is_used(self) -> None:
         """A device cookie already in the caller's session reaches the login."""
         fake = _FakeConEd(mfa=False, set_device=False)
