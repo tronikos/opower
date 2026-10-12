@@ -154,14 +154,15 @@ class ConEd(UtilityBase):
                     ) as resp:
                         return await resp.json()
 
-                code = totp.at(int(time()))
-                mfaResult = await verify_factor(code)
+                counter = int(time()) // totp.interval
+                mfaResult = await verify_factor(totp.generate_otp(counter))
                 if not mfaResult["code"]:
                     # ConEd rejects a TOTP code it already accepted, e.g. in a login moments earlier.
                     _LOGGER.debug("ConEd rejected the TOTP code; retrying with the next one")
                     now = time()
                     await sleep(min((now // totp.interval + 1) * totp.interval - now + 1, totp.interval + 1))
-                    mfaResult = await verify_factor(totp.at(int(time())))
+                    counter = max(counter + 1, int(time()) // totp.interval)
+                    mfaResult = await verify_factor(totp.generate_otp(counter))
                 if not mfaResult["code"]:
                     raise InvalidAuth("2FA code was invalid. Is the secret wrong?")
                 redirectUrl = mfaResult["authRedirectUrl"]

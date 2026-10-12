@@ -59,6 +59,7 @@ class _FakeConEd:
         self.requests: list[str] = []
         self.login_bodies: list[dict[str, Any]] = []
         self.accepted_codes: set[str] = set()
+        self.verify_nonces: list[str | None] = []
         self.reject_codes = reject_codes
         self.verify_status = verify_status
         self.app = web.Application()
@@ -108,12 +109,19 @@ class _FakeConEd:
                     "authRedirectUrl": str(request.url.with_path("/oauth2/authorize").with_query(state="no_redirect")),
                 }
             )
-        return web.json_response({"login": True, "newDevice": True, "noMfa": False})
+        resp = web.json_response({"login": True, "newDevice": True, "noMfa": False})
+        # Ties VerifyFactor to this login's session, as coned.com's cookies do.
+        resp.set_cookie("LOGIN_NONCE", f"login{self.requests.count('Login')}")
+        return resp
 
     async def verify(self, request: web.Request) -> web.Response:
         self.requests.append("VerifyFactor")
         body = await request.json()
         self.login_bodies.append(body)
+        nonce = self._raw_cookie(request, "LOGIN_NONCE")
+        self.verify_nonces.append(nonce)
+        if nonce is None:
+            return web.Response(status=401)
         if self.verify_status != 200:
             return web.Response(status=self.verify_status)
         # Like coned.com, an already-accepted code is rejected (RFC 6238 section 5.2).
@@ -186,14 +194,17 @@ class _LoopbackResolver(AbstractResolver):
 class TestConEdLogin(unittest.IsolatedAsyncioTestCase):
     """ConEd login flow against a local fake coned.com."""
 
-    def _fake_clock(self) -> list[float]:
-        """Patch the retry's clock so its wait advances time instantly; return the sleeps."""
+    def _fake_clock(self, drift: float = 0) -> list[float]:
+        """Patch the retry's clock so its wait advances time instantly; return the sleeps.
+
+        Each sleep also moves the clock by drift, e.g. negative for a clock rollback.
+        """
         now = [1_000_000 * 30 + 5.0]
         sleeps: list[float] = []
 
         async def fake_sleep(delay: float) -> None:
             sleeps.append(delay)
-            now[0] += delay
+            now[0] += delay + drift
             await asyncio.sleep(0)
 
         for name, fake in (("time", lambda: now[0]), ("sleep", fake_sleep)):
@@ -333,6 +344,15 @@ class TestConEdLogin(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second, TOTP(TOTP_SECRET).generate_otp(1_000_001))
         self.assertEqual(sum(sleeps), 26)
         self.assertEqual(fake.requests[fake.requests.index("VerifyFactor") + 2], "authorize:no_redirect")
+        self.assertEqual(fake.verify_nonces, ["login1", "login1"])
+
+    async def test_retry_survives_a_clock_rollback(self) -> None:
+        """If the clock goes back during the wait, the retry still uses the next step."""
+        self._fake_clock(drift=-60)
+        fake = _FakeConEd(reject_codes=1)
+        token, _ = await self._login(fake)
+        self.assertEqual(token, "opower-token")
+        self.assertEqual(self._codes(fake), [TOTP(TOTP_SECRET).generate_otp(n) for n in (1_000_000, 1_000_001)])
 
     async def test_second_rejection_raises(self) -> None:
         """Only one retry is made; a second rejection is an invalid secret."""
