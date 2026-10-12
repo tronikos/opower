@@ -10,11 +10,13 @@ import aiohttp
 from aiohttp import web
 from aiohttp.abc import AbstractResolver, ResolveResult
 from aiohttp.test_utils import TestServer
+from pyotp import TOTP
 from yarl import URL
 
 from opower.exceptions import CannotConnect, InvalidAuth
-from opower.utilities import helpers
+from opower.utilities import coned
 from opower.utilities.coned import ConEd
+from opower.utilities.oru import Oru
 
 LOGIN_API = "/sitecore/api/ssc/ConEdWeb-Foundation-Login-Areas-LoginAPI/User/0"
 TOKEN_API = "/sitecore/api/ssc/ConEd-Cms-Services-Controllers-Opower/OpowerService/0/GetOPowerToken"  # noqa: S105
@@ -40,6 +42,8 @@ class _FakeConEd:
         token: Any = "opower-token",  # noqa: S107
         login_ok: bool = True,
         set_device: bool = True,
+        reject_codes: int = 0,
+        verify_status: int = 200,
     ) -> None:
         """Configure the scenario.
 
@@ -55,6 +59,8 @@ class _FakeConEd:
         self.requests: list[str] = []
         self.login_bodies: list[dict[str, Any]] = []
         self.accepted_codes: set[str] = set()
+        self.reject_codes = reject_codes
+        self.verify_status = verify_status
         self.app = web.Application()
         r = self.app.router
         r.add_get("/en/login", self.login_page)
@@ -108,9 +114,12 @@ class _FakeConEd:
         self.requests.append("VerifyFactor")
         body = await request.json()
         self.login_bodies.append(body)
-        # Like Okta, an already-accepted code is rejected (RFC 6238 section 5.2).
-        if body["MFACode"] in self.accepted_codes:
-            return web.json_response({"code": False})
+        if self.verify_status != 200:
+            return web.Response(status=self.verify_status)
+        # Like coned.com, an already-accepted code is rejected (RFC 6238 section 5.2).
+        if self.reject_codes or body["MFACode"] in self.accepted_codes:
+            self.reject_codes = max(self.reject_codes - 1, 0)
+            return web.json_response({"code": False, "codeErrorMsg": "Invalid code"})
         self.accepted_codes.add(body["MFACode"])
         return web.json_response(
             {"code": True, "authRedirectUrl": str(request.url.with_path("/oauth2/authorize").with_query(state="no_redirect"))}
@@ -152,13 +161,13 @@ class _FakeConEd:
         return web.json_response(self.token)
 
 
-def _local_coned(base: str, totp_secret: str | None = TOTP_SECRET) -> ConEd:
+def _local_coned(base: str, totp_secret: str | None = TOTP_SECRET, cls: type[ConEd] = ConEd) -> ConEd:
     """Return a ConEd instance pointed at the local fake server.
 
     Patched on the instance rather than subclassed: utilities are discovered via
     subclasses, so a test subclass would register as a second ConEd.
     """
-    utility = ConEd()
+    utility = cls()
     utility._totp_secret = totp_secret
     utility.base_url = lambda: base  # type: ignore[method-assign]
     return utility
@@ -177,13 +186,8 @@ class _LoopbackResolver(AbstractResolver):
 class TestConEdLogin(unittest.IsolatedAsyncioTestCase):
     """ConEd login flow against a local fake coned.com."""
 
-    def setUp(self) -> None:
-        """Forget TOTP steps issued by earlier tests, which share a secret."""
-        helpers._issued_totp_steps.clear()
-        self.addCleanup(helpers._issued_totp_steps.clear)
-
     def _fake_clock(self) -> list[float]:
-        """Patch the TOTP gate's clock so its waits advance time instantly; return the sleeps."""
+        """Patch the retry's clock so its wait advances time instantly; return the sleeps."""
         now = [1_000_000 * 30 + 5.0]
         sleeps: list[float] = []
 
@@ -193,10 +197,13 @@ class TestConEdLogin(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0)
 
         for name, fake in (("time", lambda: now[0]), ("sleep", fake_sleep)):
-            patcher = patch.object(helpers, name, fake)
+            patcher = patch.object(coned, name, fake)
             patcher.start()
             self.addCleanup(patcher.stop)
         return sleeps
+
+    def _codes(self, fake: _FakeConEd) -> list[str]:
+        return [body["MFACode"] for body in fake.login_bodies if "MFACode" in body]
 
     async def _login(
         self,
@@ -204,6 +211,7 @@ class TestConEdLogin(unittest.IsolatedAsyncioTestCase):
         totp_secret: str | None = TOTP_SECRET,
         device_cookie: str | None = None,
         host: str = "localhost",
+        cls: type[ConEd] = ConEd,
     ) -> tuple[str, aiohttp.ClientSession]:
         server = TestServer(fake.app, host="127.0.0.1")
         await server.start_server()
@@ -215,7 +223,7 @@ class TestConEdLogin(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(session.close)
         if device_cookie is not None:
             session.cookie_jar.update_cookies_from_headers([device_cookie], URL(base))
-        utility = _local_coned(base, totp_secret)
+        utility = _local_coned(base, totp_secret, cls)
         token = await utility.async_login(session, "user@example.com", "pw", {})
         return token, session
 
@@ -304,27 +312,68 @@ class TestConEdLogin(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(session.connector.closed)
         self.assertFalse(session.closed)
 
-    async def test_first_mfa_login_is_not_delayed(self) -> None:
-        """A login with no earlier code for the secret submits the current code at once."""
+    async def test_accepted_code_is_not_retried(self) -> None:
+        """An accepted code needs no wait or second VerifyFactor."""
         sleeps = self._fake_clock()
-        token, _ = await self._login(_FakeConEd())
+        fake = _FakeConEd()
+        token, _ = await self._login(fake)
         self.assertEqual(token, "opower-token")
         self.assertEqual(sleeps, [])
+        self.assertEqual(fake.requests.count("VerifyFactor"), 1)
+
+    async def test_rejected_code_is_retried_with_the_next_one(self) -> None:
+        """A rejected code is retried once, in the same session, with the next step's code."""
+        sleeps = self._fake_clock()
+        fake = _FakeConEd(reject_codes=1)
+        token, _ = await self._login(fake)
+        self.assertEqual(token, "opower-token")
+        self.assertEqual(fake.requests.count("VerifyFactor"), 2)
+        first, second = self._codes(fake)
+        self.assertNotEqual(first, second)
+        self.assertEqual(second, TOTP(TOTP_SECRET).generate_otp(1_000_001))
+        self.assertEqual(sum(sleeps), 26)
+        self.assertEqual(fake.requests[fake.requests.index("VerifyFactor") + 2], "authorize:no_redirect")
+
+    async def test_second_rejection_raises(self) -> None:
+        """Only one retry is made; a second rejection is an invalid secret."""
+        self._fake_clock()
+        fake = _FakeConEd(reject_codes=2)
+        with self.assertRaisesRegex(InvalidAuth, "2FA code was invalid"):
+            await self._login(fake)
+        self.assertEqual(fake.requests.count("VerifyFactor"), 2)
+
+    async def test_verify_http_error_is_not_retried(self) -> None:
+        """An HTTP error from VerifyFactor propagates without waiting or retrying."""
+        sleeps = self._fake_clock()
+        fake = _FakeConEd(verify_status=500)
+        with self.assertRaises(aiohttp.ClientResponseError):
+            await self._login(fake)
+        self.assertEqual(sleeps, [])
+        self.assertEqual(fake.requests.count("VerifyFactor"), 1)
+
+    async def test_oru_retries_a_rejected_code(self) -> None:
+        """ORU shares the ConEd login, including the retry."""
+        self._fake_clock()
+        fake = _FakeConEd(reject_codes=1)
+        token, _ = await self._login(fake, cls=Oru)
+        self.assertEqual(token, "opower-token")
+        self.assertEqual(fake.requests.count("VerifyFactor"), 2)
 
     async def test_back_to_back_mfa_logins_succeed(self) -> None:
         """Two fresh logins with one secret in the same TOTP step both succeed.
 
         Home Assistant validates credentials with one client and then logs in
-        again with another; reusing the first code made the second login fail.
+        again with another; coned.com rejects the reused code the second time.
         """
-        sleeps = self._fake_clock()
+        self._fake_clock()
         fake = _FakeConEd()
         first, _ = await self._login(fake)
         second, _ = await self._login(fake)
         self.assertEqual((first, second), ("opower-token", "opower-token"))
-        codes = [body["MFACode"] for body in fake.login_bodies if "MFACode" in body]
-        self.assertEqual(len(set(codes)), 2)
-        self.assertEqual(len(sleeps), 1)
+        codes = self._codes(fake)
+        self.assertEqual(len(codes), 3)
+        self.assertEqual(codes[0], codes[1])
+        self.assertNotEqual(codes[1], codes[2])
 
     async def test_login_without_mfa(self) -> None:
         """A remembered device skips VerifyFactor."""

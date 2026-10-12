@@ -1,38 +1,6 @@
 """Helper functions."""
 
-import hashlib
-import threading
-from asyncio import sleep
 from html.parser import HTMLParser
-from time import time
-
-from pyotp import TOTP
-
-# Keyed by a digest of the TOTP secret so raw secrets are not retained.
-_issued_totp_steps: dict[str, int] = {}
-_issued_totp_steps_lock = threading.Lock()
-
-
-async def async_unused_totp_code(secret: str) -> str:
-    """Return a TOTP code for a time step not already handed out in this process.
-
-    Verifiers may reject a code that was already accepted (RFC 6238 section 5.2),
-    so two logins within one 30s step (e.g. a credentials check followed by a
-    fresh client) would fail the second time. Waits for the next step instead.
-    """
-    totp = TOTP(secret)
-    key = hashlib.sha256(secret.encode()).hexdigest()
-    while True:
-        # A threading lock: callers may be on different event loops.
-        with _issued_totp_steps_lock:
-            step = int(time() // totp.interval)
-            for stale in [k for k, s in _issued_totp_steps.items() if s < step]:
-                del _issued_totp_steps[stale]
-            if key not in _issued_totp_steps:
-                _issued_totp_steps[key] = step
-                return totp.generate_otp(step)
-            next_step_at = (_issued_totp_steps[key] + 1) * totp.interval
-        await sleep(max(next_step_at - time(), 0) + 0.1)
 
 
 class Form:

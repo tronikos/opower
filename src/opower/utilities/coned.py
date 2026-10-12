@@ -1,14 +1,19 @@
 """Consolidated Edison (ConEd)."""
 
+import logging
+from asyncio import sleep
+from time import time
 from typing import Any
 
 import aiohttp
+from pyotp import TOTP
 from yarl import URL
 
 from ..const import USER_AGENT
 from ..exceptions import CannotConnect, InvalidAuth
 from .base import UtilityBase
-from .helpers import async_unused_totp_code
+
+_LOGGER = logging.getLogger(__name__)
 
 RETURN_URL = "/en/accounts-billing/my-account/energy-use"
 DEVICE_COOKIE = "CE_DEVICE_ID"
@@ -133,18 +138,30 @@ class ConEd(UtilityBase):
                 if not self._totp_secret:
                     raise InvalidAuth("TOTP secret is required for MFA accounts")
 
-                async with session.post(
-                    login_base + "/VerifyFactor",
-                    headers=login_headers,
-                    json={
-                        "MFACode": await async_unused_totp_code(self._totp_secret),
-                        "ReturnUrl": "",
-                        "FromURI": "",
-                        "OpenIdRelayState": "",
-                    },
-                    raise_for_status=True,
-                ) as resp:
-                    mfaResult = await resp.json()
+                totp = TOTP(self._totp_secret)
+
+                async def verify_factor(code: str) -> Any:
+                    async with session.post(
+                        login_base + "/VerifyFactor",
+                        headers=login_headers,
+                        json={
+                            "MFACode": code,
+                            "ReturnUrl": "",
+                            "FromURI": "",
+                            "OpenIdRelayState": "",
+                        },
+                        raise_for_status=True,
+                    ) as resp:
+                        return await resp.json()
+
+                code = totp.at(int(time()))
+                mfaResult = await verify_factor(code)
+                if not mfaResult["code"]:
+                    # ConEd rejects a TOTP code it already accepted, e.g. in a login moments earlier.
+                    _LOGGER.debug("ConEd rejected the TOTP code; retrying with the next one")
+                    now = time()
+                    await sleep(min((now // totp.interval + 1) * totp.interval - now + 1, totp.interval + 1))
+                    mfaResult = await verify_factor(totp.at(int(time())))
                 if not mfaResult["code"]:
                     raise InvalidAuth("2FA code was invalid. Is the secret wrong?")
                 redirectUrl = mfaResult["authRedirectUrl"]
