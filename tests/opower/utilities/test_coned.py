@@ -1,8 +1,10 @@
 """Tests for Consolidated Edison (ConEd)."""
 
+import asyncio
 import socket
 import unittest
 from typing import Any
+from unittest.mock import patch
 
 import aiohttp
 from aiohttp import web
@@ -11,6 +13,7 @@ from aiohttp.test_utils import TestServer
 from yarl import URL
 
 from opower.exceptions import CannotConnect, InvalidAuth
+from opower.utilities import helpers
 from opower.utilities.coned import ConEd
 
 LOGIN_API = "/sitecore/api/ssc/ConEdWeb-Foundation-Login-Areas-LoginAPI/User/0"
@@ -51,6 +54,7 @@ class _FakeConEd:
         self.login_ok = login_ok
         self.requests: list[str] = []
         self.login_bodies: list[dict[str, Any]] = []
+        self.accepted_codes: set[str] = set()
         self.app = web.Application()
         r = self.app.router
         r.add_get("/en/login", self.login_page)
@@ -102,7 +106,12 @@ class _FakeConEd:
 
     async def verify(self, request: web.Request) -> web.Response:
         self.requests.append("VerifyFactor")
-        self.login_bodies.append(await request.json())
+        body = await request.json()
+        self.login_bodies.append(body)
+        # Like Okta, an already-accepted code is rejected (RFC 6238 section 5.2).
+        if body["MFACode"] in self.accepted_codes:
+            return web.json_response({"code": False})
+        self.accepted_codes.add(body["MFACode"])
         return web.json_response(
             {"code": True, "authRedirectUrl": str(request.url.with_path("/oauth2/authorize").with_query(state="no_redirect"))}
         )
@@ -167,6 +176,27 @@ class _LoopbackResolver(AbstractResolver):
 
 class TestConEdLogin(unittest.IsolatedAsyncioTestCase):
     """ConEd login flow against a local fake coned.com."""
+
+    def setUp(self) -> None:
+        """Forget TOTP steps issued by earlier tests, which share a secret."""
+        helpers._issued_totp_steps.clear()
+        self.addCleanup(helpers._issued_totp_steps.clear)
+
+    def _fake_clock(self) -> list[float]:
+        """Patch the TOTP gate's clock so its waits advance time instantly; return the sleeps."""
+        now = [1_000_000 * 30 + 5.0]
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+            now[0] += delay
+            await asyncio.sleep(0)
+
+        for name, fake in (("time", lambda: now[0]), ("sleep", fake_sleep)):
+            patcher = patch.object(helpers, name, fake)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        return sleeps
 
     async def _login(
         self,
@@ -273,6 +303,28 @@ class TestConEdLogin(unittest.IsolatedAsyncioTestCase):
         assert session.connector is not None
         self.assertFalse(session.connector.closed)
         self.assertFalse(session.closed)
+
+    async def test_first_mfa_login_is_not_delayed(self) -> None:
+        """A login with no earlier code for the secret submits the current code at once."""
+        sleeps = self._fake_clock()
+        token, _ = await self._login(_FakeConEd())
+        self.assertEqual(token, "opower-token")
+        self.assertEqual(sleeps, [])
+
+    async def test_back_to_back_mfa_logins_succeed(self) -> None:
+        """Two fresh logins with one secret in the same TOTP step both succeed.
+
+        Home Assistant validates credentials with one client and then logs in
+        again with another; reusing the first code made the second login fail.
+        """
+        sleeps = self._fake_clock()
+        fake = _FakeConEd()
+        first, _ = await self._login(fake)
+        second, _ = await self._login(fake)
+        self.assertEqual((first, second), ("opower-token", "opower-token"))
+        codes = [body["MFACode"] for body in fake.login_bodies if "MFACode" in body]
+        self.assertEqual(len(set(codes)), 2)
+        self.assertEqual(len(sleeps), 1)
 
     async def test_login_without_mfa(self) -> None:
         """A remembered device skips VerifyFactor."""

@@ -1,8 +1,16 @@
 """Tests for the shared form-parsing helpers."""
 
+import asyncio
 import unittest
+from unittest.mock import patch
 
-from opower.utilities.helpers import get_form_action_url_and_hidden_inputs, parse_forms
+from pyotp import TOTP
+
+from opower.utilities import helpers
+from opower.utilities.helpers import async_unused_totp_code, get_form_action_url_and_hidden_inputs, parse_forms
+
+TOTP_SECRET = "JBSWY3DPEHPK3PXP"  # noqa: S105
+OTHER_SECRET = "KRSXG5CTMVRXEZLU"  # noqa: S105
 
 LOGIN_PAGE_HTML = """
 <form method="get" action="/search" id="siteSearch">
@@ -112,3 +120,83 @@ class TestGetFormActionUrlAndHiddenInputs(unittest.TestCase):
         action, inputs = get_form_action_url_and_hidden_inputs("<html><body>hi</body></html>")
         self.assertEqual("", action)
         self.assertEqual({}, inputs)
+
+
+class _FakeClock:
+    """A clock for the TOTP gate whose sleep advances time instead of waiting."""
+
+    def __init__(self, now: float) -> None:
+        self.now = now
+        self.sleeps: list[float] = []
+
+    def time(self) -> float:
+        return self.now
+
+    async def sleep(self, delay: float) -> None:
+        self.sleeps.append(delay)
+        self.now += delay
+        await asyncio.sleep(0)
+
+
+class TestUnusedTotpCode(unittest.IsolatedAsyncioTestCase):
+    """Test that TOTP codes are not handed out twice for the same time step."""
+
+    def setUp(self) -> None:
+        """Start each test with an empty gate and a fake clock mid-step."""
+        helpers._issued_totp_steps.clear()
+        self.addCleanup(helpers._issued_totp_steps.clear)
+        self.clock = _FakeClock(1_000_000 * 30 + 5)
+        for name in ("time", "sleep"):
+            patcher = patch.object(helpers, name, getattr(self.clock, name))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _step(self) -> int:
+        return int(self.clock.now // 30)
+
+    async def test_first_call_does_not_wait(self) -> None:
+        """The first code for a secret is the current one, without waiting."""
+        code = await async_unused_totp_code(TOTP_SECRET)
+        self.assertEqual(code, TOTP(TOTP_SECRET).generate_otp(self._step()))
+        self.assertEqual(self.clock.sleeps, [])
+
+    async def test_same_step_waits_for_next_step(self) -> None:
+        """A second request in the same step waits and gets the next step's code."""
+        first = await async_unused_totp_code(TOTP_SECRET)
+        start_step = self._step()
+        second = await async_unused_totp_code(TOTP_SECRET)
+        self.assertNotEqual(first, second)
+        self.assertEqual(self._step(), start_step + 1)
+        self.assertEqual(second, TOTP(TOTP_SECRET).generate_otp(start_step + 1))
+        self.assertEqual(len(self.clock.sleeps), 1)
+        self.assertLessEqual(self.clock.sleeps[0], 26)
+
+    async def test_concurrent_callers_get_distinct_steps(self) -> None:
+        """Concurrent callers are serialized onto consecutive steps."""
+        start_step = self._step()
+        codes = await asyncio.gather(*(async_unused_totp_code(TOTP_SECRET) for _ in range(3)))
+        totp = TOTP(TOTP_SECRET)
+        self.assertCountEqual(codes, [totp.generate_otp(start_step + i) for i in range(3)])
+
+    async def test_different_secret_does_not_wait(self) -> None:
+        """Codes for another secret are independent."""
+        await async_unused_totp_code(TOTP_SECRET)
+        await async_unused_totp_code(OTHER_SECRET)
+        self.assertEqual(self.clock.sleeps, [])
+
+    async def test_clock_going_backwards_never_reissues_a_step(self) -> None:
+        """After the clock steps back, the gate waits past the last issued step."""
+        start_step = self._step()
+        await async_unused_totp_code(TOTP_SECRET)
+        self.clock.now -= 60
+        code = await async_unused_totp_code(TOTP_SECRET)
+        self.assertEqual(code, TOTP(TOTP_SECRET).generate_otp(start_step + 1))
+
+    async def test_stale_entries_are_pruned(self) -> None:
+        """Entries for past steps are dropped and no raw secret is kept."""
+        await async_unused_totp_code(TOTP_SECRET)
+        self.clock.now += 30
+        await async_unused_totp_code(OTHER_SECRET)
+        self.assertEqual(len(helpers._issued_totp_steps), 1)
+        self.assertNotIn(OTHER_SECRET, next(iter(helpers._issued_totp_steps)))
+        self.assertEqual(self.clock.sleeps, [])

@@ -3,12 +3,12 @@
 from typing import Any
 
 import aiohttp
-from pyotp import TOTP
 from yarl import URL
 
 from ..const import USER_AGENT
 from ..exceptions import CannotConnect, InvalidAuth
 from .base import UtilityBase
+from .helpers import async_unused_totp_code
 
 RETURN_URL = "/en/accounts-billing/my-account/energy-use"
 DEVICE_COOKIE = "CE_DEVICE_ID"
@@ -137,7 +137,7 @@ class ConEd(UtilityBase):
                     login_base + "/VerifyFactor",
                     headers=login_headers,
                     json={
-                        "MFACode": TOTP(self._totp_secret).now(),
+                        "MFACode": await async_unused_totp_code(self._totp_secret),
                         "ReturnUrl": "",
                         "FromURI": "",
                         "OpenIdRelayState": "",
