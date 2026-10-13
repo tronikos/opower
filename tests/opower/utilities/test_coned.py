@@ -3,6 +3,7 @@
 import socket
 import unittest
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import aiohttp
 from aiohttp import web
@@ -37,6 +38,8 @@ class _FakeConEd:
         token: Any = "opower-token",  # noqa: S107
         login_ok: bool = True,
         set_device: bool = True,
+        reject_reused_totp: bool = False,
+        reject_all_totp: bool = False,
     ) -> None:
         """Configure the scenario.
 
@@ -49,6 +52,9 @@ class _FakeConEd:
         self.code_device_cookies: list[str | None] = []
         self.token = token
         self.login_ok = login_ok
+        self.reject_reused_totp = reject_reused_totp
+        self.reject_all_totp = reject_all_totp
+        self.seen_totp_codes: set[str] = set()
         self.requests: list[str] = []
         self.login_bodies: list[dict[str, Any]] = []
         self.app = web.Application()
@@ -102,7 +108,12 @@ class _FakeConEd:
 
     async def verify(self, request: web.Request) -> web.Response:
         self.requests.append("VerifyFactor")
-        self.login_bodies.append(await request.json())
+        body = await request.json()
+        self.login_bodies.append(body)
+        code = body["MFACode"]
+        if self.reject_all_totp or (self.reject_reused_totp and code in self.seen_totp_codes):
+            return web.json_response({"code": False})
+        self.seen_totp_codes.add(code)
         return web.json_response(
             {"code": True, "authRedirectUrl": str(request.url.with_path("/oauth2/authorize").with_query(state="no_redirect"))}
         )
@@ -219,6 +230,51 @@ class TestConEdLogin(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(login["FromURI"], "")
         self.assertEqual(verify["ReturnUrl"], "")
         self.assertEqual(len(verify["MFACode"]), 6)
+
+    async def test_login_retries_reused_totp_in_next_window(self) -> None:
+        """A second login uses a fresh code when ConEd rejects a reused one."""
+        fake = _FakeConEd(reject_reused_totp=True)
+        server = TestServer(fake.app, host="127.0.0.1")
+        await server.start_server()
+        self.addAsyncCleanup(server.close)
+        base = f"http://localhost:{server.port}"
+
+        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=_LoopbackResolver())) as session:
+            await _local_coned(base).async_login(session, "user@example.com", "pw", {})
+
+        reused_code = fake.login_bodies[-1]["MFACode"]
+        next_code = "000000" if reused_code != "000000" else "111111"
+        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=_LoopbackResolver())) as session:
+            with (
+                patch("opower.utilities.coned.TOTP.now", side_effect=[reused_code, next_code]),
+                patch("opower.utilities.coned.asyncio.sleep", new_callable=AsyncMock) as sleep,
+            ):
+                token = await _local_coned(base).async_login(session, "user@example.com", "pw", {})
+
+        self.assertEqual(token, "opower-token")
+        self.assertEqual(
+            [body["MFACode"] for body in fake.login_bodies if "MFACode" in body],
+            [reused_code, reused_code, next_code],
+        )
+        sleep.assert_awaited_once()
+
+    async def test_login_rejects_secret_after_fresh_totp_fails(self) -> None:
+        """A genuinely invalid secret still raises after one fresh code."""
+        fake = _FakeConEd(reject_all_totp=True)
+        server = TestServer(fake.app, host="127.0.0.1")
+        await server.start_server()
+        self.addAsyncCleanup(server.close)
+        base = f"http://localhost:{server.port}"
+
+        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=_LoopbackResolver())) as session:
+            with (
+                patch("opower.utilities.coned.asyncio.sleep", new_callable=AsyncMock) as sleep,
+                self.assertRaises(InvalidAuth),
+            ):
+                await _local_coned(base).async_login(session, "user@example.com", "pw", {})
+
+        self.assertEqual(fake.requests.count("VerifyFactor"), 2)
+        sleep.assert_awaited_once()
 
     async def test_device_cookie_is_copied_back_unquoted(self) -> None:
         """The remembered-device cookie reaches the caller's session intact."""

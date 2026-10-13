@@ -1,5 +1,7 @@
 """Consolidated Edison (ConEd)."""
 
+import asyncio
+import time
 from typing import Any
 
 import aiohttp
@@ -133,20 +135,26 @@ class ConEd(UtilityBase):
                 if not self._totp_secret:
                     raise InvalidAuth("TOTP secret is required for MFA accounts")
 
-                async with session.post(
-                    login_base + "/VerifyFactor",
-                    headers=login_headers,
-                    json={
-                        "MFACode": TOTP(self._totp_secret).now(),
-                        "ReturnUrl": "",
-                        "FromURI": "",
-                        "OpenIdRelayState": "",
-                    },
-                    raise_for_status=True,
-                ) as resp:
-                    mfaResult = await resp.json()
-                if not mfaResult["code"]:
-                    raise InvalidAuth("2FA code was invalid. Is the secret wrong?")
+                totp = TOTP(self._totp_secret)
+                for attempt in range(2):
+                    async with session.post(
+                        login_base + "/VerifyFactor",
+                        headers=login_headers,
+                        json={
+                            "MFACode": totp.now(),
+                            "ReturnUrl": "",
+                            "FromURI": "",
+                            "OpenIdRelayState": "",
+                        },
+                        raise_for_status=True,
+                    ) as resp:
+                        mfaResult = await resp.json()
+                    if mfaResult["code"]:
+                        break
+                    if attempt:
+                        raise InvalidAuth("2FA code was invalid. Is the secret wrong?")
+                    # A successful validation may have consumed this time slot's code.
+                    await asyncio.sleep(totp.interval - time.time() % totp.interval + 0.1)
                 redirectUrl = mfaResult["authRedirectUrl"]
         else:
             raise InvalidAuth("Login Failed")
