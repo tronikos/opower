@@ -910,6 +910,36 @@ async def test_pge_yields_a_token_per_billing_account(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"state": "ERROR", "error": "boom"},
+        {"state": "SUCCESS", "returnValue": None},
+        {"state": "SUCCESS", "returnValue": {"returnValue": {"userAccounts": "not json"}}},
+        aiohttp.ClientError("connection reset"),
+    ],
+)
+async def test_pge_falls_back_to_the_selected_account_when_listing_fails(
+    monkeypatch: pytest.MonkeyPatch, response: dict[str, Any] | Exception
+) -> None:
+    """A failure to list billing accounts does not fail the login."""
+
+    async def action(
+        session: object, aura_token: str, classname: str, method: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        assert method == "getSessionCacheVarLWC"
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    monkeypatch.setattr("opower.utilities.pge._aura_community_action_execute", action)
+
+    tokens = [token async for token in PGE().async_iter_account_tokens(Mock())]
+
+    assert tokens == []
+
+
+@pytest.mark.asyncio
 async def test_get_forecast_parses_graphql_response() -> None:
     """Parse the bill forecast, mapping the "TH" unit to THERM."""
     customers = {

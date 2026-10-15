@@ -281,7 +281,12 @@ class PGE(UtilityBase):
 
         The token from async_login only covers the billing account selected on the dashboard.
         """
-        account_numbers = await self._async_get_account_numbers(session)
+        try:
+            account_numbers = await self._async_get_account_numbers(session)
+        except (aiohttp.ClientError, CannotConnect, KeyError, TypeError, ValueError) as err:
+            # Listing accounts is extra to login, so fall back to the selected account.
+            _LOGGER.warning("Could not list billing accounts, using only the selected one: %s", err)
+            return
         if len(account_numbers) < 2:
             return
         for account_number in account_numbers:
