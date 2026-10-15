@@ -831,6 +831,85 @@ async def test_get_accounts_raises_when_no_customers() -> None:
 
 
 @pytest.mark.asyncio
+async def test_login_uses_a_token_per_utility_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Customers are fetched, and later queried, with the token of their utility account.
+
+    A PG&E token only covers the billing account selected on the PG&E website,
+    so a user with several billing accounts gets a token per account.
+    """
+    second_customer_uuid = "55555555-5555-11e5-bf2b-000000000005"
+    second_customers = json.loads(json.dumps(_CUSTOMERS_RESPONSE))
+    second_customers["customers"][0]["uuid"] = second_customer_uuid
+
+    def customers_route(request: dict[str, Any]) -> Any:
+        if request["headers"]["authorization"] == "Bearer second-token":
+            return second_customers
+        return _CUSTOMERS_RESPONSE
+
+    customers_route.wants_request = True  # type: ignore[attr-defined]
+
+    async def login(*args: object) -> str:
+        return _ACCESS_TOKEN
+
+    async def iter_account_tokens(session: object) -> Any:
+        for token in ("first-token", "second-token"):
+            yield token
+
+    session = _FakeSession({"multi-account-v1": customers_route})
+    opower = _pge(session)
+    monkeypatch.setattr(opower.utility, "async_login", login)
+    monkeypatch.setattr(opower.utility, "async_iter_account_tokens", iter_account_tokens)
+    await opower.async_login()
+    accounts = await opower.async_get_accounts()
+
+    assert [account.customer.uuid for account in accounts] == [_CUSTOMER_UUID, second_customer_uuid]
+    assert [request["headers"]["authorization"] for request in session.requests] == [
+        "Bearer first-token",
+        "Bearer second-token",
+    ]
+    assert opower._get_headers(_CUSTOMER_UUID)["authorization"] == "Bearer first-token"
+    assert opower._get_headers(second_customer_uuid)["authorization"] == "Bearer second-token"
+    assert opower._get_headers()["authorization"] == f"Bearer {_ACCESS_TOKEN}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("account_numbers", "expected_tokens"),
+    [
+        (["1000000001", "1000000002"], ["token-1000000001", "token-1000000002"]),
+        # A single account is covered by the token from login.
+        (["1000000001"], []),
+    ],
+)
+async def test_pge_yields_a_token_per_billing_account(
+    monkeypatch: pytest.MonkeyPatch, account_numbers: list[str], expected_tokens: list[str]
+) -> None:
+    """PG&E selects each billing account on its website and returns its Opower token."""
+    selected: list[str] = []
+
+    async def action(
+        session: object, aura_token: str, classname: str, method: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        if method == "getSessionCacheVarLWC":
+            user_accounts = [{"value": number, "label": f"{number}-0"} for number in account_numbers]
+            return {"state": "SUCCESS", "returnValue": {"returnValue": {"userAccounts": json.dumps(user_accounts)}}}
+        assert method == "setBillingAccountSelection"
+        assert params is not None
+        selected.append(params["ccspAccountId"])
+        return {"state": "SUCCESS", "returnValue": None}
+
+    async def opower_token(self: PGE, session: object) -> str:
+        return f"token-{selected[-1]}"
+
+    monkeypatch.setattr("opower.utilities.pge._aura_community_action_execute", action)
+    monkeypatch.setattr(PGE, "_async_get_opower_token", opower_token)
+
+    tokens = [token async for token in PGE().async_iter_account_tokens(Mock())]
+
+    assert tokens == expected_tokens
+
+
+@pytest.mark.asyncio
 async def test_get_forecast_parses_graphql_response() -> None:
     """Parse the bill forecast, mapping the "TH" unit to THERM."""
     customers = {

@@ -1,6 +1,7 @@
 """Base class that each utility needs to extend."""
 
 import abc
+from collections.abc import AsyncIterator
 from typing import Any, ClassVar
 
 import aiohttp
@@ -100,6 +101,17 @@ class UtilityBase(abc.ABC):
         :raises aiohttp.ClientError: if there is a network error
         """
         raise NotImplementedError
+
+    async def async_iter_account_tokens(self, session: aiohttp.ClientSession) -> AsyncIterator[str]:
+        """Yield an Opower access token per utility account, after async_login.
+
+        For utilities whose login token only covers one of the user's accounts.
+        Opower ties a token to an account when the token is first used, so the
+        caller must use each token before asking for the next one.
+        Yields nothing when the login token covers all accounts.
+        """
+        return
+        yield
 
 
 class MfaHandlerBase(abc.ABC):
