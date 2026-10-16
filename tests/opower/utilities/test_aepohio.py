@@ -33,6 +33,12 @@ class TestAEPOhio(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("America/New_York", aep.timezone())
 
+    def test_uses_graphql_reads(self) -> None:
+        """Reads are served from dsm-graphql-v1 since DataBrowser-v1 refuses AEP."""
+        aep = AEPOHio()
+
+        self.assertTrue(aep.uses_graphql_reads())
+
     async def test_real_login(self) -> None:
         """Perform a live test against the AEP Ohio and Opower websites."""
         load_dotenv(dotenv_path=ENV_SECRET_PATH)

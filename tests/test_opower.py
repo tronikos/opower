@@ -3447,3 +3447,299 @@ async def test_last_batch_of_one_day_is_still_fetched(
             (date(2026, 7, 6), date(2026, 8, 1)),
             (date(2026, 7, 5), date(2026, 7, 5)),
         ]
+
+
+def _aep(session: _FakeSession) -> Opower:
+    """Return an AEP Ohio client wired to a fake session and already logged in."""
+    opower = Opower(
+        session,  # type: ignore[arg-type]
+        "AEP Ohio",
+        "test",
+        "test",
+    )
+    opower._access_token = _ACCESS_TOKEN
+    return opower
+
+
+def _net_usage_response(
+    reads: list[tuple[str, float | None] | tuple[str, float | None, float]],
+    mapped_account: str = _ELEC_ACCOUNT_UUID,
+) -> dict[str, Any]:
+    """Build a dsm-graphql-v1 readStreams response carrying only netUsage reads.
+
+    Each read is (interval, usage) or (interval, usage, cost); a read without a
+    cost stands for one the utility did not rate.
+    """
+
+    def to_read(entry: tuple[Any, ...]) -> dict[str, Any]:
+        interval, value, *cost = entry
+        read: dict[str, Any] = {
+            "timeInterval": interval,
+            "measuredAmount": None if value is None else {"value": value},
+        }
+        if cost:
+            read["monetaryAmount"] = {"value": cost[0]}
+        return read
+
+    return {
+        "data": {
+            "billingAccountByAuthContext": {
+                "serviceAgreementsConnection": {
+                    "edges": [
+                        {
+                            "node": {
+                                "utilityId": "unrelated",
+                                "mappedUtilityAccounts": [{"uuid": mapped_account}],
+                                "servicePointsConnection": {
+                                    "edges": [
+                                        {
+                                            "node": {
+                                                "readStreams": {"netUsage": [{"reads": [to_read(entry) for entry in reads]}]}
+                                            }
+                                        }
+                                    ]
+                                },
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+
+def _bills_response(segments_per_bill: list[list[dict[str, Any]]]) -> dict[str, Any]:
+    """Build a dsm-graphql-v1 bills response from a list of segments per bill."""
+    return {
+        "data": {
+            "billingAccountByAuthContext": {
+                "bills": [{"segments": segments} for segments in segments_per_bill],
+            }
+        }
+    }
+
+
+class _ReadsRouter:
+    """Serve the dsm-graphql-v1 queries and record the variables of each request."""
+
+    wants_request = True
+
+    def __init__(self, reads: Any = None, bills: Any = None) -> None:
+        """Serve `reads` for readStreams queries and `bills` for bill queries."""
+        self.reads = reads
+        self.bills = bills
+        self.read_variables: list[dict[str, Any]] = []
+        self.bill_variables: list[dict[str, Any]] = []
+
+    def __call__(self, request: dict[str, Any]) -> Any:
+        body = request.get("json") or {}
+        query = body.get("query", "")
+        variables = body.get("variables") or {}
+        if "registers" in query:
+            # The import/export probe: this account has no separate registers.
+            return {"data": {"billingAccountByAuthContext": {"serviceAgreementsConnection": {"edges": []}}}}
+        if "bills(" in query:
+            self.bill_variables.append(variables)
+            return self.bills if self.bills is not None else _bills_response([])
+        self.read_variables.append(variables)
+        return self.reads(variables) if callable(self.reads) else self.reads
+
+
+@pytest.mark.asyncio
+async def test_reads_are_served_from_graphql_when_the_utility_uses_graphql_reads() -> None:
+    """A utility that serves reads from dsm-graphql-v1 never touches DataBrowser-v1."""
+    router = _ReadsRouter(
+        _net_usage_response(
+            [
+                ("2026-10-09T00:00:00-04:00/2026-10-10T00:00:00-04:00", 34.47, 6.45),
+                ("2026-10-10T00:00:00-04:00/2026-10-11T00:00:00-04:00", 27.262, 5.11),
+                # Not measured yet: left out rather than reported as zero.
+                ("2026-10-11T00:00:00-04:00/2026-10-12T00:00:00-04:00", None),
+            ]
+        )
+    )
+    session = _FakeSession({"dsm-graphql-v1": router})
+    opower = _aep(session)
+    opower.utility._subdomain = "aepo"  # type: ignore[attr-defined]
+
+    result = await opower.async_get_cost_reads(
+        _elec_account(), AggregateType.DAY, datetime(2026, 10, 9), datetime(2026, 10, 11)
+    )
+
+    # The cost is the utility's rating of each read, so no bill request is made;
+    # a read that is not measured yet is left out.
+    assert [(r.start_time.isoformat(), r.end_time.isoformat(), r.consumption, r.provided_cost) for r in result] == [
+        ("2026-10-09T00:00:00-04:00", "2026-10-10T00:00:00-04:00", 34.47, 6.45),
+        ("2026-10-10T00:00:00-04:00", "2026-10-11T00:00:00-04:00", 27.262, 5.11),
+    ]
+    # The caller already pads the range by a day and, like the REST endpoints,
+    # the window then covers the whole of its end date.
+    assert router.read_variables[0] == {
+        "customerUrn": f"urn:opower:customer:uuid:{_CUSTOMER_UUID}",
+        "timeInterval": "2026-10-09T00:00:00-04:00/2026-10-13T00:00:00-04:00",
+        "resolution": "DAY",
+    }
+    assert not router.bill_variables
+
+    usage = await opower.async_get_usage_reads(
+        _elec_account(), AggregateType.DAY, datetime(2026, 10, 9), datetime(2026, 10, 11)
+    )
+    assert [r.consumption for r in usage] == [34.47, 27.262]
+    # Cost or usage, interval reads never request the bills.
+    assert not router.bill_variables
+    # DataBrowser-v1 is never asked; the fake session would fail the test if it were.
+    assert not any("DataBrowser-v1" in request["url"] for request in session.requests)
+
+
+@pytest.mark.asyncio
+async def test_graphql_bill_reads_match_the_account_and_carry_cost() -> None:
+    """Bill reads from GraphQL carry usage and cost for the requested account only."""
+
+    def segment(interval: str, account: str, usage: float, charges: Any, amount: float | None) -> dict[str, Any]:
+        if charges is None:
+            usage_charges: Any = None
+        elif isinstance(charges, list):
+            usage_charges = [{"value": charge} for charge in charges]
+        else:
+            usage_charges = {"value": charges}
+        return {
+            "usageInterval": interval,
+            "serviceAgreement": {"utilityId": "unrelated", "mappedUtilityAccounts": [{"uuid": account}]},
+            "serviceQuantities": [
+                {"serviceQuantityIdentifier": "NET_USAGE", "serviceQuantity": {"value": usage}},
+                {"serviceQuantityIdentifier": "DEMAND", "serviceQuantity": {"value": 9.9}},
+            ],
+            "usageCharges": usage_charges,
+            "currentAmount": None if amount is None else {"value": amount},
+        }
+
+    bills = _bills_response(
+        [
+            [
+                segment("2026-07-29T04:00:00Z/2026-08-27T04:00:00Z", _ELEC_ACCOUNT_UUID, 1457.0, 196.36, None),
+                segment("2026-07-29T04:00:00Z/2026-08-27T04:00:00Z", _GAS_ACCOUNT_UUID, 12.0, 20.0, 30.0),
+            ],
+            [
+                segment("2026-08-27T04:00:00Z/2026-09-26T04:00:00Z", _ELEC_ACCOUNT_UUID, 1501.0, 202.28, 305.44),
+            ],
+            [
+                # A list of charge line items is summed when there is no billed amount.
+                segment("2026-09-26T04:00:00Z/2026-10-27T04:00:00Z", _ELEC_ACCOUNT_UUID, 900.0, [1.5, 2.5], None),
+            ],
+        ]
+    )
+    router = _ReadsRouter(bills=bills)
+    session = _FakeSession({"dsm-graphql-v1": router})
+    opower = _aep(session)
+    opower.utility._subdomain = "aepo"  # type: ignore[attr-defined]
+
+    result = await opower.async_get_cost_reads(_elec_account(), AggregateType.BILL)
+
+    assert [(r.start_time.isoformat(), r.end_time.isoformat(), r.consumption, r.provided_cost) for r in result] == [
+        ("2026-07-29T00:00:00-04:00", "2026-08-27T00:00:00-04:00", 1457.0, 196.36),
+        # The billed amount wins when a segment carries both.
+        ("2026-08-27T00:00:00-04:00", "2026-09-26T00:00:00-04:00", 1501.0, 305.44),
+        ("2026-09-26T00:00:00-04:00", "2026-10-27T00:00:00-04:00", 900.0, 4.0),
+    ]
+    assert len(router.bill_variables) == 1
+
+
+@pytest.mark.asyncio
+async def test_graphql_reads_split_windows_larger_than_the_server_allows() -> None:
+    """A range over the per-request cap is walked in several requests."""
+    router = _ReadsRouter(lambda variables: _net_usage_response([(variables["timeInterval"], 1.0)]))
+    session = _FakeSession({"dsm-graphql-v1": router})
+    opower = _aep(session)
+    opower.utility._subdomain = "aepo"  # type: ignore[attr-defined]
+
+    reads = await opower._async_fetch_graphql_reads(
+        _elec_account(), AggregateType.HOUR, datetime(2026, 6, 1), datetime(2026, 7, 15)
+    )
+
+    # 45 days of hourly reads against a 720 hour cap.
+    assert [variables["timeInterval"] for variables in router.read_variables] == [
+        "2026-06-01T00:00:00-04:00/2026-07-01T00:00:00-04:00",
+        "2026-07-01T00:00:00-04:00/2026-07-16T00:00:00-04:00",
+    ]
+    assert len(reads) == 2
+    # Reads the utility did not rate come back at zero cost rather than missing.
+    assert [read["providedCost"] for read in reads] == [0, 0]
+
+
+@pytest.mark.asyncio
+async def test_graphql_day_reads_split_before_the_unrated_range() -> None:
+    """A day range over the rated cap is walked in several requests.
+
+    From 364 days up the server stops rating day reads, so the cap is 363.
+    """
+    router = _ReadsRouter(lambda variables: _net_usage_response([(variables["timeInterval"], 1.0, 0.5)]))
+    session = _FakeSession({"dsm-graphql-v1": router})
+    opower = _aep(session)
+    opower.utility._subdomain = "aepo"  # type: ignore[attr-defined]
+
+    reads = await opower._async_fetch_graphql_reads(
+        _elec_account(), AggregateType.DAY, datetime(2025, 6, 2), datetime(2026, 6, 1)
+    )
+
+    # 365 days of daily reads against a 363 day cap.
+    assert [variables["timeInterval"] for variables in router.read_variables] == [
+        "2025-06-02T00:00:00-04:00/2026-05-31T00:00:00-04:00",
+        "2026-05-31T00:00:00-04:00/2026-06-02T00:00:00-04:00",
+    ]
+    assert [(read["startTime"], read["providedCost"]) for read in reads] == [
+        ("2025-06-02T00:00:00-04:00", 0.5),
+        ("2026-05-31T00:00:00-04:00", 0.5),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_graphql_reads_serving_a_boundary_read_twice_count_it_once() -> None:
+    """A read served by both windows it straddles is kept, not added twice."""
+
+    def reads_for_window(variables: dict[str, Any]) -> dict[str, Any]:
+        window_start = str(variables["timeInterval"]).split("/")[0]
+        if window_start.startswith("2026-06"):
+            return _net_usage_response(
+                [
+                    ("2026-06-30T22:00:00-04:00/2026-06-30T23:00:00-04:00", 1.0, 0.1),
+                    ("2026-06-30T23:00:00-04:00/2026-07-01T00:00:00-04:00", 2.0, 0.2),
+                ]
+            )
+        # The second window re-serves the read ending exactly at its start, as
+        # the REST endpoints are known to serve one read past the window.
+        return _net_usage_response(
+            [
+                ("2026-06-30T23:00:00-04:00/2026-07-01T00:00:00-04:00", 2.0, 0.2),
+                ("2026-07-01T00:00:00-04:00/2026-07-01T01:00:00-04:00", 3.0, 0.3),
+            ]
+        )
+
+    router = _ReadsRouter(reads_for_window)
+    session = _FakeSession({"dsm-graphql-v1": router})
+    opower = _aep(session)
+    opower.utility._subdomain = "aepo"  # type: ignore[attr-defined]
+
+    reads = await opower._async_fetch_graphql_reads(
+        _elec_account(), AggregateType.HOUR, datetime(2026, 6, 1), datetime(2026, 7, 15)
+    )
+
+    # Both the usage and the cost of the boundary read are kept once.
+    assert {read["startTime"]: (read["value"], read["providedCost"]) for read in reads} == {
+        "2026-06-30T22:00:00-04:00": (1.0, 0.1),
+        "2026-06-30T23:00:00-04:00": (2.0, 0.2),
+        "2026-07-01T00:00:00-04:00": (3.0, 0.3),
+    }
+
+
+@pytest.mark.asyncio
+async def test_graphql_read_errors_reach_the_caller() -> None:
+    """Failures from dsm-graphql-v1 surface to the caller; DataBrowser-v1 is not tried."""
+    session = _FakeSession({"dsm-graphql-v1": _FakeResponse({}, status=404)})
+    opower = _aep(session)
+    opower.utility._subdomain = "aepo"  # type: ignore[attr-defined]
+
+    with pytest.raises(ApiException) as err:
+        await opower.async_get_cost_reads(_elec_account(), AggregateType.BILL)
+
+    assert err.value.status == 404
+    assert not any("DataBrowser-v1" in request["url"] for request in session.requests)

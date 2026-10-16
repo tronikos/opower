@@ -60,6 +60,17 @@ class UtilityBase(abc.ABC):
         """
         return False
 
+    @staticmethod
+    def uses_graphql_reads() -> bool:
+        """Return True if this utility serves historical reads from dsm-graphql-v1.
+
+        Override in utilities whose portal no longer serves DataBrowser-v1 (e.g.
+        AEP since October 2026, which answers 403 ACCOUNT_ACCESS_FORBIDDEN to
+        every request whatever headers are sent). The read streams carry each
+        read's usage and cost.
+        """
+        return False
+
     def utilitycode(self) -> str:
         """Return the utilitycode identifier for the utility."""
         return self.subdomain()

@@ -60,6 +60,15 @@ class AEPBase(ABC):
         return "America/New_York"
 
     @staticmethod
+    def uses_graphql_reads() -> bool:
+        """AEP's portal serves reads from dsm-graphql-v1.
+
+        Since October 2026 DataBrowser-v1 answers 403 ACCOUNT_ACCESS_FORBIDDEN
+        to every AEP request, whatever headers are sent.
+        """
+        return True
+
+    @staticmethod
     @abstractmethod
     def hostname() -> str:
         """Return the hostname for login."""
