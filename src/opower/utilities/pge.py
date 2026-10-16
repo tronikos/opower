@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import urlencode
 
@@ -13,6 +14,19 @@ from ..exceptions import CannotConnect, InvalidAuth, MfaChallenge
 from .base import MfaHandlerBase, UtilityBase
 
 _LOGGER = logging.getLogger(__name__)
+
+# Errors of the account handling that runs after login, which is best effort:
+# network errors, error replies and replies of an unexpected shape.
+_ACCOUNT_ERRORS = (
+    aiohttp.ClientError,
+    TimeoutError,
+    CannotConnect,
+    InvalidAuth,
+    AttributeError,
+    KeyError,
+    TypeError,
+    ValueError,
+)
 
 
 async def _aura_apex_action_execute(session: aiohttp.ClientSession, body: dict[str, Any]) -> Any:
@@ -30,6 +44,38 @@ async def _aura_apex_action_execute(session: aiohttp.ClientSession, body: dict[s
         raise_for_status=True,
     )
     return await resp.json()
+
+
+async def _aura_community_action_execute(
+    session: aiohttp.ClientSession,
+    aura_token: str,
+    classname: str,
+    method: str,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Execute an Apex action on the My Account dashboard and return the action result."""
+    _LOGGER.debug("Executing action: %s.%s", classname, method)
+    action_params: dict[str, Any] = {"classname": classname, "method": method}
+    if params is not None:
+        action_params["params"] = params
+    body: dict[str, Any] = {
+        "message": {
+            "actions": [
+                {
+                    "descriptor": "aura://ApexActionController/ACTION$execute",
+                    "params": action_params,
+                }
+            ]
+        },
+        "aura.context": {"app": "siteforce:communityApp"},
+        "aura.pageURI": "/myaccount/s/",
+        "aura.token": aura_token,
+    }
+    res = await _aura_apex_action_execute(session, body)
+    if not (actions := res.get("actions")):
+        raise CannotConnect(f"No result for action {classname}.{method}")
+    action: dict[str, Any] = actions[0]
+    return action
 
 
 class PgeMfaHandler(MfaHandlerBase):
@@ -147,6 +193,11 @@ class PgeMfaHandler(MfaHandlerBase):
 class PGE(UtilityBase):
     """Pacific Gas & Electric (PG&E)."""
 
+    def __init__(self) -> None:
+        """Initialize."""
+        super().__init__()
+        self._aura_token = ""
+
     @staticmethod
     def name() -> str:
         """Distinct recognizable name of the utility."""
@@ -209,14 +260,14 @@ class PGE(UtilityBase):
             raise InvalidAuth(f"Login failed: {retMessage}")
 
         _LOGGER.debug("Following redirect")
-        resp = await session.get(
+        await session.get(
             retMessage,
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
         )
 
         _LOGGER.debug("Accessing main account page to set cookies")
-        resp = await session.get(
+        await session.get(
             "https://myaccount.pge.com/myaccount/s/",
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
@@ -231,26 +282,65 @@ class PGE(UtilityBase):
         if not aura_token:
             raise InvalidAuth("Could not find Aura token in cookies after login")
 
+        self._aura_token = aura_token
         for classname, method in (
             ("MyAcct_OneTrustIntegrationController", "generateToken"),
             ("MyAcct_AccountCacheHandler", "copyToSessionCacheForUser"),
         ):
-            _LOGGER.debug("Executing action: %s.%s", classname, method)
-            body = {
-                "message": {
-                    "actions": [
-                        {
-                            "descriptor": "aura://ApexActionController/ACTION$execute",
-                            "params": {"classname": classname, "method": method},
-                        }
-                    ]
-                },
-                "aura.context": {"app": "siteforce:communityApp"},
-                "aura.pageURI": "/myaccount/s/",
-                "aura.token": aura_token,
-            }
-            await _aura_apex_action_execute(session, body)
+            await _aura_community_action_execute(session, aura_token, classname, method)
 
+        return await self._async_get_opower_token(session)
+
+    async def async_iter_account_tokens(self, session: aiohttp.ClientSession) -> AsyncIterator[str]:
+        """Yield an Opower access token per PG&E billing account.
+
+        The token from async_login only covers the billing account selected on the dashboard.
+        """
+        try:
+            account_numbers = await self._async_get_account_numbers(session)
+        except _ACCOUNT_ERRORS as err:
+            # Listing accounts is extra to login, so fall back to the selected account.
+            _LOGGER.warning("Could not list billing accounts, using only the selected one: %s", err)
+            return
+        if len(account_numbers) < 2:
+            return
+        for account_number in account_numbers:
+            try:
+                await self._async_select_account(session, account_number)
+                token = await self._async_get_opower_token(session)
+            except _ACCOUNT_ERRORS as err:
+                # One unusable account, e.g. a closed one, must not hide the others.
+                _LOGGER.warning("Could not get an Opower token for billing account %s: %s", account_number, err)
+                continue
+            yield token
+
+    async def _async_get_account_numbers(self, session: aiohttp.ClientSession) -> list[str]:
+        """Return the billing account numbers shown in the dashboard's account picker."""
+        action = await _aura_community_action_execute(
+            session, self._aura_token, "MyAcct_AccountCacheHandler", "getSessionCacheVarLWC"
+        )
+        if action.get("state") != "SUCCESS":
+            raise CannotConnect(f"Failed to list accounts: {action.get('error', 'Unknown error')}")
+        user_accounts = action["returnValue"]["returnValue"].get("userAccounts")
+        if not user_accounts:
+            _LOGGER.debug("No account list in the session cache")
+            return []
+        return list(dict.fromkeys(account["value"] for account in json.loads(user_accounts)))
+
+    async def _async_select_account(self, session: aiohttp.ClientSession, account_number: str) -> None:
+        """Select the billing account on the dashboard, like its account picker does."""
+        action = await _aura_community_action_execute(
+            session,
+            self._aura_token,
+            "MyAcct_AccountCacheHandler",
+            "setBillingAccountSelection",
+            {"ccspAccountId": account_number, "isContinuation": False},
+        )
+        if action.get("state") != "SUCCESS":
+            raise CannotConnect(f"Failed to select account {account_number}: {action.get('error', 'Unknown error')}")
+
+    async def _async_get_opower_token(self, session: aiohttp.ClientSession) -> str:
+        """Return an Opower token for the billing account selected on the dashboard."""
         _LOGGER.debug("Fetching OpowerDataBrowser to extract token")
         resp = await session.get(
             "https://myaccount.pge.com/myaccount/apex/MyAcct_VF_BillInsights_OpowerDataBrowser",

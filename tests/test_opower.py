@@ -27,7 +27,7 @@ from opower import (
 )
 from opower.exceptions import ApiException, InvalidAuth
 from opower.opower import Customer
-from opower.utilities.pge import PGE
+from opower.utilities.pge import PGE, _aura_community_action_execute
 
 if TYPE_CHECKING:
     from opower.utilities import UtilityBase
@@ -828,6 +828,251 @@ async def test_get_accounts_raises_when_no_customers() -> None:
     opower = _pge(_FakeSession({"multi-account-v1": {"customers": []}}))
     with pytest.raises(CannotConnect):
         await opower.async_get_accounts()
+
+
+@pytest.mark.asyncio
+async def test_login_uses_a_token_per_utility_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Customers are fetched, and later queried, with the token of their utility account.
+
+    A PG&E token only covers the billing account selected on the PG&E website,
+    so a user with several billing accounts gets a token per account.
+    """
+    second_customer_uuid = "55555555-5555-11e5-bf2b-000000000005"
+    second_customers = json.loads(json.dumps(_CUSTOMERS_RESPONSE))
+    second_customers["customers"][0]["uuid"] = second_customer_uuid
+
+    def customers_route(request: dict[str, Any]) -> Any:
+        if request["headers"]["authorization"] == "Bearer second-token":
+            return second_customers
+        return _CUSTOMERS_RESPONSE
+
+    customers_route.wants_request = True  # type: ignore[attr-defined]
+
+    async def login(*args: object) -> str:
+        return _ACCESS_TOKEN
+
+    async def iter_account_tokens(session: object) -> Any:
+        for token in ("first-token", "second-token"):
+            yield token
+
+    session = _FakeSession({"multi-account-v1": customers_route})
+    opower = _pge(session)
+    monkeypatch.setattr(opower.utility, "async_login", login)
+    monkeypatch.setattr(opower.utility, "async_iter_account_tokens", iter_account_tokens)
+    await opower.async_login()
+    accounts = await opower.async_get_accounts()
+
+    assert [account.customer.uuid for account in accounts] == [_CUSTOMER_UUID, second_customer_uuid]
+    assert [request["headers"]["authorization"] for request in session.requests] == [
+        "Bearer first-token",
+        "Bearer second-token",
+    ]
+    assert opower._get_headers(_CUSTOMER_UUID)["authorization"] == "Bearer first-token"
+    assert opower._get_headers(second_customer_uuid)["authorization"] == "Bearer second-token"
+    assert opower._get_headers()["authorization"] == f"Bearer {_ACCESS_TOKEN}"
+
+
+@pytest.mark.asyncio
+async def test_login_skips_a_utility_account_whose_customers_fail(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failure to fetch the customers of one utility account does not fail the login."""
+
+    def customers_route(request: dict[str, Any]) -> Any:
+        if request["headers"]["authorization"] == "Bearer first-token":
+            return _FakeResponse({"error": "not found"}, status=404)
+        return _CUSTOMERS_RESPONSE
+
+    customers_route.wants_request = True  # type: ignore[attr-defined]
+
+    async def login(*args: object) -> str:
+        return _ACCESS_TOKEN
+
+    async def iter_account_tokens(session: object) -> Any:
+        for token in ("first-token", "second-token"):
+            yield token
+
+    opower = _pge(_FakeSession({"multi-account-v1": customers_route}))
+    monkeypatch.setattr(opower.utility, "async_login", login)
+    monkeypatch.setattr(opower.utility, "async_iter_account_tokens", iter_account_tokens)
+    await opower.async_login()
+    accounts = await opower.async_get_accounts()
+
+    assert {account.customer.uuid for account in accounts} == {_CUSTOMER_UUID}
+    assert opower._get_headers(_CUSTOMER_UUID)["authorization"] == "Bearer second-token"
+
+
+@pytest.mark.asyncio
+async def test_login_drops_the_customers_of_the_previous_login(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Logging in again does not keep the per-account tokens of the previous login."""
+    account_tokens = ["old-token"]
+
+    async def login(*args: object) -> str:
+        return _ACCESS_TOKEN
+
+    async def iter_account_tokens(session: object) -> Any:
+        for token in account_tokens:
+            yield token
+
+    session = _FakeSession({"multi-account-v1": _CUSTOMERS_RESPONSE})
+    opower = _pge(session)
+    monkeypatch.setattr(opower.utility, "async_login", login)
+    monkeypatch.setattr(opower.utility, "async_iter_account_tokens", iter_account_tokens)
+    await opower.async_login()
+    assert opower._get_headers(_CUSTOMER_UUID)["authorization"] == "Bearer old-token"
+
+    account_tokens.clear()
+    await opower.async_login()
+    await opower.async_get_accounts()
+
+    assert opower._get_headers(_CUSTOMER_UUID)["authorization"] == f"Bearer {_ACCESS_TOKEN}"
+    assert session.requests[-1]["headers"]["authorization"] == f"Bearer {_ACCESS_TOKEN}"
+
+
+@pytest.mark.asyncio
+async def test_login_keeps_customers_without_tokens_per_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Logging in again keeps customers fetched with the login token, as before multi-account support."""
+
+    async def login(*args: object) -> str:
+        return _ACCESS_TOKEN
+
+    async def iter_account_tokens(session: object) -> Any:
+        return
+        yield
+
+    session = _FakeSession({"multi-account-v1": _CUSTOMERS_RESPONSE})
+    opower = _pge(session)
+    monkeypatch.setattr(opower.utility, "async_login", login)
+    monkeypatch.setattr(opower.utility, "async_iter_account_tokens", iter_account_tokens)
+    await opower.async_login()
+    await opower.async_get_accounts()
+    await opower.async_login()
+    await opower.async_get_accounts()
+
+    assert len(session.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("account_numbers", "expected_tokens"),
+    [
+        (["1000000001", "1000000002"], ["token-1000000001", "token-1000000002"]),
+        (["1000000001", "1000000002", "1000000001"], ["token-1000000001", "token-1000000002"]),
+        # A single account is covered by the token from login.
+        (["1000000001"], []),
+    ],
+)
+async def test_pge_yields_a_token_per_billing_account(
+    monkeypatch: pytest.MonkeyPatch, account_numbers: list[str], expected_tokens: list[str]
+) -> None:
+    """PG&E selects each billing account on its website and returns its Opower token."""
+    selected: list[str] = []
+
+    async def action(
+        session: object, aura_token: str, classname: str, method: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        if method == "getSessionCacheVarLWC":
+            user_accounts = [{"value": number, "label": f"{number}-0"} for number in account_numbers]
+            return {"state": "SUCCESS", "returnValue": {"returnValue": {"userAccounts": json.dumps(user_accounts)}}}
+        assert method == "setBillingAccountSelection"
+        assert params is not None
+        selected.append(params["ccspAccountId"])
+        return {"state": "SUCCESS", "returnValue": None}
+
+    async def opower_token(self: PGE, session: object) -> str:
+        return f"token-{selected[-1]}"
+
+    monkeypatch.setattr("opower.utilities.pge._aura_community_action_execute", action)
+    monkeypatch.setattr(PGE, "_async_get_opower_token", opower_token)
+
+    tokens = [token async for token in PGE().async_iter_account_tokens(Mock())]
+
+    assert tokens == expected_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("select_response", "token_error"),
+    [
+        ({"state": "ERROR", "error": "inactive account"}, None),
+        (ValueError("not json"), None),
+        (["not", "a", "dict"], None),
+        (TimeoutError(), None),
+        ({"state": "SUCCESS", "returnValue": None}, InvalidAuth("no token")),
+    ],
+)
+async def test_pge_skips_a_billing_account_that_fails(
+    monkeypatch: pytest.MonkeyPatch, select_response: dict[str, Any] | list[str] | Exception, token_error: Exception | None
+) -> None:
+    """An unusable billing account, e.g. a closed one, does not hide the others."""
+    selected: list[str] = []
+
+    async def action(
+        session: object, aura_token: str, classname: str, method: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        if method == "getSessionCacheVarLWC":
+            user_accounts = [{"value": number} for number in ("1000000001", "1000000002", "1000000003")]
+            return {"state": "SUCCESS", "returnValue": {"returnValue": {"userAccounts": json.dumps(user_accounts)}}}
+        assert params is not None
+        selected.append(params["ccspAccountId"])
+        if params["ccspAccountId"] == "1000000002" and token_error is None:
+            if isinstance(select_response, Exception):
+                raise select_response
+            return cast("dict[str, Any]", select_response)
+        return {"state": "SUCCESS", "returnValue": None}
+
+    async def opower_token(self: PGE, session: object) -> str:
+        if selected[-1] == "1000000002" and token_error is not None:
+            raise token_error
+        return f"token-{selected[-1]}"
+
+    monkeypatch.setattr("opower.utilities.pge._aura_community_action_execute", action)
+    monkeypatch.setattr(PGE, "_async_get_opower_token", opower_token)
+
+    tokens = [token async for token in PGE().async_iter_account_tokens(Mock())]
+
+    assert tokens == ["token-1000000001", "token-1000000003"]
+
+
+@pytest.mark.asyncio
+async def test_pge_action_without_result_raises_cannot_connect(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A dashboard reply without an action result is a connection error, not a crash."""
+
+    async def apex_action(session: object, body: dict[str, Any]) -> dict[str, Any]:
+        return {"actions": []}
+
+    monkeypatch.setattr("opower.utilities.pge._aura_apex_action_execute", apex_action)
+
+    with pytest.raises(CannotConnect):
+        await _aura_community_action_execute(Mock(), "aura-token", "Class", "method")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"state": "ERROR", "error": "boom"},
+        {"state": "SUCCESS", "returnValue": None},
+        {"state": "SUCCESS", "returnValue": {"returnValue": {"userAccounts": "not json"}}},
+        aiohttp.ClientError("connection reset"),
+    ],
+)
+async def test_pge_falls_back_to_the_selected_account_when_listing_fails(
+    monkeypatch: pytest.MonkeyPatch, response: dict[str, Any] | Exception
+) -> None:
+    """A failure to list billing accounts does not fail the login."""
+
+    async def action(
+        session: object, aura_token: str, classname: str, method: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        assert method == "getSessionCacheVarLWC"
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    monkeypatch.setattr("opower.utilities.pge._aura_community_action_execute", action)
+
+    tokens = [token async for token in PGE().async_iter_account_tokens(Mock())]
+
+    assert tokens == []
 
 
 @pytest.mark.asyncio

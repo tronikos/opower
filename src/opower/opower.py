@@ -577,6 +577,8 @@ class Opower:
         self._login_data: dict[str, Any] = login_data or {}
         self._access_token: str | None = None
         self._customers: list[Any] = []
+        # Keyed by customer uuid, for utilities with a separate access token per account.
+        self._customer_tokens: dict[str, str] = {}
         self._user_accounts: list[Any] = []
         # Keyed by account uuid: meters are fetched per account, so a single
         # list would serve one account's meters for every other account.
@@ -598,6 +600,7 @@ class Opower:
             self._access_token = await self.utility.async_login(
                 self._session, self._username, self._password, self._login_data
             )
+            await self._async_get_customers_per_account_token()
         except ClientResponseError as err:
             if err.status in (401, 403):
                 raise InvalidAuth(err) from err
@@ -989,9 +992,36 @@ class Opower:
             raise CannotConnect(f"No utility customers found for {self.utility.name()}")
         return self._customers
 
-    async def _async_fetch_multi_account_customers(self) -> list[Any]:
+    async def _async_get_customers_per_account_token(self) -> None:
+        """Get the customers of each utility account that has its own access token.
+
+        Replaces the cached customers and tokens when this login or the previous one used tokens per account.
+        Otherwise the cached customers stay valid with the new login token.
+        If none are cached, they are fetched later with the token from login.
+        """
+        customers: list[Any] = []
+        customer_tokens: dict[str, str] = {}
+        async for token in self.utility.async_iter_account_tokens(self._session):
+            # Opower ties the token to an account on first use, which must happen
+            # before the utility issues the token for the next account.
+            try:
+                account_customers = await self._async_fetch_multi_account_customers(token)
+            except ApiException as err:
+                _LOGGER.warning("Could not fetch the customers of a utility account: %s", err)
+                continue
+            for customer in account_customers:
+                if customer["uuid"] not in customer_tokens:
+                    customer_tokens[customer["uuid"]] = token
+                    customers.append(customer)
+        # Customers cached without tokens per account stay valid with the new login token, so keep those.
+        if customer_tokens or self._customer_tokens:
+            self._customers = customers
+            self._customer_tokens = customer_tokens
+
+    async def _async_fetch_multi_account_customers(self, access_token: str | None = None) -> list[Any]:
         """Fetch customers from the multi-account-v1 endpoint.
 
+        :param access_token: token to use instead of the one from login
         :raises ApiException: if the request fails or the response has no
             "customers" key, so that DSS callers can fall back.
         """
@@ -1000,7 +1030,10 @@ class Opower:
             f"/edge/apis/multi-account-v1/cws/{self.utility.utilitycode()}"
             "/customers?offset=0&batchSize=100&addressFilter="
         )
-        result = await self._async_get_request(url, {}, self._get_headers())
+        headers = self._get_headers()
+        if access_token:
+            headers["authorization"] = f"Bearer {access_token}"
+        result = await self._async_get_request(url, {}, headers)
         if "customers" not in result:
             raise ApiException("No 'customers' in the multi-account-v1 response", url=url)
         return list(result["customers"])
@@ -2204,8 +2237,8 @@ class Opower:
 
     def _get_headers(self, customer_uuid: str | None = None) -> dict[str, str]:
         headers = {"User-Agent": USER_AGENT}
-        if self._access_token:
-            headers["authorization"] = f"Bearer {self._access_token}"
+        if access_token := self._customer_tokens.get(customer_uuid or "", self._access_token):
+            headers["authorization"] = f"Bearer {access_token}"
 
         opower_selected_entities: list[str] = []
         if self.utility.is_dss():
