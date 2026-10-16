@@ -922,17 +922,28 @@ class Opower:
         return self._customers
 
     async def _async_get_customers_per_account_token(self) -> None:
-        """Get the customers of each utility account that has its own access token."""
+        """Get the customers of each utility account that has its own access token.
+
+        Replaces the cached customers and tokens when this login or the previous one used tokens per account.
+        Otherwise the cached customers stay valid with the new login token.
+        If none are cached, they are fetched later with the token from login.
+        """
         customers: list[Any] = []
         customer_tokens: dict[str, str] = {}
         async for token in self.utility.async_iter_account_tokens(self._session):
             # Opower ties the token to an account on first use, which must happen
             # before the utility issues the token for the next account.
-            for customer in await self._async_fetch_multi_account_customers(token):
+            try:
+                account_customers = await self._async_fetch_multi_account_customers(token)
+            except ApiException as err:
+                _LOGGER.warning("Could not fetch the customers of a utility account: %s", err)
+                continue
+            for customer in account_customers:
                 if customer["uuid"] not in customer_tokens:
                     customer_tokens[customer["uuid"]] = token
                     customers.append(customer)
-        if customers:
+        # Customers cached without tokens per account stay valid with the new login token, so keep those.
+        if customer_tokens or self._customer_tokens:
             self._customers = customers
             self._customer_tokens = customer_tokens
 

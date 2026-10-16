@@ -15,6 +15,19 @@ from .base import MfaHandlerBase, UtilityBase
 
 _LOGGER = logging.getLogger(__name__)
 
+# Errors of the account handling that runs after login, which is best effort:
+# network errors, error replies and replies of an unexpected shape.
+_ACCOUNT_ERRORS = (
+    aiohttp.ClientError,
+    TimeoutError,
+    CannotConnect,
+    InvalidAuth,
+    AttributeError,
+    KeyError,
+    TypeError,
+    ValueError,
+)
+
 
 async def _aura_apex_action_execute(session: aiohttp.ClientSession, body: dict[str, Any]) -> Any:
     payload = body.copy()
@@ -59,7 +72,9 @@ async def _aura_community_action_execute(
         "aura.token": aura_token,
     }
     res = await _aura_apex_action_execute(session, body)
-    action: dict[str, Any] = res["actions"][0]
+    if not (actions := res.get("actions")):
+        raise CannotConnect(f"No result for action {classname}.{method}")
+    action: dict[str, Any] = actions[0]
     return action
 
 
@@ -283,15 +298,21 @@ class PGE(UtilityBase):
         """
         try:
             account_numbers = await self._async_get_account_numbers(session)
-        except (aiohttp.ClientError, CannotConnect, KeyError, TypeError, ValueError) as err:
+        except _ACCOUNT_ERRORS as err:
             # Listing accounts is extra to login, so fall back to the selected account.
             _LOGGER.warning("Could not list billing accounts, using only the selected one: %s", err)
             return
         if len(account_numbers) < 2:
             return
         for account_number in account_numbers:
-            await self._async_select_account(session, account_number)
-            yield await self._async_get_opower_token(session)
+            try:
+                await self._async_select_account(session, account_number)
+                token = await self._async_get_opower_token(session)
+            except _ACCOUNT_ERRORS as err:
+                # One unusable account, e.g. a closed one, must not hide the others.
+                _LOGGER.warning("Could not get an Opower token for billing account %s: %s", account_number, err)
+                continue
+            yield token
 
     async def _async_get_account_numbers(self, session: aiohttp.ClientSession) -> list[str]:
         """Return the billing account numbers shown in the dashboard's account picker."""
@@ -304,7 +325,7 @@ class PGE(UtilityBase):
         if not user_accounts:
             _LOGGER.debug("No account list in the session cache")
             return []
-        return [account["value"] for account in json.loads(user_accounts)]
+        return list(dict.fromkeys(account["value"] for account in json.loads(user_accounts)))
 
     async def _async_select_account(self, session: aiohttp.ClientSession, account_number: str) -> None:
         """Select the billing account on the dashboard, like its account picker does."""
