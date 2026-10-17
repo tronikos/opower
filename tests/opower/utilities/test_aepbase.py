@@ -10,7 +10,7 @@ from opower.utilities.aepohio import AEPOHio
 
 USAGE_URL = "https://www.aepohio.com/account/usage/"
 VALID_TOKEN_URL = "https://www.aepohio.com/account/oauth/ValidToken"  # noqa: S105
-LOGIN_HTML = '<html><body>Redirecting to https://aepo.opower.com/</body></html>'
+LOGIN_HTML = "<html><body>Redirecting to https://aepo.opower.com/</body></html>"
 
 
 class _MockResponse:
