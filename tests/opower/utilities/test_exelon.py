@@ -1,0 +1,222 @@
+"""Tests for the Exelon subsidiaries (ComEd, Pepco, ...)."""
+
+from typing import Any
+
+import pytest
+from aiohttp import ClientResponseError, RequestInfo
+from multidict import CIMultiDict, CIMultiDictProxy
+from yarl import URL
+
+from opower.exceptions import InvalidAuth
+from opower.utilities.comed import ComEd
+from opower.utilities.exelon import ExelonURLHandler
+from opower.utilities.pepco import Pepco
+from tests.mock_http import MockResponse, MockSession
+
+BASE_URL = "comedb2c.b2clogin.com/comedb2c.onmicrosoft.com/B2C_1A_SignIn_Mobile"
+TOKEN_URL = f"https://{BASE_URL}/oauth2/v2.0/token"
+COMED_ACCOUNTS_URL = "https://eudapi.comed.com/mobile/custom/auth/accounts"
+PEPCO_ACCOUNTS_URL = "https://eudapi.pepco.com/mobile/custom/auth/accounts"
+BEARER_TOKEN = "bearer-token"  # noqa: S105
+REFRESH_TOKEN = "refresh-token"  # noqa: S105
+
+
+def _account(number: str, *, status: str = "Active", default: bool = False, **extra: Any) -> dict[str, Any]:
+    """Return an account as the Exelon mobile accounts endpoint lists it."""
+    return {"accountNumber": number, "status": status, "isDefaultProfile": default, **extra}
+
+
+def _md_residential() -> dict[str, Any]:
+    """Return the fields that put a Pepco account on the primary subdomain."""
+    return {
+        "isResidential": True,
+        "PremiseInfo": [{"mainAddress": {"townDetail": {"stateOrProvince": "MD"}}}],
+    }
+
+
+def _http_error(url: str, status: int) -> ClientResponseError:
+    """Return the error aiohttp raises for a failed response when raise_for_status is set."""
+    request_info = RequestInfo(URL(url), "GET", CIMultiDictProxy(CIMultiDict()), URL(url))
+    return ClientResponseError(request_info, (), status=status, message="error")
+
+
+class _ExelonSession(MockSession):
+    """Serves the Exelon token endpoint by grant, and canned responses for the rest.
+
+    A refresh of the login token returns BEARER_TOKEN. A request for an Opower
+    token returns "opower-<account number>", or raises the error registered for
+    that account number in token_errors.
+    """
+
+    def __init__(self, responses: dict[str, MockResponse | Exception]) -> None:
+        """Serve the given responses, raising those that are exceptions."""
+        super().__init__({})
+        self._routes = responses
+        self.token_errors: dict[str, Exception] = {}
+
+    def _handle(self, method: str, url: str, **kwargs: Any) -> MockResponse:
+        self.requests.append({"method": method, "url": url, **kwargs})
+        if url == TOKEN_URL:
+            data = kwargs["data"]
+            if "nonce" not in data:
+                return MockResponse(payload={"access_token": BEARER_TOKEN, "refresh_token": REFRESH_TOKEN})
+            if error := self.token_errors.get(data["nonce"]):
+                raise error
+            return MockResponse(payload={"access_token": f"opower-{data['nonce']}"})
+        response = self._routes[url]
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    def opower_token_requests(self) -> list[str]:
+        """Return the account numbers for which an Opower token was requested, in order."""
+        return [
+            request["data"]["nonce"] for request in self.requests if request["url"] == TOKEN_URL and "nonce" in request["data"]
+        ]
+
+
+def _login_data(account: dict[str, Any]) -> dict[str, Any]:
+    """Return the login data Home Assistant stores after the MFA flow."""
+    return {"token": REFRESH_TOKEN, "account": account, "base_url": BASE_URL}
+
+
+async def _tokens(utility: ComEd | Pepco, session: _ExelonSession) -> list[str]:
+    """Collect the tokens from async_iter_account_tokens."""
+    return [token async for token in utility.async_iter_account_tokens(session)]  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_iter_account_tokens_yields_a_token_per_active_account() -> None:
+    """Each active account gets its own Opower token, inactive ones are left out."""
+    accounts = [_account("111", default=True), _account("222"), _account("333", status="Inactive")]
+    session = _ExelonSession({COMED_ACCOUNTS_URL: MockResponse(payload={"success": True, "data": accounts})})
+    utility = ComEd()
+
+    from_login = await utility.async_login(session, "user", "pass", _login_data(accounts[0]))  # type: ignore[arg-type]
+    tokens = await _tokens(utility, session)
+
+    assert from_login == "opower-111"
+    assert tokens == ["opower-111", "opower-222"]
+    assert session.opower_token_requests() == ["111", "111", "222"]
+    accounts_requests = [request for request in session.requests if request["url"] == COMED_ACCOUNTS_URL]
+    assert len(accounts_requests) == 1
+    assert accounts_requests[0]["headers"]["Authorization"] == f"Bearer {BEARER_TOKEN}"
+
+
+@pytest.mark.asyncio
+async def test_iter_account_tokens_yields_nothing_for_a_single_account() -> None:
+    """With one active account the login token already covers everything."""
+    accounts = [_account("111"), _account("333", status="Inactive")]
+    session = _ExelonSession({COMED_ACCOUNTS_URL: MockResponse(payload={"success": True, "data": accounts})})
+    utility = ComEd()
+
+    await utility.async_login(session, "user", "pass", _login_data(accounts[0]))  # type: ignore[arg-type]
+
+    assert await _tokens(utility, session) == []
+    assert session.opower_token_requests() == ["111"]
+
+
+@pytest.mark.asyncio
+async def test_iter_account_tokens_yields_nothing_before_login() -> None:
+    """Without a login there is no handler to mint tokens with."""
+    session = _ExelonSession({})
+
+    assert await _tokens(ComEd(), session) == []
+    assert session.requests == []
+
+
+@pytest.mark.asyncio
+async def test_iter_account_tokens_skips_an_account_whose_token_is_rejected() -> None:
+    """One account that Exelon refuses a token for does not hide the others."""
+    accounts = [_account("111", default=True), _account("222"), _account("333")]
+    session = _ExelonSession({COMED_ACCOUNTS_URL: MockResponse(payload={"success": True, "data": accounts})})
+    utility = ComEd()
+    await utility.async_login(session, "user", "pass", _login_data(accounts[0]))  # type: ignore[arg-type]
+    # A 400 means the token was rejected: refresh_token returns {} and no token is issued.
+    session.token_errors["222"] = _http_error(TOKEN_URL, 400)
+    # A 5xx raises CannotConnect, which is also skipped.
+    session.token_errors["333"] = _http_error(TOKEN_URL, 503)
+
+    assert await _tokens(utility, session) == ["opower-111"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "accounts_response",
+    [
+        _http_error(COMED_ACCOUNTS_URL, 500),
+        MockResponse(payload={"success": False}),
+    ],
+    ids=["http_error", "unsuccessful"],
+)
+async def test_iter_account_tokens_falls_back_when_listing_fails(accounts_response: MockResponse | Exception) -> None:
+    """When the accounts cannot be listed, the login token keeps serving the default account."""
+    session = _ExelonSession({COMED_ACCOUNTS_URL: accounts_response})
+    utility = ComEd()
+    await utility.async_login(session, "user", "pass", _login_data(_account("111")))  # type: ignore[arg-type]
+
+    assert await _tokens(utility, session) == []
+    assert session.opower_token_requests() == ["111"]
+
+
+@pytest.mark.asyncio
+async def test_iter_account_tokens_skips_accounts_on_another_subdomain() -> None:
+    """Pepco serves MD residential accounts from pep and the rest from pepd, one subdomain per login."""
+    accounts = [
+        _account("111", default=True, **_md_residential()),
+        _account("222", isResidential=False),
+        _account("333", **_md_residential()),
+    ]
+    session = _ExelonSession({PEPCO_ACCOUNTS_URL: MockResponse(payload={"success": True, "data": accounts})})
+    utility = Pepco()
+
+    await utility.async_login(session, "user", "pass", _login_data(accounts[0]))  # type: ignore[arg-type]
+
+    assert utility.subdomain() == "pep"
+    assert await _tokens(utility, session) == ["opower-111", "opower-333"]
+
+
+def _handler(session: _ExelonSession) -> ExelonURLHandler:
+    """Return a handler for ComEd."""
+    client_id, mobile_id = ComEd.mobile_client()
+    return ExelonURLHandler(
+        session=session,  # type: ignore[arg-type]
+        base_url=BASE_URL,
+        login_domain=ComEd.login_domain(),
+        eu_domain=ComEd.eu_domain(),
+        refresh_token=REFRESH_TOKEN,
+        client_id=client_id,
+        mobile_id=mobile_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_first_account_prefers_the_default_profile() -> None:
+    """The login token is minted for the default profile when there is one."""
+    accounts = [_account("111"), _account("222", default=True)]
+    session = _ExelonSession({COMED_ACCOUNTS_URL: MockResponse(payload={"success": True, "data": accounts})})
+
+    account = await _handler(session).get_first_account(BEARER_TOKEN)
+
+    assert account["accountNumber"] == "222"
+
+
+@pytest.mark.asyncio
+async def test_get_first_account_falls_back_to_the_first_active_account() -> None:
+    """Without a default profile, the first active account is used."""
+    accounts = [_account("000", status="Inactive"), _account("111"), _account("222")]
+    session = _ExelonSession({COMED_ACCOUNTS_URL: MockResponse(payload={"success": True, "data": accounts})})
+
+    account = await _handler(session).get_first_account(BEARER_TOKEN)
+
+    assert account["accountNumber"] == "111"
+
+
+@pytest.mark.asyncio
+async def test_get_first_account_requires_an_active_account() -> None:
+    """A user with only inactive accounts cannot log in."""
+    accounts = [_account("000", status="Inactive")]
+    session = _ExelonSession({COMED_ACCOUNTS_URL: MockResponse(payload={"success": True, "data": accounts})})
+
+    with pytest.raises(InvalidAuth, match="No active accounts found"):
+        await _handler(session).get_first_account(BEARER_TOKEN)

@@ -7,6 +7,7 @@ import logging
 import re
 import secrets
 import urllib.parse
+from collections.abc import AsyncIterator
 from typing import Any
 
 import aiohttp
@@ -52,6 +53,9 @@ class ExelonURLHandler:
         self._mobile_id = mobile_id
 
         self._settings: dict[str, Any] = {}
+        # The access token from the last get_token, used to list the accounts of the user.
+        self._bearer_token = ""
+        self._active_accounts: list[dict[str, Any]] | None = None
         self.update_base_url(base_url)
 
     def get_base_url(self) -> str:
@@ -238,43 +242,52 @@ class ExelonURLHandler:
 
         return result_json
 
-    async def get_first_account(self, bearer_token: str) -> dict[str, Any]:
-        """Get the first active account information."""
+    async def get_active_accounts(self, bearer_token: str | None = None) -> list[dict[str, Any]]:
+        """Return the active accounts of the user, as the mobile app lists them.
+
+        After moving, old accounts have status "Inactive" and are left out.
+        The list is cached, so only the first call makes a request.
+
+        :param bearer_token: token to use instead of the one from the last get_token
+        """
+        if self._active_accounts is not None:
+            return self._active_accounts
         try:
             async with self._session.get(
                 f"https://{self._eu_domain}/mobile/custom/auth/accounts",
                 headers={
                     "User-Agent": USER_AGENT,
-                    "Authorization": "Bearer " + bearer_token,
+                    "Authorization": "Bearer " + (bearer_token or self._bearer_token),
                 },
                 raise_for_status=True,
             ) as resp:
                 result_json = await resp.json()
-
-            if result_json.get("success", False) is not True:
-                raise InvalidAuth("Unable to list accounts")
-
-            # Only include active accounts (after moving, old accounts have status: "Inactive")
-            # NOTE: this logic currently assumes 1 active address per account, if multiple accounts found
-            #      we default to taking the first in the list. Future enhancement is to support
-            #      multiple accounts (which could result in different subdomain for each)
-            active_accounts: list[dict[str, Any]] = [
-                account for account in result_json.get("data", {}) if account.get("status", "") == "Active"
-            ]
-
-            if len(active_accounts) == 0:
-                raise InvalidAuth("No active accounts found")
-            if len(active_accounts) > 1:
-                for account in active_accounts:
-                    if account.get("isDefaultProfile") is True:
-                        _LOGGER.info(
-                            "Found multiple active accounts, using default account %s", account.get("accountNumber", "")
-                        )
-                        return account
-                _LOGGER.info("Found multiple active accounts, using first %s", active_accounts[0].get("accountNumber", ""))
-            return active_accounts[0]
         except aiohttp.ClientError as err:
             raise CannotConnect(f"Cannot obtain account information, unauthorized with error: {err}") from err
+
+        if result_json.get("success", False) is not True:
+            raise InvalidAuth("Unable to list accounts")
+
+        self._active_accounts = [account for account in result_json.get("data", {}) if account.get("status", "") == "Active"]
+        return self._active_accounts
+
+    async def get_first_account(self, bearer_token: str) -> dict[str, Any]:
+        """Get the default active account, or the first one when none is marked as default.
+
+        async_login uses this account's token. The tokens of the other active
+        accounts come from Exelon.async_iter_account_tokens.
+        """
+        active_accounts = await self.get_active_accounts(bearer_token)
+
+        if len(active_accounts) == 0:
+            raise InvalidAuth("No active accounts found")
+        if len(active_accounts) > 1:
+            for account in active_accounts:
+                if account.get("isDefaultProfile") is True:
+                    _LOGGER.info("Found multiple active accounts, using default account %s", account.get("accountNumber", ""))
+                    return account
+            _LOGGER.info("Found multiple active accounts, using first %s", active_accounts[0].get("accountNumber", ""))
+        return active_accounts[0]
 
     async def get_token(self, account: dict[str, Any] | None, code: str) -> tuple[str, str, dict[str, Any]]:
         """Return the the first account and the associated tokens for our authorization."""
@@ -297,6 +310,7 @@ class ExelonURLHandler:
             self._refresh_token = result_json.get("refresh_token", "")
         else:
             bearer_token = await self.refresh_refresh()
+        self._bearer_token = bearer_token
 
         if not account:
             account = await self.get_first_account(bearer_token)
@@ -444,6 +458,8 @@ class Exelon:
         # e.g. https://secure.bge.com/api/Services/MyAccountService.svc/GetConfiguration
         # returns bgec.opower.com
         self._subdomain: str | None = None
+        # Set by async_login, so async_iter_account_tokens can mint tokens for the other accounts.
+        self._exelon_handler: ExelonURLHandler | None = None
 
     @staticmethod
     def timezone() -> str:
@@ -558,23 +574,79 @@ class Exelon:
 
             raise InvalidAuth("Site is down or has changed behavior")
 
+        self._exelon_handler = exelon_handler
+
         # If pepco or delmarva, determine if we should use secondary subdomain
-        if self.login_domain() in ["secure.pepco.com", "secure.delmarva.com"]:
-            # Get the account type & state
-
-            is_residential = account.get("isResidential", False)
-            try:
-                state = account["PremiseInfo"][0]["mainAddress"]["townDetail"]["stateOrProvince"]
-            except (KeyError, IndexError):
-                state = None
-            _LOGGER.debug("found exelon account isResidential: %s", is_residential)
-            _LOGGER.debug("found exelon account state: %s", state)
-
-            # Determine subdomain to use by matching logic found in https://cls.login_domain()/dist/app.js
-            self._subdomain = self.primary_subdomain()
-            if not (is_residential and state == "MD"):
-                self._subdomain = self.secondary_subdomain()
-
+        if (subdomain := self._subdomain_for_account(account)) is not None:
+            self._subdomain = subdomain
             _LOGGER.debug("detected exelon subdomain to be: %s", self._subdomain)
 
         return opower_token
+
+    def _subdomain_for_account(self, account: dict[str, Any]) -> str | None:
+        """Return the opower.com subdomain that serves this account.
+
+        Only Pepco and Delmarva split their accounts over two subdomains.
+        Returns None for the other subsidiaries, whose subdomain is fixed.
+        """
+        if self.login_domain() not in ["secure.pepco.com", "secure.delmarva.com"]:
+            return None
+
+        # Get the account type & state
+        is_residential = account.get("isResidential", False)
+        try:
+            state = account["PremiseInfo"][0]["mainAddress"]["townDetail"]["stateOrProvince"]
+        except (KeyError, IndexError):
+            state = None
+        _LOGGER.debug("found exelon account isResidential: %s", is_residential)
+        _LOGGER.debug("found exelon account state: %s", state)
+
+        # Determine subdomain to use by matching logic found in https://cls.login_domain()/dist/app.js
+        if is_residential and state == "MD":
+            return str(self.primary_subdomain())
+        return str(self.secondary_subdomain())
+
+    async def async_iter_account_tokens(self, session: aiohttp.ClientSession) -> AsyncIterator[str]:
+        """Yield an Opower access token per active Exelon account.
+
+        The token from async_login is tied to one account: the default profile,
+        or the first active one. Exelon issues a token per account number, so
+        users with several active accounts (e.g. two homes) need one per account.
+        """
+        handler = self._exelon_handler
+        if handler is None:
+            return
+        try:
+            accounts = await handler.get_active_accounts()
+        except (CannotConnect, InvalidAuth) as err:
+            # Listing accounts is extra to login, so fall back to the account from login.
+            _LOGGER.warning("Could not list Exelon accounts, using only the default one: %s", err)
+            return
+        if len(accounts) < 2:
+            return
+        seen: set[str] = set()
+        for account in accounts:
+            account_number = str(account.get("accountNumber", ""))
+            if not account_number or account_number in seen:
+                continue
+            seen.add(account_number)
+            account_subdomain = self._subdomain_for_account(account)
+            if account_subdomain is not None and account_subdomain != self._subdomain:
+                # The library talks to a single opower.com subdomain per login.
+                _LOGGER.warning(
+                    "Skipping account %s on subdomain %s, this login uses subdomain %s",
+                    account_number,
+                    account_subdomain,
+                    self._subdomain,
+                )
+                continue
+            try:
+                token = await handler.refresh_opower(account_number)
+            except CannotConnect as err:
+                # One unusable account must not hide the others.
+                _LOGGER.warning("Could not get an Opower token for account %s: %s", account_number, err)
+                continue
+            if not token:
+                _LOGGER.warning("Exelon did not issue an Opower token for account %s", account_number)
+                continue
+            yield token
