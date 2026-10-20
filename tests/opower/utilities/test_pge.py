@@ -230,6 +230,16 @@ class TestPGELogin(unittest.IsolatedAsyncioTestCase):
             await PGE().async_login(session, "user@example.com", "wrong", {})  # type: ignore[arg-type]
         self.assertIn("invalid username.", str(context.exception))
 
+    async def test_unrecognized_login_messages_raise_invalid_auth(self) -> None:
+        """Only recognized challenges enter MFA; other messages remain errors."""
+        for message in ("invalid password", "userlocked", "unexpected", "missedyou unexpected"):
+            with self.subTest(message=message):
+                session = _FakeSession(aura={"login": _login_response({"retMessage": message})})
+
+                with self.assertRaises(InvalidAuth):
+                    await PGE().async_login(session, "user@example.com", "password", {})  # type: ignore[arg-type]
+                self.assertEqual([], session.get_requests)
+
     async def test_no_actions_raises_invalid_auth(self) -> None:
         """A response without actions cannot be interpreted as a login."""
         session = _FakeSession(aura={"login": {"actions": []}})
@@ -295,6 +305,20 @@ class TestPGEMfa(unittest.IsolatedAsyncioTestCase):
     async def test_login_raises_mfa_challenge_with_options(self) -> None:
         """An account with MFA offers the delivery options from the login response."""
         handler = await self._challenge()
+
+        self.assertEqual({"Email": "t***@example.com", "Phone": "***-***-1234"}, await handler.async_get_mfa_options())
+
+    async def test_missedyou_raises_mfa_challenge_with_options(self) -> None:
+        """The alternate login response uses the same MFA delivery options."""
+        handler = await self._challenge(
+            {
+                "retMessage": "missedyou",
+                "retencrUsrname": "encrypted-username",
+                "encryptedTFT": "encrypted-tft",
+                "EmailVal": "t***@example.com",
+                "PhoneVal": "***-***-1234",
+            }
+        )
 
         self.assertEqual({"Email": "t***@example.com", "Phone": "***-***-1234"}, await handler.async_get_mfa_options())
 
