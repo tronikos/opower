@@ -7,6 +7,7 @@ from aiohttp import ClientResponseError, RequestInfo
 from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
+from opower import Opower
 from opower.exceptions import InvalidAuth
 from opower.utilities.comed import ComEd
 from opower.utilities.exelon import ExelonURLHandler
@@ -17,6 +18,9 @@ BASE_URL = "comedb2c.b2clogin.com/comedb2c.onmicrosoft.com/B2C_1A_SignIn_Mobile"
 TOKEN_URL = f"https://{BASE_URL}/oauth2/v2.0/token"
 COMED_ACCOUNTS_URL = "https://eudapi.comed.com/mobile/custom/auth/accounts"
 PEPCO_ACCOUNTS_URL = "https://eudapi.pepco.com/mobile/custom/auth/accounts"
+COMED_CUSTOMERS_URL = (
+    "https://cec.opower.com/ei/edge/apis/multi-account-v1/cws/cec/customers?offset=0&batchSize=100&addressFilter="
+)
 BEARER_TOKEN = "bearer-token"  # noqa: S105
 REFRESH_TOKEN = "refresh-token"  # noqa: S105
 
@@ -34,6 +38,21 @@ def _md_residential() -> dict[str, Any]:
     }
 
 
+def _customer(uuid: str, utility_account_id: str) -> dict[str, Any]:
+    """Return an Opower customer with one electric account, as multi-account-v1 lists it."""
+    return {
+        "uuid": uuid,
+        "utilityAccounts": [
+            {
+                "uuid": f"{uuid}-elec",
+                "preferredUtilityAccountId": utility_account_id,
+                "meterType": "ELEC",
+                "readResolution": "HOUR",
+            }
+        ],
+    }
+
+
 def _http_error(url: str, status: int) -> ClientResponseError:
     """Return the error aiohttp raises for a failed response when raise_for_status is set."""
     request_info = RequestInfo(URL(url), "GET", CIMultiDictProxy(CIMultiDict()), URL(url))
@@ -45,7 +64,8 @@ class _ExelonSession(MockSession):
 
     A refresh of the login token returns BEARER_TOKEN. A request for an Opower
     token returns "opower-<account number>", or raises the error registered for
-    that account number in token_errors.
+    that account number in token_errors. The Opower customers endpoint answers
+    with the customer registered in customers_by_token for the bearer token sent.
     """
 
     def __init__(self, responses: dict[str, MockResponse | Exception]) -> None:
@@ -53,9 +73,13 @@ class _ExelonSession(MockSession):
         super().__init__({})
         self._routes = responses
         self.token_errors: dict[str, Exception] = {}
+        self.customers_by_token: dict[str, dict[str, Any]] = {}
 
     def _handle(self, method: str, url: str, **kwargs: Any) -> MockResponse:
         self.requests.append({"method": method, "url": url, **kwargs})
+        if url == COMED_CUSTOMERS_URL:
+            token = kwargs["headers"]["authorization"].removeprefix("Bearer ")
+            return MockResponse(payload={"customers": [self.customers_by_token[token]]})
         if url == TOKEN_URL:
             data = kwargs["data"]
             if "nonce" not in data:
@@ -174,6 +198,39 @@ async def test_iter_account_tokens_skips_accounts_on_another_subdomain() -> None
 
     assert utility.subdomain() == "pep"
     assert await _tokens(utility, session) == ["opower-111", "opower-333"]
+
+
+@pytest.mark.asyncio
+async def test_opower_lists_the_meters_of_every_active_account() -> None:
+    """End to end: Opower.async_get_accounts returns the meters of both ComEd accounts.
+
+    async_login still returns the token of the default account. Opower then
+    calls async_iter_account_tokens and fetches the customers of each token,
+    so the meters of the second account show up and keep using its own token.
+    """
+    accounts = [_account("111", default=True), _account("222")]
+    session = _ExelonSession({COMED_ACCOUNTS_URL: MockResponse(payload={"success": True, "data": accounts})})
+    session.customers_by_token = {
+        "opower-111": _customer("customer-1", "111"),
+        "opower-222": _customer("customer-2", "222"),
+    }
+    opower = Opower(
+        session,  # type: ignore[arg-type]
+        ComEd.name(),
+        username="user",
+        password="pass",  # noqa: S106
+        login_data=_login_data(accounts[0]),
+    )
+
+    await opower.async_login()
+    result = await opower.async_get_accounts()
+
+    assert [(account.customer.uuid, account.utility_account_id) for account in result] == [
+        ("customer-1", "111"),
+        ("customer-2", "222"),
+    ]
+    assert opower._get_headers("customer-1")["authorization"] == "Bearer opower-111"
+    assert opower._get_headers("customer-2")["authorization"] == "Bearer opower-222"
 
 
 def _handler(session: _ExelonSession) -> ExelonURLHandler:
