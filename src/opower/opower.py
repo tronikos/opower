@@ -554,6 +554,36 @@ def select_utility(name: str) -> type[UtilityBase]:
     raise ValueError(f"Utility {name} not found")
 
 
+def _to_cost_read(read: dict[str, Any], tz: ZoneInfo) -> CostRead:
+    """Convert a cost or usage-only read from the API to a CostRead."""
+    return CostRead(
+        start_time=_parse_read_time(read["startTime"], tz),
+        end_time=_parse_read_time(read["endTime"], tz),
+        consumption=(read["value"] if "value" in read else read["consumption"]["value"]),
+        provided_cost=read.get("providedCost", 0) or 0,
+        read_components=[
+            ReadComponent(
+                tier_type=component.get("tierType"),
+                tier_number=component.get("tierNumber"),
+                season=component.get("season"),
+                day_part=component.get("dayPart"),
+                cost=_get_value(component, key="cost"),
+                consumption=_get_value(component),
+            )
+            for component in read.get("readComponents") or []
+        ],
+        imported=_abs_or_none(read.get("imported")),
+        exported=_abs_or_none(read.get("exported")),
+    )
+
+
+def _trim_trailing_zero_reads(reads: list[CostRead]) -> list[CostRead]:
+    """Remove trailing reads with neither cost nor consumption: they are usually not published yet."""
+    while reads and reads[-1].provided_cost == 0 and reads[-1].consumption == 0:
+        reads.pop()
+    return reads
+
+
 class Opower:
     """Class that can get historical and forecasted usage/cost from an utility."""
 
@@ -1159,42 +1189,48 @@ class Opower:
                 return await self.async_get_cost_reads(account, aggregate_type, start_date, end_date, usage_only=True)
             raise
         tz = await aiozoneinfo.async_get_time_zone(self.utility.timezone())
-        result: list[CostRead] = []
-        for read in reads:
-            result.append(
-                CostRead(
-                    start_time=_parse_read_time(read["startTime"], tz),
-                    end_time=_parse_read_time(read["endTime"], tz),
-                    consumption=(read["value"] if "value" in read else read["consumption"]["value"]),
-                    provided_cost=read.get("providedCost", 0) or 0,
-                    read_components=[
-                        ReadComponent(
-                            tier_type=component.get("tierType"),
-                            tier_number=component.get("tierNumber"),
-                            season=component.get("season"),
-                            day_part=component.get("dayPart"),
-                            cost=_get_value(component, key="cost"),
-                            consumption=_get_value(component),
-                        )
-                        for component in read.get("readComponents") or []
-                    ],
-                    imported=_abs_or_none(read.get("imported")),
-                    exported=_abs_or_none(read.get("exported")),
-                )
-            )
-        # Remove last entries with 0 values
-        while result:
-            last = result.pop()
-            if last.provided_cost != 0 or last.consumption != 0:
-                result.append(last)
-                break
+        result = _trim_trailing_zero_reads([_to_cost_read(read, tz) for read in reads])
         # Some utilities provide usage at hourly/daily resolution but only provide cost at bill resolution.
         # They don't return any data when hitting the cost endpoint so try again with the usage only endpoint.
         if aggregate_type != AggregateType.BILL and not result and not usage_only:
             _LOGGER.debug("Got no usage/cost data. Falling back to just usage data.")
             return await self.async_get_cost_reads(account, aggregate_type, start_date, end_date, usage_only=True)
+        # Some utilities (e.g. PG&E gas) publish cost days or weeks after usage.
+        # The cost endpoint then stops at the last costed read even though newer
+        # usage exists, so fill the rest of the window from the usage endpoint.
+        # Those reads carry no cost; callers that re-read a trailing window
+        # (e.g. Home Assistant re-reads the last 30 days) pick the cost up later.
+        if aggregate_type != AggregateType.BILL and result and not usage_only and end_date is not None:
+            result += await self._async_get_usage_after(account, aggregate_type, result[-1], end_date, tz)
         await self._async_add_import_export(account, aggregate_type, result)
         return result
+
+    async def _async_get_usage_after(
+        self,
+        account: Account,
+        aggregate_type: AggregateType,
+        last_cost_read: CostRead,
+        end_date: datetime,
+        tz: ZoneInfo,
+    ) -> list[CostRead]:
+        """Get usage-only reads that start after the last read the cost endpoint returned."""
+        if last_cost_read.end_time.date() > end_date.date():
+            return []
+        try:
+            reads = await self._async_get_dated_data(
+                account, aggregate_type, last_cost_read.start_time, end_date, usage_only=True
+            )
+        except ApiException as err:
+            _LOGGER.debug("Could not get usage reads after the last cost read: %s", err)
+            return []
+        newer = [
+            cost_read
+            for cost_read in (_to_cost_read(read, tz) for read in reads)
+            if cost_read.start_time >= last_cost_read.end_time
+        ]
+        if newer:
+            _LOGGER.debug("Got %s usage reads without cost after %s", len(newer), last_cost_read.end_time)
+        return _trim_trailing_zero_reads(newer)
 
     async def async_get_usage_reads(
         self,

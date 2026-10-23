@@ -174,6 +174,126 @@ async def test_cost_reads_falls_back_to_usage_on_api_error(
         assert result[0].provided_cost == 0.0
 
 
+def _day_read(day: int, value: float, cost: float | None = None) -> dict[str, object]:
+    """Build a daily read: a cost read when cost is given, a usage-only read otherwise."""
+    read: dict[str, object] = {
+        "startTime": f"2026-10-{day:02d}T00:00:00.000-07:00",
+        "endTime": f"2026-10-{day + 1:02d}T00:00:00.000-07:00",
+    }
+    if cost is None:
+        read["consumption"] = {"value": value}
+    else:
+        read["value"] = value
+        read["providedCost"] = cost
+    return read
+
+
+def _gas_day_account() -> Account:
+    return Account(
+        customer=Mock(),
+        uuid="gas-uuid",
+        utility_account_id="gas-id",
+        id="gas-id",
+        meter_type=MeterType.GAS,
+        read_resolution=ReadResolution.DAY,
+    )
+
+
+@pytest.mark.asyncio
+async def test_cost_reads_append_usage_published_after_the_last_cost_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Usage newer than the last costed read is appended without cost (e.g. PG&E gas)."""
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(session, "Pacific Gas and Electric Company (PG&E)", username="test", password="test")  # noqa: S106
+        calls: list[tuple[bool, object]] = []
+
+        async def fake_get_dated_data(
+            acc: object, agg: AggregateType, start: object, end: object, usage_only: bool = False
+        ) -> list[dict[str, object]]:
+            calls.append((usage_only, start))
+            if not usage_only:
+                # Cost lags usage: costed through the 4th, then unpublished zero rows.
+                return [_day_read(1, 1.0, 2.5), _day_read(2, 0, 0), _day_read(4, 1.0, 2.6), _day_read(5, 0, 0.0)]
+            return [
+                _day_read(4, 1.0),
+                _day_read(5, 0),
+                _day_read(10, 1.04),
+                _day_read(12, 3.1),
+                _day_read(13, 0),
+                _day_read(14, 0),
+            ]
+
+        monkeypatch.setattr(opower, "_async_get_dated_data", fake_get_dated_data)
+        monkeypatch.setattr(opower, "_async_get_register_streams", _no_register_streams)
+
+        result = await opower.async_get_cost_reads(
+            _gas_day_account(), AggregateType.DAY, datetime(2026, 10, 1), datetime(2026, 10, 20)
+        )
+
+        # Usage is only requested from the day of the last costed read.
+        assert calls == [(False, datetime(2026, 10, 1)), (True, result[2].start_time)]
+        assert [(r.start_time.day, r.consumption, r.provided_cost) for r in result] == [
+            (1, 1.0, 2.5),
+            (2, 0, 0),
+            (4, 1.0, 2.6),
+            (5, 0, 0),  # usage-only read: newer than the last costed read
+            (10, 1.04, 0),
+            (12, 3.1, 0),  # trailing zero usage reads are trimmed like cost reads
+        ]
+
+
+@pytest.mark.asyncio
+async def test_cost_reads_skip_usage_request_when_cost_covers_the_range(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No extra request when the cost reads already reach the end of the range."""
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(session, "Pacific Gas and Electric Company (PG&E)", username="test", password="test")  # noqa: S106
+        calls: list[bool] = []
+
+        async def fake_get_dated_data(
+            acc: object, agg: AggregateType, start: object, end: object, usage_only: bool = False
+        ) -> list[dict[str, object]]:
+            calls.append(usage_only)
+            return [_day_read(1, 1.0, 2.5), _day_read(2, 1.0, 2.5)]
+
+        monkeypatch.setattr(opower, "_async_get_dated_data", fake_get_dated_data)
+        monkeypatch.setattr(opower, "_async_get_register_streams", _no_register_streams)
+
+        result = await opower.async_get_cost_reads(
+            _gas_day_account(), AggregateType.DAY, datetime(2026, 10, 1), datetime(2026, 10, 2)
+        )
+
+        assert calls == [False]
+        assert len(result) == 2
+
+
+@pytest.mark.asyncio
+async def test_cost_reads_keep_cost_reads_when_usage_request_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failing usage endpoint must not lose the cost reads already fetched."""
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(session, "Pacific Gas and Electric Company (PG&E)", username="test", password="test")  # noqa: S106
+
+        async def fake_get_dated_data(
+            acc: object, agg: AggregateType, start: object, end: object, usage_only: bool = False
+        ) -> list[dict[str, object]]:
+            if usage_only:
+                raise ApiException(message="HTTP Error: 500", url="http://example.com")
+            return [_day_read(1, 1.0, 2.5)]
+
+        monkeypatch.setattr(opower, "_async_get_dated_data", fake_get_dated_data)
+        monkeypatch.setattr(opower, "_async_get_register_streams", _no_register_streams)
+
+        result = await opower.async_get_cost_reads(
+            _gas_day_account(), AggregateType.DAY, datetime(2026, 10, 1), datetime(2026, 10, 20)
+        )
+
+        assert [(r.start_time.day, r.provided_cost) for r in result] == [(1, 2.5)]
+
+
 @pytest.mark.asyncio
 async def test_cost_reads_bill_does_not_fall_back(
     monkeypatch: pytest.MonkeyPatch,
@@ -741,6 +861,10 @@ class _FakeSession:
                 else:
                     result = route
                 return result if isinstance(result, _FakeResponse) else _FakeResponse(result)
+        if url.endswith("/reads"):
+            # async_get_cost_reads asks the usage endpoint for reads past the last
+            # costed one; tests that don't route it have no newer usage to serve.
+            return _FakeResponse({"reads": []})
         raise AssertionError(f"Unexpected request to {url}")
 
     def get(self, url: str, **kwargs: Any) -> _FakeResponse:
