@@ -873,8 +873,11 @@ async def test_login_uses_a_token_per_utility_account(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
-async def test_login_skips_a_utility_account_whose_customers_fail(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A failure to fetch the customers of one utility account does not fail the login."""
+async def test_login_fails_when_the_customers_of_a_utility_account_fail(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failure to fetch the customers of one utility account fails the login.
+
+    Dropping that account instead would make a caller treat it as removed.
+    """
 
     def customers_route(request: dict[str, Any]) -> Any:
         if request["headers"]["authorization"] == "Bearer first-token":
@@ -893,11 +896,11 @@ async def test_login_skips_a_utility_account_whose_customers_fail(monkeypatch: p
     opower = _pge(_FakeSession({"multi-account-v1": customers_route}))
     monkeypatch.setattr(opower.utility, "async_login", login)
     monkeypatch.setattr(opower.utility, "async_iter_account_tokens", iter_account_tokens)
-    await opower.async_login()
-    accounts = await opower.async_get_accounts()
 
-    assert {account.customer.uuid for account in accounts} == {_CUSTOMER_UUID}
-    assert opower._get_headers(_CUSTOMER_UUID)["authorization"] == "Bearer second-token"
+    with pytest.raises(CannotConnect, match="Could not fetch the customers of a utility account"):
+        await opower.async_login()
+    assert opower._customers == []
+    assert opower._customer_tokens == {}
 
 
 @pytest.mark.asyncio

@@ -612,16 +612,22 @@ class Exelon:
         The token from async_login is tied to one account: the default profile,
         or the first active one. Exelon issues a token per account number, so
         users with several active accounts (e.g. two homes) need one per account.
+
+        :raises CannotConnect: if the accounts cannot be listed or an account
+            gets no token. Yielding the other accounts instead would make the
+            caller treat the failed account as gone, and Home Assistant deletes
+            the entities of an account that disappears, so a transient error
+            must fail the whole login and leave the previous accounts in place.
         """
         handler = self._exelon_handler
         if handler is None:
             return
         try:
             accounts = await handler.get_active_accounts()
-        except (CannotConnect, InvalidAuth) as err:
-            # Listing accounts is extra to login, so fall back to the account from login.
-            _LOGGER.warning("Could not list Exelon accounts, using only the default one: %s", err)
-            return
+        except InvalidAuth as err:
+            # An unexpected answer from the accounts endpoint says nothing about the
+            # credentials, which the login just used, so do not trigger a reauth.
+            raise CannotConnect(f"Could not list Exelon accounts: {err}") from err
         if len(accounts) < 2:
             return
         seen: set[str] = set()
@@ -640,13 +646,7 @@ class Exelon:
                     self._subdomain,
                 )
                 continue
-            try:
-                token = await handler.refresh_opower(account_number)
-            except CannotConnect as err:
-                # One unusable account must not hide the others.
-                _LOGGER.warning("Could not get an Opower token for account %s: %s", account_number, err)
-                continue
+            token = await handler.refresh_opower(account_number)
             if not token:
-                _LOGGER.warning("Exelon did not issue an Opower token for account %s", account_number)
-                continue
+                raise CannotConnect(f"Exelon did not issue an Opower token for account {account_number}")
             yield token

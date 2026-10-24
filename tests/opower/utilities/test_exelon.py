@@ -8,7 +8,7 @@ from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
 from opower import Opower
-from opower.exceptions import InvalidAuth
+from opower.exceptions import CannotConnect, InvalidAuth
 from opower.utilities.comed import ComEd
 from opower.utilities.exelon import ExelonURLHandler
 from opower.utilities.pepco import Pepco
@@ -150,36 +150,49 @@ async def test_iter_account_tokens_yields_nothing_before_login() -> None:
 
 
 @pytest.mark.asyncio
-async def test_iter_account_tokens_skips_an_account_whose_token_is_rejected() -> None:
-    """One account that Exelon refuses a token for does not hide the others."""
+@pytest.mark.parametrize(
+    ("status", "message"),
+    [
+        # A 400 means the token was rejected: refresh_token returns {} and no token is issued.
+        (400, "did not issue an Opower token for account 222"),
+        # A 5xx raises CannotConnect from the token refresh itself.
+        (503, "Failed to refresh the Exelon token"),
+    ],
+    ids=["rejected", "http_error"],
+)
+async def test_iter_account_tokens_fails_when_an_account_gets_no_token(status: int, message: str) -> None:
+    """A failure on one account fails the login instead of hiding that account.
+
+    Skipping it would make the caller drop the account, and Home Assistant
+    deletes the entities of an account that disappears from the list.
+    """
     accounts = [_account("111", default=True), _account("222"), _account("333")]
     session = _ExelonSession({COMED_ACCOUNTS_URL: MockResponse(payload={"success": True, "data": accounts})})
     utility = ComEd()
     await utility.async_login(session, "user", "pass", _login_data(accounts[0]))  # type: ignore[arg-type]
-    # A 400 means the token was rejected: refresh_token returns {} and no token is issued.
-    session.token_errors["222"] = _http_error(TOKEN_URL, 400)
-    # A 5xx raises CannotConnect, which is also skipped.
-    session.token_errors["333"] = _http_error(TOKEN_URL, 503)
+    session.token_errors["222"] = _http_error(TOKEN_URL, status)
 
-    assert await _tokens(utility, session) == ["opower-111"]
+    with pytest.raises(CannotConnect, match=message):
+        await _tokens(utility, session)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "accounts_response",
+    ("accounts_response", "message"),
     [
-        _http_error(COMED_ACCOUNTS_URL, 500),
-        MockResponse(payload={"success": False}),
+        (_http_error(COMED_ACCOUNTS_URL, 500), "Cannot obtain account information"),
+        (MockResponse(payload={"success": False}), "Could not list Exelon accounts"),
     ],
     ids=["http_error", "unsuccessful"],
 )
-async def test_iter_account_tokens_falls_back_when_listing_fails(accounts_response: MockResponse | Exception) -> None:
-    """When the accounts cannot be listed, the login token keeps serving the default account."""
+async def test_iter_account_tokens_fails_when_listing_fails(accounts_response: MockResponse | Exception, message: str) -> None:
+    """When the accounts cannot be listed, the login fails rather than silently serving one account."""
     session = _ExelonSession({COMED_ACCOUNTS_URL: accounts_response})
     utility = ComEd()
     await utility.async_login(session, "user", "pass", _login_data(_account("111")))  # type: ignore[arg-type]
 
-    assert await _tokens(utility, session) == []
+    with pytest.raises(CannotConnect, match=message):
+        await _tokens(utility, session)
     assert session.opower_token_requests() == ["111"]
 
 
@@ -230,6 +243,39 @@ async def test_opower_lists_the_meters_of_every_active_account() -> None:
         ("customer-2", "222"),
     ]
     assert opower._get_headers("customer-1")["authorization"] == "Bearer opower-111"
+    assert opower._get_headers("customer-2")["authorization"] == "Bearer opower-222"
+
+
+@pytest.mark.asyncio
+async def test_opower_keeps_known_accounts_when_one_token_refresh_fails() -> None:
+    """A transient error on one account fails the login and keeps the accounts of the previous one.
+
+    Regression test for the review of the 0.22.4 bump in Home Assistant: a 503
+    refreshing only one account's token used to make async_login succeed with a
+    shorter account list, and Home Assistant deleted the entities of the account
+    that went missing.
+    """
+    accounts = [_account("111", default=True), _account("222")]
+    session = _ExelonSession({COMED_ACCOUNTS_URL: MockResponse(payload={"success": True, "data": accounts})})
+    session.customers_by_token = {
+        "opower-111": _customer("customer-1", "111"),
+        "opower-222": _customer("customer-2", "222"),
+    }
+    opower = Opower(
+        session,  # type: ignore[arg-type]
+        ComEd.name(),
+        username="user",
+        password="pass",  # noqa: S106
+        login_data=_login_data(accounts[0]),
+    )
+    await opower.async_login()
+    assert [account.utility_account_id for account in await opower.async_get_accounts()] == ["111", "222"]
+
+    session.token_errors["222"] = _http_error(TOKEN_URL, 503)
+    with pytest.raises(CannotConnect):
+        await opower.async_login()
+
+    assert [account.utility_account_id for account in await opower.async_get_accounts()] == ["111", "222"]
     assert opower._get_headers("customer-2")["authorization"] == "Bearer opower-222"
 
 
