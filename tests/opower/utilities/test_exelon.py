@@ -104,7 +104,7 @@ def _login_data(account: dict[str, Any]) -> dict[str, Any]:
     return {"token": REFRESH_TOKEN, "account": account, "base_url": BASE_URL}
 
 
-async def _tokens(utility: ComEd | Pepco, session: _ExelonSession) -> list[str]:
+async def _tokens(utility: ComEd | Pepco, session: _ExelonSession) -> list[str | None]:
     """Collect the tokens from async_iter_account_tokens."""
     return [token async for token in utility.async_iter_account_tokens(session)]  # type: ignore[arg-type]
 
@@ -151,7 +151,7 @@ async def test_iter_account_tokens_yields_nothing_before_login() -> None:
 
 @pytest.mark.asyncio
 async def test_iter_account_tokens_skips_an_account_whose_token_is_rejected() -> None:
-    """One account that Exelon refuses a token for does not hide the others."""
+    """One account that Exelon refuses a token for does not hide the others, but is reported as failed."""
     accounts = [_account("111", default=True), _account("222"), _account("333")]
     session = _ExelonSession({COMED_ACCOUNTS_URL: MockResponse(payload={"success": True, "data": accounts})})
     utility = ComEd()
@@ -161,7 +161,7 @@ async def test_iter_account_tokens_skips_an_account_whose_token_is_rejected() ->
     # A 5xx raises CannotConnect, which is also skipped.
     session.token_errors["333"] = _http_error(TOKEN_URL, 503)
 
-    assert await _tokens(utility, session) == ["opower-111"]
+    assert await _tokens(utility, session) == ["opower-111", None, None]
 
 
 @pytest.mark.asyncio
@@ -174,12 +174,12 @@ async def test_iter_account_tokens_skips_an_account_whose_token_is_rejected() ->
     ids=["http_error", "unsuccessful"],
 )
 async def test_iter_account_tokens_falls_back_when_listing_fails(accounts_response: MockResponse | Exception) -> None:
-    """When the accounts cannot be listed, the login token keeps serving the default account."""
+    """When the accounts cannot be listed, the login token keeps serving the default account, and the failure is reported."""
     session = _ExelonSession({COMED_ACCOUNTS_URL: accounts_response})
     utility = ComEd()
     await utility.async_login(session, "user", "pass", _login_data(_account("111")))  # type: ignore[arg-type]
 
-    assert await _tokens(utility, session) == []
+    assert await _tokens(utility, session) == [None]
     assert session.opower_token_requests() == ["111"]
 
 

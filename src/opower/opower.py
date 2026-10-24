@@ -998,21 +998,32 @@ class Opower:
         Replaces the cached customers and tokens when this login or the previous one used tokens per account.
         Otherwise the cached customers stay valid with the new login token.
         If none are cached, they are fetched later with the token from login.
+
+        :raises CannotConnect: if a utility account failed and a customer of the previous login is missing
         """
         customers: list[Any] = []
         customer_tokens: dict[str, str] = {}
+        failed = False
         async for token in self.utility.async_iter_account_tokens(self._session):
+            if token is None:
+                failed = True
+                continue
             # Opower ties the token to an account on first use, which must happen
             # before the utility issues the token for the next account.
             try:
                 account_customers = await self._async_fetch_multi_account_customers(token)
             except ApiException as err:
                 _LOGGER.warning("Could not fetch the customers of a utility account: %s", err)
+                failed = True
                 continue
             for customer in account_customers:
                 if customer["uuid"] not in customer_tokens:
                     customer_tokens[customer["uuid"]] = token
                     customers.append(customer)
+        # Callers treat a customer missing after a successful login as removed, e.g. Home Assistant
+        # deletes its entities, so fail instead when the customer may only be missing due to the failure.
+        if failed and not self._customer_tokens.keys() <= customer_tokens.keys():
+            raise CannotConnect("Could not fetch the customers of every utility account")
         # Customers cached without tokens per account stay valid with the new login token, so keep those.
         if customer_tokens or self._customer_tokens:
             self._customers = customers

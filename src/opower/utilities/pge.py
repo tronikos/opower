@@ -291,7 +291,7 @@ class PGE(UtilityBase):
 
         return await self._async_get_opower_token(session)
 
-    async def async_iter_account_tokens(self, session: aiohttp.ClientSession) -> AsyncIterator[str]:
+    async def async_iter_account_tokens(self, session: aiohttp.ClientSession) -> AsyncIterator[str | None]:
         """Yield an Opower access token per PG&E billing account.
 
         The token from async_login only covers the billing account selected on the dashboard.
@@ -301,6 +301,7 @@ class PGE(UtilityBase):
         except _ACCOUNT_ERRORS as err:
             # Listing accounts is extra to login, so fall back to the selected account.
             _LOGGER.warning("Could not list billing accounts, using only the selected one: %s", err)
+            yield None
             return
         if len(account_numbers) < 2:
             return
@@ -311,6 +312,7 @@ class PGE(UtilityBase):
             except _ACCOUNT_ERRORS as err:
                 # One unusable account, e.g. a closed one, must not hide the others.
                 _LOGGER.warning("Could not get an Opower token for billing account %s: %s", account_number, err)
+                yield None
                 continue
             yield token
 

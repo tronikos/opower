@@ -606,7 +606,7 @@ class Exelon:
             return str(self.primary_subdomain())
         return str(self.secondary_subdomain())
 
-    async def async_iter_account_tokens(self, session: aiohttp.ClientSession) -> AsyncIterator[str]:
+    async def async_iter_account_tokens(self, session: aiohttp.ClientSession) -> AsyncIterator[str | None]:
         """Yield an Opower access token per active Exelon account.
 
         The token from async_login is tied to one account: the default profile,
@@ -621,6 +621,7 @@ class Exelon:
         except (CannotConnect, InvalidAuth) as err:
             # Listing accounts is extra to login, so fall back to the account from login.
             _LOGGER.warning("Could not list Exelon accounts, using only the default one: %s", err)
+            yield None
             return
         if len(accounts) < 2:
             return
@@ -645,8 +646,10 @@ class Exelon:
             except CannotConnect as err:
                 # One unusable account must not hide the others.
                 _LOGGER.warning("Could not get an Opower token for account %s: %s", account_number, err)
+                yield None
                 continue
             if not token:
                 _LOGGER.warning("Exelon did not issue an Opower token for account %s", account_number)
+                yield None
                 continue
             yield token
