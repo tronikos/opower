@@ -1,5 +1,7 @@
 """Base Abstract class for American Electric Power."""
 
+import asyncio
+import logging
 import re
 from abc import ABC, abstractmethod
 from html.parser import HTMLParser
@@ -9,6 +11,13 @@ import aiohttp
 
 from ..const import USER_AGENT
 from ..exceptions import CannotConnect, InvalidAuth
+
+_LOGGER = logging.getLogger(__name__)
+
+# AEP mints the OAuth access token asynchronously after login; ValidToken
+# intermittently returns a placeholder (missing/empty token) until it's ready.
+_VALID_TOKEN_ATTEMPTS = 5
+_VALID_TOKEN_RETRY_DELAY = 2
 
 
 class AEPLoginParser(HTMLParser):
@@ -118,20 +127,32 @@ class AEPBase(ABC):
             raise CannotConnect("Could not find the opower.com subdomain on the AEP usage page")
         self._subdomain = match.group(1)
 
-        async with session.get(
-            f"https://www.{self.hostname()}/account/oauth/ValidToken",
-            headers={
-                "User-Agent": USER_AGENT,
-                "Accept": "application/json, text/javascript, */*; q=0.01",
-                "X-Requested-With": "XMLHttpRequest",
-                "Referer": usage_url,
-            },
-            raise_for_status=True,
-        ) as token_resp:
-            token_data = await token_resp.json()
-            if not token_data or not isinstance(token_data, list) or not token_data:
-                raise InvalidAuth("Failed to retrieve access token from AEP")
-            data = token_data[0].get("data")
-            if not data or not data.get("AccessToken"):
-                raise InvalidAuth("Invalid token response structure from AEP")
-            return str(data["AccessToken"])
+        valid_token_url = f"https://www.{self.hostname()}/account/oauth/ValidToken"
+        for attempt in range(_VALID_TOKEN_ATTEMPTS):
+            async with session.get(
+                valid_token_url,
+                headers={
+                    "User-Agent": USER_AGENT,
+                    "Accept": "application/json, text/javascript, */*; q=0.01",
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Referer": usage_url,
+                },
+                raise_for_status=True,
+            ) as token_resp:
+                token_data = await token_resp.json()
+                if (
+                    token_data
+                    and isinstance(token_data, list)
+                    and (data := token_data[0].get("data"))
+                    and data.get("AccessToken")
+                ):
+                    return str(data["AccessToken"])
+            _LOGGER.debug(
+                "AEP ValidToken not ready yet (attempt %s/%s); retrying",
+                attempt + 1,
+                _VALID_TOKEN_ATTEMPTS,
+            )
+            if attempt < _VALID_TOKEN_ATTEMPTS - 1:
+                await asyncio.sleep(_VALID_TOKEN_RETRY_DELAY)
+
+        raise InvalidAuth("Failed to retrieve access token from AEP")
