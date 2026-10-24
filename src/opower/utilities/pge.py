@@ -253,7 +253,7 @@ class PGE(UtilityBase):
         returnValue = action.get("returnValue", {}).get("returnValue")
         retMessage = returnValue.get("retMessage", "")
         _LOGGER.debug("Login action returned message: %s", retMessage)
-        if retMessage == "verifymfa :":
+        if retMessage in ("verifymfa :", "missedyou"):
             _LOGGER.debug("MFA challenge received")
             raise MfaChallenge("PG&E MFA required", PgeMfaHandler(session, password, returnValue))
         if not retMessage.startswith("http"):
