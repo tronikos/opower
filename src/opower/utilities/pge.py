@@ -299,8 +299,8 @@ class PGE(UtilityBase):
         try:
             account_numbers = await self._async_get_account_numbers(session)
         except _ACCOUNT_ERRORS as err:
-            # Listing accounts is extra to login, so fall back to the selected account.
-            _LOGGER.warning("Could not list billing accounts, using only the selected one: %s", err)
+            # Listing accounts is extra to login, so report the failure and let Opower decide.
+            _LOGGER.warning("Could not list PG&E billing accounts: %s", err)
             yield None
             return
         if len(account_numbers) < 2:

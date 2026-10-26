@@ -8,7 +8,7 @@ from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
 from opower import Opower
-from opower.exceptions import InvalidAuth
+from opower.exceptions import CannotConnect, InvalidAuth
 from opower.utilities.comed import ComEd
 from opower.utilities.exelon import ExelonURLHandler
 from opower.utilities.pepco import Pepco
@@ -231,6 +231,71 @@ async def test_opower_lists_the_meters_of_every_active_account() -> None:
     ]
     assert opower._get_headers("customer-1")["authorization"] == "Bearer opower-111"
     assert opower._get_headers("customer-2")["authorization"] == "Bearer opower-222"
+
+
+def _opower(session: _ExelonSession, account: dict[str, Any]) -> Opower:
+    """Return an Opower for ComEd that logs in with the given account, as Home Assistant creates it."""
+    return Opower(
+        session,  # type: ignore[arg-type]
+        ComEd.name(),
+        username="user",
+        password="pass",  # noqa: S106
+        login_data=_login_data(account),
+    )
+
+
+@pytest.mark.asyncio
+async def test_opower_fails_login_when_an_account_fails_on_refresh() -> None:
+    """End to end: a 503 for one ComEd account fails the next login instead of dropping the account.
+
+    Home Assistant deletes the entities of an account that is missing after a
+    successful login, so a short outage must not look like a removed account.
+    """
+    accounts = [_account("111", default=True), _account("222")]
+    session = _ExelonSession({COMED_ACCOUNTS_URL: MockResponse(payload={"success": True, "data": accounts})})
+    session.customers_by_token = {
+        "opower-111": _customer("customer-1", "111"),
+        "opower-222": _customer("customer-2", "222"),
+    }
+    opower = _opower(session, accounts[0])
+    await opower.async_login()
+    assert len(await opower.async_get_accounts()) == 2
+
+    session.token_errors["222"] = _http_error(TOKEN_URL, 503)
+
+    with pytest.raises(CannotConnect, match="222"):
+        await opower.async_login()
+    assert [account.utility_account_id for account in await opower.async_get_accounts()] == ["111", "222"]
+
+
+@pytest.mark.asyncio
+async def test_opower_fails_every_login_until_reload_when_a_known_account_is_refused() -> None:
+    """Known limitation: a closed account that is still listed fails each login until the integration reloads.
+
+    The library cannot tell a closed account from an outage, so it keeps failing
+    rather than dropping the account. A new Opower, as a reload creates, has no
+    accounts from before and logs in with the remaining ones.
+    """
+    accounts = [_account("111", default=True), _account("222")]
+    session = _ExelonSession({COMED_ACCOUNTS_URL: MockResponse(payload={"success": True, "data": accounts})})
+    session.customers_by_token = {
+        "opower-111": _customer("customer-1", "111"),
+        "opower-222": _customer("customer-2", "222"),
+    }
+    opower = _opower(session, accounts[0])
+    await opower.async_login()
+    assert len(await opower.async_get_accounts()) == 2
+
+    # Exelon still lists 222 but refuses its token from now on.
+    session.token_errors["222"] = _http_error(TOKEN_URL, 400)
+
+    for _ in range(3):
+        with pytest.raises(CannotConnect, match="222"):
+            await opower.async_login()
+
+    opower = _opower(session, accounts[0])
+    await opower.async_login()
+    assert [account.utility_account_id for account in await opower.async_get_accounts()] == ["111"]
 
 
 def _handler(session: _ExelonSession) -> ExelonURLHandler:

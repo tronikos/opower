@@ -619,8 +619,8 @@ class Exelon:
         try:
             accounts = await handler.get_active_accounts()
         except (CannotConnect, InvalidAuth) as err:
-            # Listing accounts is extra to login, so fall back to the account from login.
-            _LOGGER.warning("Could not list Exelon accounts, using only the default one: %s", err)
+            # Listing accounts is extra to login, so report the failure and let Opower decide.
+            _LOGGER.warning("Could not list Exelon accounts: %s", err)
             yield None
             return
         if len(accounts) < 2:

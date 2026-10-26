@@ -1022,8 +1022,17 @@ class Opower:
                     customers.append(customer)
         # Callers treat a customer missing after a successful login as removed, e.g. Home Assistant
         # deletes its entities, so fail instead when the customer may only be missing due to the failure.
-        if failed and not self._customer_tokens.keys() <= customer_tokens.keys():
-            raise CannotConnect("Could not fetch the customers of every utility account")
+        missing = self._customer_tokens.keys() - customer_tokens.keys()
+        if failed and missing:
+            account_ids = sorted(
+                {
+                    account["preferredUtilityAccountId"]
+                    for customer in self._customers
+                    if customer["uuid"] in missing
+                    for account in customer["utilityAccounts"]
+                }
+            )
+            raise CannotConnect(f"Could not fetch utility accounts: {', '.join(account_ids)}")
         # Customers cached without tokens per account stay valid with the new login token, so keep those.
         if customer_tokens or self._customer_tokens:
             self._customers = customers
