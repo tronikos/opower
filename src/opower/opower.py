@@ -719,7 +719,12 @@ class Opower:
                     unit_val = estimated_usage.get("unit")
                     default_unit = UnitOfMeasure.THERM if account.meter_type == MeterType.GAS else UnitOfMeasure.KWH
                     if not unit_val:
-                        _LOGGER.warning("Missing unit of measure, defaulting to %s", default_unit)
+                        log_level = (
+                            logging.DEBUG
+                            if account.meter_type == MeterType.ELEC and unit_val in (None, "")
+                            else logging.WARNING
+                        )
+                        _LOGGER.log(log_level, "Missing unit of measure, defaulting to %s", default_unit)
                         unit_of_measure = default_unit
                     else:
                         unit_str = str(unit_val)
