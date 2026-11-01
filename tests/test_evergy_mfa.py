@@ -69,9 +69,7 @@ async def test_mfa_code_submission():
     await handler.submit_mfa_code("123456")
 
     payload = session.post.call_args.kwargs["json"]
-    assert payload["parameters"] == {
-        "buttonType": "form-submit", "buttonValue": "NEXT", "passcode": "123456"
-    }
+    assert payload["parameters"] == {"buttonType": "form-submit", "buttonValue": "NEXT", "passcode": "123456"}
     assert payload["interactionId"] == "mfa-interaction"
     assert handler.access_token == "secret"
 
@@ -99,7 +97,8 @@ async def test_mfa_completion():
     handler.submit_mfa_code = AsyncMock()
     handler.postprocessing_api = AsyncMock()
     with patch(
-        "opower.utilities.evergy._get_opower_credentials", new_callable=AsyncMock,
+        "opower.utilities.evergy._get_opower_credentials",
+        new_callable=AsyncMock,
         return_value=("jwt", "kcpl"),
     ):
         result = await EvergyMfaHandler(handler).async_submit_mfa_code("123456")
@@ -113,19 +112,20 @@ async def test_login_with_saved_mfa_data():
     """A previously completed MFA flow does not trigger another challenge."""
     utility = Evergy()
     token = await utility.async_login(
-        MagicMock(), "user", "password",
+        MagicMock(),
+        "user",
+        "password",
         {"evergy_opower_token": "jwt", "evergy_subdomain": "kcpl"},
     )
     assert token == "jwt"
     assert utility.subdomain() == "kcpl"
 
+
 @pytest.mark.asyncio
 async def test_login_without_mfa():
     """Existing direct-token logins still complete without MFA."""
     session = MagicMock()
-    session.post.return_value = FakeResponse(
-        {"id": "done", "connectionId": "next", "access_token": "secret"}
-    )
+    session.post.return_value = FakeResponse({"id": "done", "connectionId": "next", "access_token": "secret"})
     handler = EvergyLoginHandler(session)
     handler.auth_data = {"api_root": "https://auth.example", "company_id": "company"}
     handler.id = "previous"

@@ -379,6 +379,7 @@ class EvergyLoginHandler:
         # Postprocess the url at Evergy to get access by cookie.
         await self.postprocessing_api()
 
+
 class EvergyMfaHandler(MfaHandlerBase):
     """Complete an Evergy email MFA challenge."""
 
@@ -398,6 +399,7 @@ class EvergyMfaHandler(MfaHandlerBase):
         await self._login.postprocessing_api()
         token, subdomain = await _get_opower_credentials(self._login.session)
         return {"evergy_opower_token": token, "evergy_subdomain": subdomain}
+
 
 async def _get_opower_credentials(session: aiohttp.ClientSession) -> tuple[str, str]:
     """Read the Opower token and selected utility subdomain from Evergy."""
@@ -422,6 +424,7 @@ async def _get_opower_credentials(session: aiohttp.ClientSession) -> tuple[str, 
         if subdomain not in {"kcpk", "kcpl"}:
             _LOGGER.warning("unexpected Evergy subdomain %s, continuing", subdomain)
     return token, subdomain
+
 
 class Evergy(UtilityBase):
     """Evergy."""
