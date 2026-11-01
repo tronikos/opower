@@ -1,5 +1,6 @@
 """Tests for Evergy email MFA support."""
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,21 +12,25 @@ from opower.utilities.evergy import Evergy, EvergyLoginHandler, EvergyMfaHandler
 class FakeResponse:
     """Minimal async HTTP response."""
 
-    def __init__(self, data):
+    def __init__(self, data: dict[str, Any]) -> None:
+        """Initialize the fake response."""
         self.data = data
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "FakeResponse":
+        """Enter the async context."""
         return self
 
-    async def __aexit__(self, *_args):
+    async def __aexit__(self, *_args: Any) -> bool:
+        """Exit the async context."""
         return False
 
-    async def json(self):
+    async def json(self) -> dict[str, Any]:
+        """Return the response data."""
         return self.data
 
 
 @pytest.mark.asyncio
-async def test_email_mfa_challenge():
+async def test_email_mfa_challenge() -> None:
     """Email MFA is raised only when the DaVinci response identifies the challenge."""
     session = MagicMock()
     session.post.return_value = FakeResponse(
@@ -54,7 +59,7 @@ async def test_email_mfa_challenge():
 
 
 @pytest.mark.asyncio
-async def test_mfa_code_submission():
+async def test_mfa_code_submission() -> None:
     """The code is sent using the observed DaVinci form payload."""
     session = MagicMock()
     session.post.return_value = FakeResponse(
@@ -71,11 +76,11 @@ async def test_mfa_code_submission():
     payload = session.post.call_args.kwargs["json"]
     assert payload["parameters"] == {"buttonType": "form-submit", "buttonValue": "NEXT", "passcode": "123456"}
     assert payload["interactionId"] == "mfa-interaction"
-    assert handler.access_token == "secret"
+    assert handler.access_token == "secret"  # noqa: S105
 
 
 @pytest.mark.asyncio
-async def test_mfa_invalid_code():
+async def test_mfa_invalid_code() -> None:
     """A non-successful response rejects the code."""
     session = MagicMock()
     session.post.return_value = FakeResponse({"id": "mfa-id", "capabilityName": "customHTMLTemplate"})
@@ -90,7 +95,7 @@ async def test_mfa_invalid_code():
 
 
 @pytest.mark.asyncio
-async def test_mfa_completion():
+async def test_mfa_completion() -> None:
     """MFA completion returns token and subdomain for a subsequent login."""
     handler = MagicMock(spec=EvergyLoginHandler)
     handler.session = MagicMock()
@@ -108,7 +113,7 @@ async def test_mfa_completion():
 
 
 @pytest.mark.asyncio
-async def test_login_with_saved_mfa_data():
+async def test_login_with_saved_mfa_data() -> None:
     """A previously completed MFA flow does not trigger another challenge."""
     utility = Evergy()
     token = await utility.async_login(
@@ -117,12 +122,12 @@ async def test_login_with_saved_mfa_data():
         "password",
         {"evergy_opower_token": "jwt", "evergy_subdomain": "kcpl"},
     )
-    assert token == "jwt"
+    assert token == "jwt"  # noqa: S105
     assert utility.subdomain() == "kcpl"
 
 
 @pytest.mark.asyncio
-async def test_login_without_mfa():
+async def test_login_without_mfa() -> None:
     """Existing direct-token logins still complete without MFA."""
     session = MagicMock()
     session.post.return_value = FakeResponse({"id": "done", "connectionId": "next", "access_token": "secret"})
@@ -131,4 +136,4 @@ async def test_login_without_mfa():
     handler.id = "previous"
     handler.connectionId = "previous"
     assert await handler.get_new_connection_id() is True
-    assert handler.access_token == "secret"
+    assert handler.access_token == "secret"  # noqa: S105

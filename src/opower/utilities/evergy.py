@@ -384,6 +384,7 @@ class EvergyMfaHandler(MfaHandlerBase):
     """Complete an Evergy email MFA challenge."""
 
     def __init__(self, login: EvergyLoginHandler) -> None:
+        """Initialize the Evergy MFA handler."""
         self._login = login
 
     async def async_get_mfa_options(self) -> dict[str, str]:
@@ -458,7 +459,7 @@ class Evergy(UtilityBase):
         login_data: dict[str, Any],
     ) -> str:
         """Evergy log-in flow with davinci widget."""
-        if token := login_data.get("evergy_opower_token"):
+        if isinstance(token := login_data.get("evergy_opower_token"), str) and token:
             self._subdomain = login_data["evergy_subdomain"]
             return token
 
