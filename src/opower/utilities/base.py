@@ -113,12 +113,13 @@ class UtilityBase(abc.ABC):
         """
         raise NotImplementedError
 
-    async def async_iter_account_tokens(self, session: aiohttp.ClientSession) -> AsyncIterator[str]:
+    async def async_iter_account_tokens(self, session: aiohttp.ClientSession) -> AsyncIterator[str | None]:
         """Yield an Opower access token per utility account, after async_login.
 
         For utilities whose login token only covers one of the user's accounts.
         Opower ties a token to an account when the token is first used, so the
         caller must use each token before asking for the next one.
+        Yields None for an account, or the list of accounts, that failed.
         Yields nothing when the login token covers all accounts.
         """
         return

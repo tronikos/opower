@@ -952,6 +952,78 @@ async def test_login_keeps_customers_without_tokens_per_account(monkeypatch: pyt
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "second_login_tokens",
+    [
+        ["first-token", None],
+        ["first-token", "failing-token"],
+        # Listing the utility accounts failed.
+        [None],
+    ],
+    ids=["token_failed", "customers_failed", "listing_failed"],
+)
+async def test_login_fails_when_a_known_utility_account_fails(
+    monkeypatch: pytest.MonkeyPatch, second_login_tokens: list[str | None]
+) -> None:
+    """A failed utility account that loaded before fails the login instead of dropping its customers."""
+    second_customer_uuid = "55555555-5555-11e5-bf2b-000000000005"
+    second_customers = json.loads(json.dumps(_CUSTOMERS_RESPONSE))
+    second_customers["customers"][0]["uuid"] = second_customer_uuid
+
+    def customers_route(request: dict[str, Any]) -> Any:
+        authorization = request["headers"]["authorization"]
+        if authorization == "Bearer failing-token":
+            return _FakeResponse({"error": "unavailable"}, status=503)
+        if authorization == "Bearer second-token":
+            return second_customers
+        return _CUSTOMERS_RESPONSE
+
+    customers_route.wants_request = True  # type: ignore[attr-defined]
+    account_tokens: list[str | None] = ["first-token", "second-token"]
+
+    async def login(*args: object) -> str:
+        return _ACCESS_TOKEN
+
+    async def iter_account_tokens(session: object) -> Any:
+        for token in account_tokens:
+            yield token
+
+    opower = _pge(_FakeSession({"multi-account-v1": customers_route}))
+    monkeypatch.setattr(opower.utility, "async_login", login)
+    monkeypatch.setattr(opower.utility, "async_iter_account_tokens", iter_account_tokens)
+    await opower.async_login()
+
+    account_tokens[:] = second_login_tokens
+    with pytest.raises(CannotConnect):
+        await opower.async_login()
+
+    assert [customer["uuid"] for customer in opower._customers] == [_CUSTOMER_UUID, second_customer_uuid]
+    assert opower._get_headers(second_customer_uuid)["authorization"] == "Bearer second-token"
+
+
+@pytest.mark.asyncio
+async def test_login_skips_a_failed_utility_account_that_never_loaded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A utility account that always fails, e.g. a closed one, does not fail the next logins."""
+
+    async def login(*args: object) -> str:
+        return _ACCESS_TOKEN
+
+    async def iter_account_tokens(session: object) -> Any:
+        for token in ("first-token", None):
+            yield token
+
+    opower = _pge(_FakeSession({"multi-account-v1": _CUSTOMERS_RESPONSE}))
+    monkeypatch.setattr(opower.utility, "async_login", login)
+    monkeypatch.setattr(opower.utility, "async_iter_account_tokens", iter_account_tokens)
+    await opower.async_login()
+    await opower.async_login()
+    accounts = await opower.async_get_accounts()
+
+    assert {account.customer.uuid for account in accounts} == {_CUSTOMER_UUID}
+    assert opower._get_headers(_CUSTOMER_UUID)["authorization"] == "Bearer first-token"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("account_numbers", "expected_tokens"),
     [
         (["1000000001", "1000000002"], ["token-1000000001", "token-1000000002"]),
@@ -1002,7 +1074,7 @@ async def test_pge_yields_a_token_per_billing_account(
 async def test_pge_skips_a_billing_account_that_fails(
     monkeypatch: pytest.MonkeyPatch, select_response: dict[str, Any] | list[str] | Exception, token_error: Exception | None
 ) -> None:
-    """An unusable billing account, e.g. a closed one, does not hide the others."""
+    """An unusable billing account, e.g. a closed one, does not hide the others, but is reported as failed."""
     selected: list[str] = []
 
     async def action(
@@ -1029,7 +1101,7 @@ async def test_pge_skips_a_billing_account_that_fails(
 
     tokens = [token async for token in PGE().async_iter_account_tokens(Mock())]
 
-    assert tokens == ["token-1000000001", "token-1000000003"]
+    assert tokens == ["token-1000000001", None, "token-1000000003"]
 
 
 @pytest.mark.asyncio
@@ -1058,7 +1130,7 @@ async def test_pge_action_without_result_raises_cannot_connect(monkeypatch: pyte
 async def test_pge_falls_back_to_the_selected_account_when_listing_fails(
     monkeypatch: pytest.MonkeyPatch, response: dict[str, Any] | Exception
 ) -> None:
-    """A failure to list billing accounts does not fail the login."""
+    """A failure to list billing accounts does not fail the login, but is reported as failed."""
 
     async def action(
         session: object, aura_token: str, classname: str, method: str, params: dict[str, Any] | None = None
@@ -1072,7 +1144,7 @@ async def test_pge_falls_back_to_the_selected_account_when_listing_fails(
 
     tokens = [token async for token in PGE().async_iter_account_tokens(Mock())]
 
-    assert tokens == []
+    assert tokens == [None]
 
 
 @pytest.mark.asyncio
