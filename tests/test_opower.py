@@ -30,6 +30,8 @@ from opower.opower import Customer
 from opower.utilities.pge import PGE, _aura_community_action_execute
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from opower.utilities import UtilityBase
 
 
@@ -1148,8 +1150,19 @@ async def test_pge_falls_back_to_the_selected_account_when_listing_fails(
 
 
 @pytest.mark.asyncio
-async def test_get_forecast_parses_graphql_response() -> None:
-    """Parse the bill forecast, mapping the "TH" unit to THERM."""
+@pytest.mark.parametrize(
+    ("gas_unit", "expected_gas_unit"),
+    [
+        ("TH", UnitOfMeasure.THERM),
+        ("THERM", UnitOfMeasure.THERM),
+        ("CCF", UnitOfMeasure.CCF),
+    ],
+)
+async def test_get_forecast_parses_graphql_response(
+    gas_unit: str, expected_gas_unit: UnitOfMeasure, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Parse explicit electric and gas units, including the "TH" alias."""
+    caplog.set_level(logging.WARNING, logger="opower.opower")
     customers = {
         "customers": [
             {
@@ -1193,8 +1206,7 @@ async def test_get_forecast_parses_graphql_response() -> None:
                                     },
                                     {
                                         "serviceAgreement": {"uuid": _GAS_ACCOUNT_UUID},
-                                        # Gas is reported in "TH", which is not a UnitOfMeasure value.
-                                        "estimatedUsage": {"value": 12.0, "unit": "TH"},
+                                        "estimatedUsage": {"value": 12.0, "unit": gas_unit},
                                         "estimatedUsageCharges": {"value": 30.0},
                                         "soFarUsage": {"value": 6.0},
                                         "soFarUsageCharges": {"value": 15.0},
@@ -1222,8 +1234,9 @@ async def test_get_forecast_parses_graphql_response() -> None:
     assert (elec.usage_to_date, elec.cost_to_date) == (240.0, 72.0)
     assert (elec.forecasted_usage, elec.forecasted_cost) == (500.0, 150.0)
     assert (elec.typical_usage, elec.typical_cost) == (480.0, 140.0)
-    assert gas.unit_of_measure is UnitOfMeasure.THERM
+    assert gas.unit_of_measure is expected_gas_unit
     assert gas.forecasted_usage == 12.0
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
 
     graphql_request = next(r for r in session.requests if "dsm-graphql-v1" in r["url"])
     assert graphql_request["method"] == "POST"
@@ -1231,11 +1244,79 @@ async def test_get_forecast_parses_graphql_response() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_forecast_without_estimates_defaults_by_meter_type() -> None:
-    """A forecast with no estimate yet keeps the account's default unit.
-
-    PG&E returns null estimates at the start of a billing period.
-    """
+@pytest.mark.parametrize("client_factory", [_pge, _coned], ids=["pge", "coned"])
+@pytest.mark.parametrize(
+    ("meter_type", "estimate_fields", "expected_usage", "expected_unit", "expected_warning"),
+    [
+        pytest.param(MeterType.ELEC, {}, 0.0, UnitOfMeasure.KWH, None, id="absent-estimate"),
+        pytest.param(MeterType.ELEC, {"estimatedUsage": None}, 0.0, UnitOfMeasure.KWH, None, id="null-estimate"),
+        pytest.param(MeterType.ELEC, {"estimatedUsage": {"value": 12.0}}, 12.0, UnitOfMeasure.KWH, None, id="absent-unit"),
+        pytest.param(
+            MeterType.ELEC, {"estimatedUsage": {"value": 12.0, "unit": None}}, 12.0, UnitOfMeasure.KWH, None, id="null-unit"
+        ),
+        pytest.param(
+            MeterType.ELEC, {"estimatedUsage": {"value": 12.0, "unit": ""}}, 12.0, UnitOfMeasure.KWH, None, id="empty-unit"
+        ),
+        pytest.param(
+            MeterType.GAS,
+            {"estimatedUsage": None},
+            0.0,
+            UnitOfMeasure.THERM,
+            "Missing unit of measure, defaulting to THERM",
+            id="missing-gas-unit",
+        ),
+        pytest.param(
+            MeterType.WATER,
+            {"estimatedUsage": None},
+            0.0,
+            UnitOfMeasure.KWH,
+            "Missing unit of measure, defaulting to KWH",
+            id="missing-water-unit",
+        ),
+        pytest.param(
+            MeterType.ELEC,
+            {"estimatedUsage": {"value": 12.0, "unit": 0}},
+            12.0,
+            UnitOfMeasure.KWH,
+            "Missing unit of measure, defaulting to KWH",
+            id="invalid-zero-unit",
+        ),
+        pytest.param(
+            MeterType.ELEC,
+            {"estimatedUsage": {"value": 12.0, "unit": False}},
+            12.0,
+            UnitOfMeasure.KWH,
+            "Missing unit of measure, defaulting to KWH",
+            id="invalid-false-unit",
+        ),
+    ],
+)
+async def test_get_forecast_infers_only_missing_electric_units(
+    client_factory: "Callable[[_FakeSession], Opower]",
+    meter_type: MeterType,
+    estimate_fields: dict[str, Any],
+    expected_usage: float,
+    expected_unit: UnitOfMeasure,
+    expected_warning: str | None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Infer missing electric units without hiding unresolved or malformed units."""
+    caplog.set_level(logging.WARNING, logger="opower.opower")
+    customers = {
+        "customers": [
+            {
+                "uuid": _CUSTOMER_UUID,
+                "utilityAccounts": [
+                    {
+                        "uuid": _ELEC_ACCOUNT_UUID,
+                        "preferredUtilityAccountId": "1000000003",
+                        "meterType": str(meter_type),
+                        "readResolution": "DAY",
+                    }
+                ],
+            }
+        ]
+    }
     graphql = {
         "data": {
             "billingAccountsConnection": {
@@ -1248,7 +1329,7 @@ async def test_get_forecast_without_estimates_defaults_by_meter_type() -> None:
                                 "segments": [
                                     {
                                         "serviceAgreement": {"uuid": _ELEC_ACCOUNT_UUID},
-                                        "estimatedUsage": None,
+                                        **estimate_fields,
                                         "estimatedUsageCharges": None,
                                         "soFarUsage": {"value": 0.0},
                                         "soFarUsageCharges": {"value": 0.0},
@@ -1263,19 +1344,24 @@ async def test_get_forecast_without_estimates_defaults_by_meter_type() -> None:
             }
         }
     }
-    session = _FakeSession({"multi-account-v1": _CUSTOMERS_RESPONSE, "dsm-graphql-v1": graphql})
-    forecasts = await _pge(session).async_get_forecast()
+    session = _FakeSession({"multi-account-v1": customers, "dsm-graphql-v1": graphql})
+    forecasts = await client_factory(session).async_get_forecast()
 
     assert len(forecasts) == 1
-    assert forecasts[0].unit_of_measure is UnitOfMeasure.KWH
-    assert forecasts[0].forecasted_usage == 0
+    assert forecasts[0].account.uuid == _ELEC_ACCOUNT_UUID
+    assert forecasts[0].account.meter_type is meter_type
+    assert forecasts[0].unit_of_measure is expected_unit
+    assert forecasts[0].forecasted_usage == expected_usage
     assert forecasts[0].forecasted_cost == 0
     assert forecasts[0].typical_usage == 241.0
+    warnings = [record.message for record in caplog.records if record.levelno >= logging.WARNING]
+    assert warnings == ([expected_warning] if expected_warning is not None else [])
 
 
 @pytest.mark.asyncio
-async def test_get_forecast_skips_unusable_segments() -> None:
+async def test_get_forecast_skips_unusable_segments(caplog: pytest.LogCaptureFixture) -> None:
     """Skip forecasts for unknown accounts, and nodes without a usable interval."""
+    caplog.set_level(logging.WARNING, logger="opower.opower")
     graphql = {
         "data": {
             "billingAccountsConnection": {
@@ -1315,6 +1401,9 @@ async def test_get_forecast_skips_unusable_segments() -> None:
     assert forecasts[0].forecasted_usage == 2.0
     # Absent values default to 0 rather than raising.
     assert forecasts[0].cost_to_date == 0
+    assert [record.message for record in caplog.records if record.levelno >= logging.WARNING] == [
+        "Unknown unit of measure: BTU, defaulting to KWH"
+    ]
 
 
 @pytest.mark.asyncio
