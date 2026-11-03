@@ -160,6 +160,11 @@ class Eversource(UtilityBase):
         """Return the timezone."""
         return "America/New_York"
 
+    @staticmethod
+    def supports_realtime_usage() -> bool:
+        """Check if Utility supports realtime usage reads."""
+        return True
+
     async def async_login(  # noqa: C901, PLR0912, PLR0915
         self,
         session: aiohttp.ClientSession,

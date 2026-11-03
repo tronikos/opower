@@ -56,6 +56,10 @@ class TestEversource(unittest.IsolatedAsyncioTestCase):
         """Test timezone."""
         self.assertEqual("America/New_York", Eversource().timezone())
 
+    def test_supports_realtime_usage(self) -> None:
+        """Test realtime usage is supported."""
+        self.assertTrue(Eversource().supports_realtime_usage())
+
     async def test_token_from_second_account_when_first_is_dormant(self) -> None:
         """A null body for account[0] must not crash; account[1] supplies the token.
 
