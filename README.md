@@ -59,6 +59,7 @@ series is available.
   - PECO Energy Company (PECO)
   - Potomac Electric Power Company (Pepco)
 - Glendale Water and Power (GWP)
+- Lafayette Utilities System (LUS)
 - Northern Indiana Public Service Company (NIPSCO)
 - Pacific Gas & Electric (PG&E)
 - Puget Sound Energy (PSE)
