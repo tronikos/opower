@@ -3,8 +3,8 @@
 import unittest
 from typing import Any
 
-from opower.exceptions import CannotConnect, InvalidAuth
-from opower.utilities.eversource import Eversource
+from opower.exceptions import CannotConnect, InvalidAuth, MfaChallenge
+from opower.utilities.eversource import Eversource, EversourceMfaHandler
 from tests.mock_http import MockResponse, MockSession
 
 LOGIN_PAGE = "https://www.eversource.com/security/account/Login"
@@ -176,3 +176,113 @@ class TestEversource(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(_widget_urls(session)), 50)
         self.assertIn("after 50", logs.output[0])
+
+
+MFA_ISSUE = "https://www.eversource.com/security/api/OktaMFA/IssueMFAFactor"
+MFA_VERIFY = "https://www.eversource.com/security/api/OktaMFA/VerifyMFAFactor"
+FACTORS = [
+    {"id": "sms1", "factorType": "sms", "status": "ACTIVE", "profile": {"phoneNumber": "+1 603-555-1234"}},
+    {"id": "em1", "factorType": "email", "status": "ACTIVE", "value": "someone@example.com"},
+    {"id": "old", "factorType": "sms", "status": "PENDING_ACTIVATION"},
+]
+
+
+def _mfa_required() -> MockResponse:
+    return MockResponse(
+        payload={
+            "IsSuccess": True,
+            "status": "MFA_REQUIRED",
+            "OktaUsername": "user@example.com",
+            "token": "enc-user-id",
+            "factors": FACTORS,
+        }
+    )
+
+
+class TestEversourceMfa(unittest.IsolatedAsyncioTestCase):
+    """Test interactive MFA (text/email code) for Eversource."""
+
+    async def _challenge(self, session: MockSession) -> EversourceMfaHandler:
+        with self.assertRaises(MfaChallenge) as context:
+            await Eversource().async_login(session, "user", "pw", {})  # type: ignore[arg-type]
+        handler = context.exception.handler
+        assert isinstance(handler, EversourceMfaHandler)
+        return handler
+
+    async def test_mfa_required_raises_challenge_with_active_options(self) -> None:
+        """MFA_REQUIRED raises MfaChallenge listing only active factors, masked."""
+        responses = _login_responses({"a": {"jwtToken": "t"}})
+        responses[MSLOGIN] = _mfa_required()
+        handler = await self._challenge(MockSession(responses))
+        self.assertEqual(
+            {"sms1": "Text message to ***-***-1234", "em1": "Email to s***@example.com"},
+            await handler.async_get_mfa_options(),
+        )
+
+    async def test_mfa_required_without_user_id_raises_invalid_auth(self) -> None:
+        """No encrypted user id means the MFA calls cannot be made."""
+        responses = _login_responses({})
+        responses[MSLOGIN] = MockResponse(payload={"IsSuccess": True, "status": "MFA_REQUIRED", "OktaUsername": "u"})
+        with self.assertRaises(InvalidAuth):
+            await Eversource().async_login(MockSession(responses), "user", "pw", {})  # type: ignore[arg-type]
+
+    async def test_select_sends_code_and_submit_returns_remember_me(self) -> None:
+        """Selecting issues the code; a correct code returns remember-me login data."""
+        responses = _login_responses({})
+        responses[MSLOGIN] = _mfa_required()
+        responses[MFA_ISSUE] = MockResponse(payload={"factorResult": "CHALLENGE"})
+        responses[MFA_VERIFY] = MockResponse(payload={"factorResult": "SUCCESS", "mfaRememberMeData": "remember-abc"})
+        session = MockSession(responses)
+        handler = await self._challenge(session)
+        await handler.async_select_mfa_option("sms1")
+        login_data = await handler.async_submit_mfa_code(" 123456 ")
+        self.assertEqual({"mfa_remember_me_data": "remember-abc"}, login_data)
+        issue = next(r for r in session.requests if r["url"] == MFA_ISSUE)
+        verify = next(r for r in session.requests if r["url"] == MFA_VERIFY)
+        self.assertEqual({"userId": "enc-user-id", "factorId": "sms1"}, issue["json"])
+        self.assertEqual(
+            {"userId": "enc-user-id", "factorId": "sms1", "passCode": "123456", "mfaRememberMe": True}, verify["json"]
+        )
+
+    async def test_wrong_code_raises_invalid_auth(self) -> None:
+        """An invalid passcode raises InvalidAuth."""
+        responses = _login_responses({})
+        responses[MSLOGIN] = _mfa_required()
+        responses[MFA_ISSUE] = MockResponse(payload={"factorResult": "CHALLENGE"})
+        responses[MFA_VERIFY] = MockResponse(payload={"invalidPasscode": True})
+        handler = await self._challenge(MockSession(responses))
+        await handler.async_select_mfa_option("em1")
+        with self.assertRaises(InvalidAuth):
+            await handler.async_submit_mfa_code("000000")
+
+    async def test_code_not_sent_raises_cannot_connect(self) -> None:
+        """A non-CHALLENGE reply to the send request raises CannotConnect."""
+        responses = _login_responses({})
+        responses[MSLOGIN] = _mfa_required()
+        responses[MFA_ISSUE] = MockResponse(payload={"factorResult": "FAILED"})
+        handler = await self._challenge(MockSession(responses))
+        with self.assertRaises(CannotConnect):
+            await handler.async_select_mfa_option("sms1")
+
+    async def test_valid_remember_me_skips_mfa(self) -> None:
+        """Saved remember-me data is sent and a valid one completes login without MFA."""
+        responses = _login_responses({"a": {"jwtToken": "opower-token"}})
+        responses[MSLOGIN] = MockResponse(
+            payload={
+                "IsSuccess": True,
+                "status": "MFA_REQUIRED",
+                "OktaUsername": "user@example.com",
+                "token": "enc-user-id",
+                "ValidMfaRememberMeData": True,
+            }
+        )
+        session = MockSession(responses)
+        token = await Eversource().async_login(
+            session,  # type: ignore[arg-type]
+            "user",
+            "pw",
+            {"mfa_remember_me_data": "remember-abc"},
+        )
+        self.assertEqual("opower-token", token)
+        mslogin = next(r for r in session.requests if r["url"] == MSLOGIN)
+        self.assertEqual("remember-abc", mslogin["json"]["MfaRememberMeData"])
