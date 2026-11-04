@@ -4,7 +4,7 @@ import unittest
 from typing import Any
 
 from opower import get_supported_utility_names, select_utility
-from opower.exceptions import InvalidAuth
+from opower.exceptions import CannotConnect, InvalidAuth
 from opower.utilities.lus import LUS
 
 
@@ -16,6 +16,8 @@ class _FakeResponse:
         self._body = body
 
     async def json(self) -> Any:
+        if isinstance(self._body, Exception):
+            raise self._body
         return self._body
 
     def raise_for_status(self) -> None:
@@ -102,5 +104,17 @@ class TestLUS(unittest.IsolatedAsyncioTestCase):
     async def test_missing_token_raises_invalid_auth(self) -> None:
         """A 200 without a sessionToken is not a usable login."""
         session = _FakeSession(200, {})
+        with self.assertRaises(InvalidAuth):
+            await LUS().async_login(session, "user", "pw", {})  # type: ignore[arg-type]
+
+    async def test_non_json_reply_raises_cannot_connect(self) -> None:
+        """A maintenance page isn't a credential problem, so it mustn't trigger reauth."""
+        session = _FakeSession(200, ValueError("Expecting value"))
+        with self.assertRaises(CannotConnect):
+            await LUS().async_login(session, "user", "pw", {})  # type: ignore[arg-type]
+
+    async def test_non_object_json_raises_invalid_auth(self) -> None:
+        """A JSON reply that isn't an object has no sessionToken."""
+        session = _FakeSession(200, ["unexpected"])
         with self.assertRaises(InvalidAuth):
             await LUS().async_login(session, "user", "pw", {})  # type: ignore[arg-type]

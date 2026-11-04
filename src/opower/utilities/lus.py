@@ -5,7 +5,7 @@ from typing import Any
 import aiohttp
 
 from ..const import USER_AGENT
-from ..exceptions import InvalidAuth
+from ..exceptions import CannotConnect, InvalidAuth
 from .base import UtilityBase
 
 
@@ -58,9 +58,14 @@ class LUS(UtilityBase):
             if response.status in (400, 401, 403):
                 raise InvalidAuth("Username/Password are invalid")
             response.raise_for_status()
-            result = await response.json()
+            try:
+                result = await response.json()
+            except (aiohttp.ContentTypeError, ValueError) as err:
+                # A non-JSON reply, e.g. a maintenance page, isn't a credential
+                # problem, so don't make Home Assistant ask for the password again.
+                raise CannotConnect("Unexpected response from the LUS login") from err
 
-        token = result.get("sessionToken")
+        token = result.get("sessionToken") if isinstance(result, dict) else None
         if not token:
             raise InvalidAuth("Login response had no sessionToken")
 
