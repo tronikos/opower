@@ -11,8 +11,8 @@ from typing import Any
 import aiohttp
 
 from ..const import USER_AGENT
-from ..exceptions import CannotConnect, InvalidAuth
-from .base import UtilityBase
+from ..exceptions import CannotConnect, InvalidAuth, MfaChallenge
+from .base import MfaHandlerBase, UtilityBase
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -133,6 +133,103 @@ async def _async_get_account_opower_token(
         return _WidgetResult.ERROR, f"connection error: {err}"
 
 
+_MFA_ISSUE_URL = "https://www.eversource.com/security/api/OktaMFA/IssueMFAFactor"
+_MFA_VERIFY_URL = "https://www.eversource.com/security/api/OktaMFA/VerifyMFAFactor"
+
+
+def _mask(value: str) -> str:
+    """Mask a phone number or email address for display."""
+    if "@" in value:
+        local, _, domain = value.partition("@")
+        return f"{local[:1]}***@{domain}"
+    digits = re.sub(r"\D", "", value)
+    return f"***-***-{digits[-4:]}" if len(digits) >= 4 else "***"
+
+
+class EversourceMfaHandler(MfaHandlerBase):
+    """Handles interactive MFA (text or email code) for Eversource.
+
+    Mirrors the eversource.com login page: IssueMFAFactor sends the code,
+    VerifyMFAFactor checks it. Verifying with mfaRememberMe returns
+    mfaRememberMeData; sending that with the next MSLogin skips MFA.
+    """
+
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        user_id: str,
+        factors: list[dict[str, Any]],
+        headers: dict[str, str],
+    ) -> None:
+        """Initialize the MFA handler."""
+        self._session = session
+        self._user_id = user_id
+        self._factors = factors
+        self._headers = headers
+        self._factor_id: str | None = None
+
+    async def async_get_mfa_options(self) -> dict[str, str]:
+        """Return the active text and email factors."""
+        options: dict[str, str] = {}
+        for factor in self._factors:
+            if not isinstance(factor, dict) or factor.get("status") != "ACTIVE" or not factor.get("id"):
+                continue
+            factor_type = factor.get("factorType")
+            if factor_type == "sms":
+                phone = (factor.get("profile") or {}).get("phoneNumber") or factor.get("value") or ""
+                options[factor["id"]] = f"Text message to {_mask(str(phone))}"
+            elif factor_type == "email":
+                email = factor.get("value") or (factor.get("profile") or {}).get("email") or ""
+                options[factor["id"]] = f"Email to {_mask(str(email))}"
+        return options
+
+    async def async_select_mfa_option(self, option_id: str) -> None:
+        """Send the code to the selected factor."""
+        self._factor_id = option_id
+        try:
+            async with self._session.post(
+                _MFA_ISSUE_URL,
+                json={"userId": self._user_id, "factorId": option_id},
+                headers=self._headers,
+            ) as resp:
+                if resp.status != 200:
+                    raise CannotConnect(f"Sending MFA code failed: HTTP {resp.status}")
+                result: Any = await resp.json()
+        except (aiohttp.ClientError, ValueError) as err:
+            raise CannotConnect(f"Sending MFA code failed: {err}") from err
+        if not isinstance(result, dict) or result.get("factorResult") != "CHALLENGE":
+            raise CannotConnect("Eversource did not send an MFA code")
+        _LOGGER.debug("Eversource MFA code sent")
+
+    async def async_submit_mfa_code(self, code: str) -> dict[str, Any]:
+        """Verify the code and return remember-me data for the next login."""
+        if not self._factor_id:
+            raise InvalidAuth("No MFA option selected")
+        try:
+            async with self._session.post(
+                _MFA_VERIFY_URL,
+                json={
+                    "userId": self._user_id,
+                    "factorId": self._factor_id,
+                    "passCode": code.strip(),
+                    "mfaRememberMe": True,
+                },
+                headers=self._headers,
+            ) as resp:
+                if resp.status != 200:
+                    raise CannotConnect(f"Verifying MFA code failed: HTTP {resp.status}")
+                result: Any = await resp.json()
+        except (aiohttp.ClientError, ValueError) as err:
+            raise CannotConnect(f"Verifying MFA code failed: {err}") from err
+        if not isinstance(result, dict) or result.get("invalidPasscode") or result.get("factorResult") != "SUCCESS":
+            raise InvalidAuth("Invalid MFA code")
+        remember = result.get("mfaRememberMeData")
+        if not remember:
+            raise InvalidAuth("Eversource accepted the code but returned no remember-me data")
+        _LOGGER.debug("Eversource MFA code accepted")
+        return {"mfa_remember_me_data": remember}
+
+
 class Eversource(UtilityBase):
     """Eversource Energy.
 
@@ -211,7 +308,7 @@ class Eversource(UtilityBase):
             "Password": password,
             "RememberID": False,
             "ReturnUrl": "/cg/customer/accountoverview",
-            "MfaRememberMeData": "",
+            "MfaRememberMeData": login_data.get("mfa_remember_me_data", ""),
         }
 
         headers = {
@@ -244,12 +341,17 @@ class Eversource(UtilityBase):
                             status = json_response.get("status")
                             okta_username = json_response.get("OktaUsername")
 
-                            if status in ("SUCCESS", "MFA_ENROLL"):
+                            if status in ("SUCCESS", "MFA_ENROLL") or json_response.get("ValidMfaRememberMeData"):
+                                # Valid remember-me data skips MFA, as on eversource.com.
                                 _LOGGER.debug("Login successful, OktaUsername: %s", okta_username)
-                            elif status == "MFA_REQUIRED":
-                                raise InvalidAuth("MFA required - not yet supported")
-                            elif status == "MFA_CHALLENGE":
-                                raise InvalidAuth("MFA challenge required - not yet supported")
+                            elif status in ("MFA_REQUIRED", "MFA_CHALLENGE"):
+                                user_id = json_response.get("token")
+                                if not user_id:
+                                    raise InvalidAuth("MFA required but Eversource returned no user id")
+                                raise MfaChallenge(
+                                    "Eversource MFA required",
+                                    EversourceMfaHandler(session, user_id, json_response.get("factors") or [], headers),
+                                )
                         else:
                             errors = json_response.get("Errors", {})
                             if errors:
