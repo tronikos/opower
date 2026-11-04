@@ -4,7 +4,7 @@ import unittest
 from typing import Any
 
 from opower import get_supported_utility_names, select_utility
-from opower.exceptions import CannotConnect, InvalidAuth
+from opower.exceptions import InvalidAuth
 from opower.utilities.lus import LUS
 
 
@@ -107,10 +107,10 @@ class TestLUS(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(InvalidAuth):
             await LUS().async_login(session, "user", "pw", {})  # type: ignore[arg-type]
 
-    async def test_non_json_reply_raises_cannot_connect(self) -> None:
-        """A maintenance page isn't a credential problem, so it mustn't trigger reauth."""
+    async def test_non_json_reply_raises_invalid_auth(self) -> None:
+        """A non-JSON reply most likely means the API changed, so it shouldn't be retried."""
         session = _FakeSession(200, ValueError("Expecting value"))
-        with self.assertRaises(CannotConnect):
+        with self.assertRaises(InvalidAuth):
             await LUS().async_login(session, "user", "pw", {})  # type: ignore[arg-type]
 
     async def test_non_object_json_raises_invalid_auth(self) -> None:
