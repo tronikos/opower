@@ -8,8 +8,8 @@ from typing import Any
 import aiohttp
 
 from ..const import USER_AGENT
-from ..exceptions import CannotConnect, InvalidAuth
-from .base import UtilityBase
+from ..exceptions import CannotConnect, InvalidAuth, MfaChallenge
+from .base import MfaHandlerBase, UtilityBase
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -229,7 +229,54 @@ class EvergyLoginHandler:
                 _LOGGER.debug("Got access_token from customHTMLTemplate, skipping setCookieWithoutUser")
                 self.access_token = token
                 return True
+            if data.get("capabilityName") == "customHTMLTemplate" and data.get("startUiSubFlow"):
+                self.interactionId = data.get("interactionId", self.interactionId)
+                raise MfaChallenge("Evergy email MFA required", EvergyMfaHandler(self))
             return False
+
+    async def submit_mfa_code(self, code: str) -> None:
+        """Submit the email verification code to the active DaVinci flow."""
+        url = (
+            self.auth_data["api_root"]
+            + "/"
+            + self.auth_data["company_id"]
+            + "/davinci/connections/"
+            + self.connectionId
+            + "/capabilities/customHTMLTemplate"
+        )
+        async with self.session.post(
+            url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Content-Type": "application/json",
+                "Origin": "https://www.evergy.com",
+            },
+            json={
+                "id": self.id,
+                "interactionId": self.interactionId,
+                "nextEvent": {
+                    "constructType": "skEvent",
+                    "eventName": "continue",
+                    "params": [],
+                    "eventType": "post",
+                    "postProcess": {},
+                },
+                "parameters": {
+                    "buttonType": "form-submit",
+                    "buttonValue": "NEXT",
+                    "passcode": code,
+                },
+                "eventName": "continue",
+            },
+            raise_for_status=True,
+        ) as resp:
+            data = await resp.json()
+
+        if data.get("capabilityName") != "returnSuccessResponseWidget" or not data.get("access_token"):
+            raise InvalidAuth("Evergy MFA verification failed")
+        self.id = data["id"]
+        self.connectionId = data.get("connectionId", self.connectionId)
+        self.access_token = data["access_token"]
 
     async def get_new_connection_cookie(self) -> None:
         """Set complete to generate cookie."""
@@ -333,6 +380,53 @@ class EvergyLoginHandler:
         await self.postprocessing_api()
 
 
+class EvergyMfaHandler(MfaHandlerBase):
+    """Complete an Evergy email MFA challenge."""
+
+    def __init__(self, login: EvergyLoginHandler) -> None:
+        """Initialize the Evergy MFA handler."""
+        self._login = login
+
+    async def async_get_mfa_options(self) -> dict[str, str]:
+        """Evergy already sent the code; no delivery method selection is needed."""
+        return {}
+
+    async def async_select_mfa_option(self, option_id: str) -> None:
+        """No-op: the email challenge is already in progress."""
+
+    async def async_submit_mfa_code(self, code: str) -> dict[str, Any]:
+        """Verify the code and return credentials for subsequent Opower logins."""
+        await self._login.submit_mfa_code(code)
+        await self._login.postprocessing_api()
+        token, subdomain = await _get_opower_credentials(self._login.session)
+        return {"evergy_opower_token": token, "evergy_subdomain": subdomain}
+
+
+async def _get_opower_credentials(session: aiohttp.ClientSession) -> tuple[str, str]:
+    """Read the Opower token and selected utility subdomain from Evergy."""
+    async with session.get(
+        "https://www.evergy.com/api/sso/jwt",
+        headers={"User-Agent": USER_AGENT},
+        raise_for_status=False,
+    ) as resp:
+        token = resp.headers.get("jwt", "").removeprefix("Bearer ")
+        if not token:
+            raise CannotConnect(f"Failed to parse the Opower bearer token from Evergy (status {resp.status})")
+
+    async with session.get(
+        "https://www.evergy.com/sc-api/account/getaccountpremiseselector",
+        params={"isWidgetPage": "false", "hasNoSelector": "false"},
+        headers={"User-Agent": USER_AGENT},
+        raise_for_status=True,
+    ) as resp:
+        data = await resp.json(content_type=None)
+        domain: str = data[0]["oPowerDomain"]
+        subdomain = domain.split(".", 1)[0]
+        if subdomain not in {"kcpk", "kcpl"}:
+            _LOGGER.warning("unexpected Evergy subdomain %s, continuing", subdomain)
+    return token, subdomain
+
+
 class Evergy(UtilityBase):
     """Evergy."""
 
@@ -365,39 +459,11 @@ class Evergy(UtilityBase):
         login_data: dict[str, Any],
     ) -> str:
         """Evergy log-in flow with davinci widget."""
+        if isinstance(token := login_data.get("evergy_opower_token"), str) and token:
+            self._subdomain = login_data["evergy_subdomain"]
+            return token
+
         login_evergy = EvergyLoginHandler(session)
         await login_evergy.login(username, password)
-
-        opower_access_token: str | None = None
-
-        async with session.get(
-            "https://www.evergy.com/api/sso/jwt",
-            headers={"User-Agent": USER_AGENT},
-            raise_for_status=False,
-        ) as resp:
-            # The header is absent when the session was not established, so do
-            # not index into it blindly.
-            jwt_header = resp.headers.get("jwt", "")
-            opower_access_token = jwt_header.removeprefix("Bearer ")
-            if not opower_access_token:
-                raise CannotConnect(f"Failed to parse the Opower bearer token from Evergy (status {resp.status})")
-
-        async with session.get(
-            "https://www.evergy.com/sc-api/account/getaccountpremiseselector",
-            params={"isWidgetPage": "false", "hasNoSelector": "false"},
-            headers={"User-Agent": USER_AGENT},
-            raise_for_status=True,
-        ) as resp:
-            # returned mimetype is nonstandard, so this avoids a ContentTypeError
-            data = await resp.json(content_type=None)
-            # shape is: [{"accountNumber": 123456789, "oPowerDomain": "kcpl.opower.com", ...}]
-            domain: str = data[0]["oPowerDomain"]
-            self._subdomain = domain.split(".", 1)[0]
-            _LOGGER.debug("detected Evergy subdomain: %s", self._subdomain)
-            if self._subdomain not in {"kcpk", "kcpl"}:
-                _LOGGER.warning(
-                    "unexpected Evergy subdomain %s, continuing",
-                    self._subdomain,
-                )
-
-        return opower_access_token
+        token, self._subdomain = await _get_opower_credentials(session)
+        return token
