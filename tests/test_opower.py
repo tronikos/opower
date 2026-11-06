@@ -4099,6 +4099,66 @@ async def test_graphql_day_reads_split_before_the_unrated_range() -> None:
 
 
 @pytest.mark.asyncio
+async def test_graphql_day_reads_do_not_split_dated_data_batches() -> None:
+    """Each daily batch from _async_get_dated_data fits in one 363-day GraphQL request."""
+    router = _ReadsRouter(lambda variables: _net_usage_response([(variables["timeInterval"], 1.0, 0.5)]))
+    session = _FakeSession({"dsm-graphql-v1": router})
+    opower = _aep(session)
+    opower.utility._subdomain = "aepo"  # type: ignore[attr-defined]
+
+    await opower.async_get_cost_reads(_elec_account(), AggregateType.DAY, datetime(2025, 9, 25), datetime(2026, 10, 30))
+
+    assert [variables["timeInterval"] for variables in router.read_variables] == [
+        "2025-11-03T00:00:00-05:00/2026-11-01T00:00:00-04:00",
+        "2025-09-25T00:00:00-04:00/2025-11-03T00:00:00-05:00",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_graphql_hourly_reads_step_by_elapsed_hours_across_dst_fall_back() -> None:
+    """A 720-hour sub-daily window across a 25-hour fall-back day must not span 721 hours."""
+    router = _ReadsRouter(lambda variables: _net_usage_response([(variables["timeInterval"], 1.0)]))
+    session = _FakeSession({"dsm-graphql-v1": router})
+    opower = _aep(session)
+    opower.utility._subdomain = "aepo"  # type: ignore[attr-defined]
+
+    await opower._async_fetch_graphql_reads(
+        _elec_account(), AggregateType.HOUR, datetime(2025, 10, 15), datetime(2025, 11, 28)
+    )
+
+    assert [variables["timeInterval"] for variables in router.read_variables] == [
+        "2025-10-15T00:00:00-04:00/2025-11-13T23:00:00-05:00",
+        "2025-11-13T23:00:00-05:00/2025-11-29T00:00:00-05:00",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_register_day_reads_split_on_local_midnight_across_dst() -> None:
+    """Daily register windows split on local midnight so a DST shift does not drop a day."""
+    intervals: list[str] = []
+
+    def reads(variables: dict[str, Any]) -> Any:
+        intervals.append(variables["timeInterval"])
+        return _register_reads_response({})
+
+    router = _GraphQLRouter(_registers_response(), reads)
+    session = _FakeSession({"dsm-graphql-v1": router})
+    tz = ZoneInfo("America/Los_Angeles")
+
+    await _pge(session).async_get_interval_register_reads(
+        _elec_account(),
+        AggregateType.DAY,
+        datetime(2025, 3, 10, 0, 0, tzinfo=tz),
+        datetime(2026, 3, 10, 0, 0, tzinfo=tz),
+    )
+
+    assert intervals == [
+        "2025-03-10T00:00:00-07:00/2026-03-08T00:00:00-08:00",
+        "2026-03-08T00:00:00-08:00/2026-03-10T00:00:00-07:00",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_graphql_reads_serving_a_boundary_read_twice_count_it_once() -> None:
     """A read served by both windows it straddles is kept, not added twice."""
 

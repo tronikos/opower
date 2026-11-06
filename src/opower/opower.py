@@ -230,9 +230,11 @@ _EXPORTED_STREAM = "energyReceived"
 # Opower caps how much a single request may cover, and the cap depends on the
 # resolution asked for: "Provided range must be no more than 720 hours." for the
 # sub-daily resolutions, "Provided range must be no more than 365 days." for daily.
-# Both are absolute durations, so a local calendar chunk is the wrong unit - a DST
-# fall-back day is 25 hours long. The window's start is inclusive and its end
-# exclusive; a start that is not on a read boundary rounds up to the next one.
+# Sub-daily caps are absolute durations (a DST fall-back day is 25 hours long, so
+# 30 local calendar days is 721 hours), whereas daily windows must split on local
+# midnight so a DST offset shift does not land at 23:00 and drop the straddling
+# day. The window's start is inclusive and its end exclusive; a start that is not
+# on a read boundary rounds up to the next one.
 _READ_RESOLUTIONS: dict[AggregateType, tuple[str, timedelta]] = {
     # The server rejects ranges over 365 days and stops rating day reads from
     # 364 days up (monetaryAmount comes back null for every read), so keep to
@@ -1344,13 +1346,16 @@ class Opower:
         if start >= end:
             return {}
 
-        # Walk the range in absolute windows no larger than the resolution's cap.
-        # Chunking by local calendar unit would break on DST fall-back days, which
-        # are 25 hours long and can push a chunk over the cap.
+        # Walk the range in windows no larger than the resolution's cap. Sub-daily
+        # caps are in absolute hours (a 25-hour DST fall-back day would push a local
+        # calendar chunk over 720 hours), whereas daily reads must split on local
+        # midnight so a DST offset change does not land at 23:00 and drop a day.
+        step_tz = tz if aggregate_type == AggregateType.DAY else UTC
         windows: list[tuple[datetime, datetime]] = []
-        window_start = start
-        while window_start < end:
-            window_end = min(end, window_start + max_window)
+        window_start = start.astimezone(step_tz)
+        end_in_step_tz = end.astimezone(step_tz)
+        while window_start < end_in_step_tz:
+            window_end = min(end_in_step_tz, window_start + max_window)
             windows.append((window_start, window_end))
             window_start = window_end
 
@@ -1963,7 +1968,7 @@ class Opower:
 
         max_request_days = None
         if aggregate_type == AggregateType.DAY:
-            max_request_days = 363
+            max_request_days = 362
         elif aggregate_type == AggregateType.HOUR:
             max_request_days = 26
         elif aggregate_type == AggregateType.HALF_HOUR or aggregate_type == AggregateType.QUARTER_HOUR:
@@ -2132,16 +2137,18 @@ class Opower:
             raise ApiException(f"GraphQL reads do not support aggregate_type: {aggregate_type}", url="")
         read_resolution, max_window = resolution
 
+        step_tz = tz if aggregate_type == AggregateType.DAY else UTC
         reads_by_interval: dict[tuple[float, float], tuple[float, float]] = {}
-        window_start = start.datetime
-        while window_start < end.datetime:
-            window_end = min(end.datetime, window_start + max_window)
+        window_start = start.datetime.astimezone(step_tz)
+        end_dt = end.datetime.astimezone(step_tz)
+        while window_start < end_dt:
+            window_end = min(end_dt, window_start + max_window)
             result = await self._async_post_graphql(
                 _NET_USAGE_READS_QUERY,
                 self._get_headers(account.customer.uuid),
                 {
                     "customerUrn": f"urn:opower:customer:uuid:{account.customer.uuid}",
-                    "timeInterval": f"{window_start.isoformat()}/{window_end.isoformat()}",
+                    "timeInterval": f"{window_start.astimezone(tz).isoformat()}/{window_end.astimezone(tz).isoformat()}",
                     "resolution": read_resolution,
                 },
             )
