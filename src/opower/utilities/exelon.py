@@ -19,6 +19,19 @@ from .base import MfaHandlerBase
 
 _LOGGER = logging.getLogger(__name__)
 
+# Errors of the account handling that runs after login, which is best effort:
+# network errors, error replies and replies of an unexpected shape.
+_ACCOUNT_ERRORS = (
+    aiohttp.ClientError,
+    TimeoutError,
+    CannotConnect,
+    InvalidAuth,
+    AttributeError,
+    KeyError,
+    TypeError,
+    ValueError,
+)
+
 
 def _load_javascript(text: str, var: str) -> dict[str, Any] | None:
     """Return json from a javascript variable in the html text."""
@@ -262,13 +275,18 @@ class ExelonURLHandler:
                 raise_for_status=True,
             ) as resp:
                 result_json = await resp.json()
-        except aiohttp.ClientError as err:
+        except (aiohttp.ClientError, TimeoutError, ValueError) as err:
             raise CannotConnect(f"Cannot obtain account information, unauthorized with error: {err}") from err
 
         if result_json.get("success", False) is not True:
             raise InvalidAuth("Unable to list accounts")
 
-        self._active_accounts = [account for account in result_json.get("data", {}) if account.get("status", "") == "Active"]
+        try:
+            self._active_accounts = [
+                account for account in result_json.get("data", {}) if account.get("status", "") == "Active"
+            ]
+        except (AttributeError, KeyError, TypeError) as err:
+            raise CannotConnect(f"Cannot obtain account information, unauthorized with error: {err}") from err
         return self._active_accounts
 
     async def get_first_account(self, bearer_token: str) -> dict[str, Any]:
@@ -618,7 +636,7 @@ class Exelon:
             return
         try:
             accounts = await handler.get_active_accounts()
-        except (CannotConnect, InvalidAuth) as err:
+        except _ACCOUNT_ERRORS as err:
             # Listing accounts is extra to login, so report the failure and let Opower decide.
             _LOGGER.warning("Could not list Exelon accounts: %s", err)
             yield None
@@ -643,7 +661,7 @@ class Exelon:
                 continue
             try:
                 token = await handler.refresh_opower(account_number)
-            except CannotConnect as err:
+            except _ACCOUNT_ERRORS as err:
                 # One unusable account must not hide the others.
                 _LOGGER.warning("Could not get an Opower token for account %s: %s", account_number, err)
                 yield None

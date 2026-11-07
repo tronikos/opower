@@ -170,8 +170,10 @@ async def test_iter_account_tokens_skips_an_account_whose_token_is_rejected() ->
     [
         _http_error(COMED_ACCOUNTS_URL, 500),
         MockResponse(payload={"success": False}),
+        MockResponse(raw_json="{not-json"),
+        MockResponse(payload={"success": True, "data": None}),
     ],
-    ids=["http_error", "unsuccessful"],
+    ids=["http_error", "unsuccessful", "malformed_json", "data_null"],
 )
 async def test_iter_account_tokens_falls_back_when_listing_fails(accounts_response: MockResponse | Exception) -> None:
     """When the accounts cannot be listed, the login token keeps serving the default account, and the failure is reported."""
