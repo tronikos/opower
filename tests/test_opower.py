@@ -4,13 +4,16 @@ import asyncio
 import dataclasses
 import json
 import logging
+import os
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
 import aiohttp
 import pytest
+from dotenv import dotenv_values
 
 from opower import (
     Account,
@@ -55,6 +58,61 @@ async def test_invalid_auth(utility: type["UtilityBase"]) -> None:
         )
         with pytest.raises(InvalidAuth):
             await opower.async_login()
+
+
+def _load_live_config() -> tuple[str | None, str | None, str | None, str | None, dict[str, Any] | None]:
+    """Load live test credentials and optional MFA login data from .env files or environment."""
+    repo_root = Path(__file__).resolve().parent.parent
+    config = {**dotenv_values(repo_root / ".env.secret"), **dotenv_values(repo_root / ".env"), **os.environ}
+    utility = config.get("OPOWER_UTILITY")
+    username = config.get("OPOWER_USERNAME")
+    password = config.get("OPOWER_PASSWORD")
+    totp_secret = config.get("OPOWER_TOTP_SECRET")
+    login_data: dict[str, Any] | None = None
+    login_data_file = config.get("OPOWER_LOGIN_DATA_FILE")
+    login_data_path = Path(login_data_file) if login_data_file else repo_root / "login_data.txt"
+    if not login_data_path.is_absolute():
+        login_data_path = repo_root / login_data_path
+    if login_data_path.is_file():
+        login_data = json.loads(login_data_path.read_text(encoding="utf-8"))
+    return utility, username, password, totp_secret, login_data
+
+
+@pytest.mark.network
+@pytest.mark.asyncio
+async def test_live_opower() -> None:
+    """Exercise the live Opower API end-to-end using credentials from .env and login_data.txt."""
+    utility, username, password, totp_secret, login_data = _load_live_config()
+    if not utility or not username or not password:
+        pytest.skip("OPOWER_UTILITY, OPOWER_USERNAME, or OPOWER_PASSWORD not set in .env or environment")
+
+    start_date = datetime.now() - timedelta(days=7)
+    end_date = datetime.now()
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(
+            session,
+            utility,
+            username,
+            password,
+            totp_secret,
+            login_data,
+        )
+        await opower.async_login()
+
+        forecasts = await opower.async_get_forecast()
+        assert len(forecasts) > 0
+
+        accounts = await opower.async_get_accounts()
+        assert len(accounts) > 0
+
+        for account in accounts:
+            cost_reads = await opower.async_get_cost_reads(account, AggregateType.DAY, start_date, end_date)
+            assert len(cost_reads) > 0
+            usage_reads = await opower.async_get_usage_reads(account, AggregateType.DAY, start_date, end_date)
+            assert len(usage_reads) > 0
+
+        bills = await opower.async_get_bills()
+        assert len(bills) > 0
 
 
 async def _no_register_streams(*args: object, **kwargs: object) -> None:
