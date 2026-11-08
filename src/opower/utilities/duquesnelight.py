@@ -14,7 +14,7 @@ from .base import UtilityBase
 class DQEUsageParser(HTMLParser):
     """HTML parser to extract OPower bearer token from DQE Usage page."""
 
-    _regexp = re.compile(r'"OPowerToken": "(?P<token>.+)"')
+    _regexp = re.compile(r'"OPowerToken": "(?P<token>[^"]+)"')
 
     def __init__(self) -> None:
         """Initialize."""

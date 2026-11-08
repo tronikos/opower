@@ -4267,3 +4267,161 @@ async def test_graphql_read_errors_reach_the_caller() -> None:
 
     assert err.value.status == 404
     assert not any("DataBrowser-v1" in request["url"] for request in session.requests)
+
+
+@pytest.mark.asyncio
+async def test_login_timeout_raises_cannot_connect(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A TimeoutError during utility login is converted to CannotConnect."""
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(
+            session,
+            "Pacific Gas and Electric Company (PG&E)",
+            username="test",
+            password="test",  # noqa: S106
+        )
+
+        async def raise_timeout(*args: Any, **kwargs: Any) -> str:
+            raise TimeoutError("timed out")
+
+        monkeypatch.setattr(opower.utility, "async_login", raise_timeout)
+
+        with pytest.raises(CannotConnect, match="timed out"):
+            await opower.async_login()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raised",
+    [
+        TimeoutError("timed out"),
+        json.JSONDecodeError("Expecting value", "", 0),
+    ],
+)
+async def test_request_timeout_and_json_decode_error_raise_api_exception(
+    monkeypatch: pytest.MonkeyPatch,
+    raised: Exception,
+) -> None:
+    """TimeoutError and JSONDecodeError in REST and GraphQL helpers raise ApiException."""
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(
+            session,
+            "Pacific Gas and Electric Company (PG&E)",
+            username="test",
+            password="test",  # noqa: S106
+        )
+
+        def raise_exc(*args: Any, **kwargs: Any) -> Any:
+            raise raised
+
+        monkeypatch.setattr(session, "get", raise_exc)
+        monkeypatch.setattr(session, "post", raise_exc)
+
+        with pytest.raises(ApiException):
+            await opower._async_get_request("https://pge.opower.com/ei/test", {}, {})
+
+        with pytest.raises(ApiException):
+            await opower._async_post_graphql("query { test }", {})
+
+
+@pytest.mark.asyncio
+async def test_async_get_accounts_handles_missing_read_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Accounts with null or missing readResolution default read_resolution to None."""
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(
+            session,
+            "Pacific Gas and Electric Company (PG&E)",
+            username="test",
+            password="test",  # noqa: S106
+        )
+
+        async def fake_get_customers() -> list[dict[str, Any]]:
+            return [
+                {
+                    "uuid": "cust-1",
+                    "utilityAccounts": [
+                        {
+                            "uuid": "acc-1",
+                            "preferredUtilityAccountId": "111",
+                            "meterType": "ELEC",
+                            "readResolution": None,
+                        },
+                        {
+                            "uuid": "acc-2",
+                            "preferredUtilityAccountId": "222",
+                            "meterType": "GAS",
+                        },
+                    ],
+                }
+            ]
+
+        monkeypatch.setattr(opower, "_async_get_customers", fake_get_customers)
+
+        accounts = await opower.async_get_accounts()
+        assert len(accounts) == 2
+        assert accounts[0].read_resolution is None
+        assert accounts[1].read_resolution is None
+
+
+@pytest.mark.asyncio
+async def test_async_get_forecast_handles_null_graphql_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Forecast parsing tolerates explicit null GraphQL fields such as currentDateTime."""
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(
+            session,
+            "Pacific Gas and Electric Company (PG&E)",
+            username="test",
+            password="test",  # noqa: S106
+        )
+
+        async def fake_get_customers() -> list[dict[str, Any]]:
+            return [
+                {
+                    "uuid": "cust-1",
+                    "utilityAccounts": [
+                        {
+                            "uuid": "acc-1",
+                            "preferredUtilityAccountId": "111",
+                            "meterType": "ELEC",
+                            "readResolution": "HOUR",
+                        }
+                    ],
+                }
+            ]
+
+        async def fake_post_graphql(query: str, headers: dict[str, str], variables: dict[str, Any] | None = None) -> Any:
+            return {
+                "data": {
+                    "billingAccountsConnection": {
+                        "edges": [
+                            {"node": None},
+                            {
+                                "node": {
+                                    "billForecast": {
+                                        "timeInterval": "2026-10-01T00:00:00-07:00/2026-10-31T00:00:00-07:00",
+                                        "currentDateTime": None,
+                                        "segments": [
+                                            {
+                                                "serviceAgreement": {"uuid": "acc-1"},
+                                                "estimatedUsage": {"value": 300.0, "unit": "KWH"},
+                                                "estimatedUsageCharges": {"value": 90.0},
+                                                "soFarUsage": {"value": 150.0},
+                                                "soFarUsageCharges": {"value": 45.0},
+                                                "priorYearUsage": None,
+                                                "priorYearUsageCharges": None,
+                                            }
+                                        ],
+                                    }
+                                }
+                            },
+                        ]
+                    }
+                }
+            }
+
+        monkeypatch.setattr(opower, "_async_get_customers", fake_get_customers)
+        monkeypatch.setattr(opower, "_async_post_graphql", fake_post_graphql)
+
+        forecasts = await opower.async_get_forecast()
+        assert len(forecasts) == 1
+        assert forecasts[0].current_date == date(2026, 10, 1)
+        assert forecasts[0].forecasted_usage == 300.0

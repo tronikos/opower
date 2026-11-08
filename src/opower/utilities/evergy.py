@@ -25,18 +25,17 @@ class EvergyDavinciWidgetParser(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Recognizes data-davinci attrs from davinci-widget-wrapper class."""
         if tag == "div" and ("class", "davinci-widget-wrapper") in attrs:
-            _, token = next(filter(lambda attr: attr[0] == "data-davinci-company-id", attrs))
-            self.data["company_id"] = str(token)
-            _, token = next(filter(lambda attr: attr[0] == "data-davinci-sk-api-key", attrs))
-            self.data["sk_api_key"] = str(token)
-            _, token = next(filter(lambda attr: attr[0] == "data-davinci-api-root", attrs))
-            self.data["api_root"] = str(token)
-            _, token = next(filter(lambda attr: attr[0] == "data-davinci-policy-id", attrs))
-            self.data["policy_id"] = str(token)
-            _, token = next(filter(lambda attr: attr[0] == "data-davinci-post-processing-api", attrs))
-            self.data["post_processing_api"] = str(token)
-            _, token = next(filter(lambda attr: attr[0] == "data-davinci-datasource-item-id", attrs))
-            self.data["datasource_item_id"] = str(token)
+            attr_map = dict(attrs)
+            for key, attr_name in (
+                ("company_id", "data-davinci-company-id"),
+                ("sk_api_key", "data-davinci-sk-api-key"),
+                ("api_root", "data-davinci-api-root"),
+                ("policy_id", "data-davinci-policy-id"),
+                ("post_processing_api", "data-davinci-post-processing-api"),
+                ("datasource_item_id", "data-davinci-datasource-item-id"),
+            ):
+                if (token := attr_map.get(attr_name)) is not None:
+                    self.data[key] = token
 
 
 class EvergyLoginHandler:

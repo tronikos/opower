@@ -607,7 +607,7 @@ class Opower:
             if err.status in (401, 403):
                 raise InvalidAuth(err) from err
             raise CannotConnect(err) from err
-        except ClientError as err:
+        except (ClientError, TimeoutError) as err:
             raise CannotConnect(err) from err
 
     async def async_get_accounts(self) -> list[Account]:
@@ -633,7 +633,7 @@ class Opower:
                         utility_account_id=utility_account_id,
                         id=account_id,
                         meter_type=MeterType(account["meterType"]),
-                        read_resolution=ReadResolution(account["readResolution"]),
+                        read_resolution=(ReadResolution(account["readResolution"]) if account.get("readResolution") else None),
                     )
                 )
         return accounts
@@ -687,16 +687,17 @@ class Opower:
                 _LOGGER.debug("Ignoring GraphQL bill forecast error: %s", err)
                 continue
 
-            edges = result.get("data", {}).get("billingAccountsConnection", {}).get("edges", [])
+            data = _as_dict(_as_dict(result).get("data"))
+            connection = _as_dict(data.get("billingAccountsConnection"))
 
-            for edge in edges:
-                bill_forecast = edge.get("node", {}).get("billForecast")
+            for edge in _as_dict_list(connection.get("edges")):
+                bill_forecast = _as_dict(_as_dict(edge.get("node")).get("billForecast"))
                 if not bill_forecast:
                     _LOGGER.debug("No bill forecast for billing account")
                     continue
 
                 # Parse time interval (ISO 8601 format: "start/end")
-                time_interval = bill_forecast.get("timeInterval", "")
+                time_interval = bill_forecast.get("timeInterval") or ""
                 if "/" not in time_interval:
                     _LOGGER.debug("Invalid time interval format: %s", time_interval)
                     continue
@@ -705,9 +706,9 @@ class Opower:
                 # Parse ISO 8601 datetime strings, extracting just the date portion
                 start_date = datetime.fromisoformat(start_str).date()
                 end_date = datetime.fromisoformat(end_str).date()
-                current_date = datetime.fromisoformat(bill_forecast.get("currentDateTime", start_str)).date()
+                current_date = datetime.fromisoformat(bill_forecast.get("currentDateTime") or start_str).date()
 
-                for segment in bill_forecast.get("segments", []):
+                for segment in _as_dict_list(bill_forecast.get("segments")):
                     service_agreement: dict[str, Any] = segment.get("serviceAgreement") or {}
                     account_uuid = str(service_agreement.get("uuid", ""))
 
@@ -2314,9 +2315,10 @@ class Opower:
                         response_text=await resp.text(),
                     )
                 result = await resp.json()
-                _LOGGER.log(logging.DEBUG - 1, "Fetched: %s", json.dumps(result, indent=2))
+                if _LOGGER.isEnabledFor(logging.DEBUG - 1):
+                    _LOGGER.log(logging.DEBUG - 1, "Fetched: %s", json.dumps(result, indent=2))
                 return result
-        except ClientError as e:
+        except (ClientError, TimeoutError, json.JSONDecodeError) as e:
             raise ApiException(f"Client Error: {e}", url=full_url) from e
 
     async def _async_post_graphql(
@@ -2345,12 +2347,13 @@ class Opower:
                         response_text=await resp.text(),
                     )
                 result = await resp.json()
-                _LOGGER.log(logging.DEBUG - 1, "GraphQL response: %s", json.dumps(result, indent=2))
+                if _LOGGER.isEnabledFor(logging.DEBUG - 1):
+                    _LOGGER.log(logging.DEBUG - 1, "GraphQL response: %s", json.dumps(result, indent=2))
                 if "errors" in result:
                     raise ApiException(
                         f"GraphQL Error: {result['errors']}",
                         url=url,
                     )
                 return result
-        except ClientError as e:
+        except (ClientError, TimeoutError, json.JSONDecodeError) as e:
             raise ApiException(f"Client Error: {e}", url=url) from e

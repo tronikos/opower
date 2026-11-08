@@ -4,6 +4,7 @@ import os
 import unittest
 
 import aiohttp
+import pytest
 from dotenv import load_dotenv
 
 from opower.utilities.helpers import get_form_action_url_and_hidden_inputs
@@ -35,6 +36,7 @@ class TestSCL(unittest.IsolatedAsyncioTestCase):
         scl = SCL()
         self.assertEqual("America/Los_Angeles", scl.timezone())
 
+    @pytest.mark.network
     async def test_real_login(self) -> None:
         """Perform a live test against SCL and Opower websites."""
         load_dotenv(dotenv_path=ENV_SECRET_PATH)

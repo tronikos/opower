@@ -4,6 +4,7 @@ import os
 import unittest
 
 import aiohttp
+import pytest
 from dotenv import load_dotenv
 from yarl import URL
 
@@ -39,6 +40,7 @@ class TestAEPOhio(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(aep.uses_graphql_reads())
 
+    @pytest.mark.network
     async def test_real_login(self) -> None:
         """Perform a live test against the AEP Ohio and Opower websites."""
         load_dotenv(dotenv_path=ENV_SECRET_PATH)

@@ -22,14 +22,13 @@ class PSELoginParser(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Try to extract the verification token from the login input."""
         if tag == "input" and ("name", "__RequestVerificationToken") in attrs:
-            _, token = next(filter(lambda attr: attr[0] == "value", attrs))
-            self.verification_token = token
+            self.verification_token = dict(attrs).get("value")
 
 
 class PSEUsageParser(HTMLParser):
     """HTML parser to extract OPower bearer token from PSE Usage page."""
 
-    _regexp = re.compile(r'var accessToken\s+=\s+["\'](?P<token>.+)["\']')
+    _regexp = re.compile(r'var accessToken\s+=\s+["\'](?P<token>[^"\']+)["\']')
 
     def __init__(self) -> None:
         """Initialize."""
@@ -95,7 +94,7 @@ class PSE(UtilityBase):
             if not login_parser.verification_token:
                 raise CannotConnect("Failed to parse __RequestVerificationToken from the PSE login page")
 
-        await session.post(
+        async with session.post(
             "https://www.pse.com/api/pseauthentication/AsyncSignIn",
             data={
                 "__RequestVerificationToken": login_parser.verification_token,
@@ -109,7 +108,8 @@ class PSE(UtilityBase):
             },
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
-        )
+        ):
+            pass
 
         async with session.get(
             "https://www.pse.com/api/AccountSelector/GetContractAccountJson",

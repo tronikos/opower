@@ -48,8 +48,9 @@ class SMUDLoginParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         """Try to extract the verification token from the login input."""
+        attr_map = dict(attrs)
         if tag == "input" and ("name", "__RequestVerificationToken") in attrs:
-            _, token = next(filter(lambda attr: attr[0] == "value", attrs))
+            token = attr_map.get("value")
             if token is None:
                 return
             _LOGGER.debug(
@@ -61,7 +62,7 @@ class SMUDLoginParser(HTMLParser):
             self.verification_token = token
         """Try to extract the OCIS_REQ_SP input value from the identity.oraclecloud.com sso HTML"""
         if tag == "input" and ("name", "OCIS_REQ_SP") in attrs:
-            _, token = next(filter(lambda attr: attr[0] == "value", attrs))
+            token = attr_map.get("value")
             if token is None:
                 return
             _LOGGER.debug(
@@ -73,7 +74,7 @@ class SMUDLoginParser(HTMLParser):
             self.ocis_req_sp = token
         """Try to extract the RelayState input value from the smud.okta.com HTML"""
         if tag == "input" and ("name", "RelayState") in attrs:
-            _, token = next(filter(lambda attr: attr[0] == "value", attrs))
+            token = attr_map.get("value")
             if token is None:
                 return
             _LOGGER.debug(

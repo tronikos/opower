@@ -135,7 +135,7 @@ class PgeMfaHandler(MfaHandlerBase):
         except aiohttp.ClientError as err:
             raise CannotConnect(f"MFA option selection failed: {err}") from err
         else:
-            returnValue = res["actions"][0]["returnValue"]["returnValue"]
+            returnValue = (res["actions"][0].get("returnValue") or {}).get("returnValue") or {}
             if returnValue.get("retMessage", "").lower() != "success":
                 raise CannotConnect(f"Failed to select MFA option: {returnValue.get('retMessage', 'Unknown error')}")
             _LOGGER.debug("Successfully selected MFA option")
@@ -175,7 +175,7 @@ class PgeMfaHandler(MfaHandlerBase):
         except aiohttp.ClientError as err:
             raise CannotConnect(f"MFA code submission failed: {err}") from err
         else:
-            returnValue = res["actions"][0]["returnValue"]["returnValue"]
+            returnValue = (res["actions"][0].get("returnValue") or {}).get("returnValue") or {}
             if returnValue.get("returnResponse", "").lower() != "success":
                 raise InvalidAuth(f"Invalid MFA code: {returnValue.get('returnResponse', 'Unknown error')}")
 
@@ -250,7 +250,7 @@ class PGE(UtilityBase):
         action = actions[0]
         if not action.get("state") == "SUCCESS":
             raise InvalidAuth(f"Login failed: {action.get('error', 'Unknown error')}")
-        returnValue = action.get("returnValue", {}).get("returnValue")
+        returnValue = (action.get("returnValue") or {}).get("returnValue") or {}
         retMessage = returnValue.get("retMessage", "")
         _LOGGER.debug("Login action returned message: %s", retMessage)
         if retMessage in ("verifymfa :", "missedyou"):

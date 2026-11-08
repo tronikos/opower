@@ -83,11 +83,12 @@ class COAUtilities(UtilityBase):
     ) -> str | None:
         """Login to the utility website."""
         # Get cookies
-        await session.get(
+        async with session.get(
             "https://coautilities.com/wps/wcm/connect/occ/coa/home",
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
-        )
+        ):
+            pass
 
         # Auth using username and password on coautilities
         url = (

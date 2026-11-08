@@ -4,6 +4,7 @@ import os
 import unittest
 
 import aiohttp
+import pytest
 from dotenv import load_dotenv
 from yarl import URL
 
@@ -39,6 +40,7 @@ class TestSMUD(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("America/Los_Angeles", smud.timezone())
 
+    @pytest.mark.network
     async def test_real_login(self) -> None:
         """Perform a live test against the SMUD, OKTA and Opower websites."""
         load_dotenv(dotenv_path=ENV_SECRET_PATH)
