@@ -221,7 +221,7 @@ class ExelonURLHandler:
                 "nonce": account_number,
             }
         )
-        return str(result_json.get("access_token", ""))
+        return str(result_json.get("access_token") or "")
 
     async def refresh_token(self, data: dict[str, str]) -> Any:
         """Generate a token from the data and return the field.
@@ -277,6 +277,9 @@ class ExelonURLHandler:
                 result_json = await resp.json()
         except (aiohttp.ClientError, TimeoutError, ValueError) as err:
             raise CannotConnect(f"Cannot obtain account information, unauthorized with error: {err}") from err
+
+        if not isinstance(result_json, dict):
+            raise CannotConnect("Cannot obtain account information, unauthorized with error: unexpected reply")
 
         if result_json.get("success", False) is not True:
             raise InvalidAuth("Unable to list accounts")
@@ -614,7 +617,7 @@ class Exelon:
         is_residential = account.get("isResidential", False)
         try:
             state = account["PremiseInfo"][0]["mainAddress"]["townDetail"]["stateOrProvince"]
-        except (KeyError, IndexError):
+        except (KeyError, IndexError, TypeError):
             state = None
         _LOGGER.debug("found exelon account isResidential: %s", is_residential)
         _LOGGER.debug("found exelon account state: %s", state)
