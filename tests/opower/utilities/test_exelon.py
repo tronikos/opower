@@ -63,9 +63,10 @@ class _ExelonSession(MockSession):
     """Serves the Exelon token endpoint by grant, and canned responses for the rest.
 
     A refresh of the login token returns BEARER_TOKEN. A request for an Opower
-    token returns "opower-<account number>", or raises the error registered for
-    that account number in token_errors. The Opower customers endpoint answers
-    with the customer registered in customers_by_token for the bearer token sent.
+    token returns "opower-<account number>", or the payload in token_payloads for
+    that account, or raises the error registered in token_errors. The Opower
+    customers endpoint answers with the customer registered in customers_by_token
+    for the bearer token sent.
     """
 
     def __init__(self, responses: dict[str, MockResponse | Exception]) -> None:
@@ -73,6 +74,7 @@ class _ExelonSession(MockSession):
         super().__init__({})
         self._routes = responses
         self.token_errors: dict[str, Exception] = {}
+        self.token_payloads: dict[str, dict[str, Any]] = {}
         self.customers_by_token: dict[str, dict[str, Any]] = {}
 
     def _handle(self, method: str, url: str, **kwargs: Any) -> MockResponse:
@@ -86,6 +88,8 @@ class _ExelonSession(MockSession):
                 return MockResponse(payload={"access_token": BEARER_TOKEN, "refresh_token": REFRESH_TOKEN})
             if error := self.token_errors.get(data["nonce"]):
                 raise error
+            if payload := self.token_payloads.get(data["nonce"]):
+                return MockResponse(payload=payload)
             return MockResponse(payload={"access_token": f"opower-{data['nonce']}"})
         response = self._routes[url]
         if isinstance(response, Exception):
@@ -170,8 +174,12 @@ async def test_iter_account_tokens_skips_an_account_whose_token_is_rejected() ->
     [
         _http_error(COMED_ACCOUNTS_URL, 500),
         MockResponse(payload={"success": False}),
+        MockResponse(raw_json="{not-json"),
+        MockResponse(payload={"success": True, "data": None}),
+        MockResponse(raw_json="null"),
+        MockResponse(payload=[]),
     ],
-    ids=["http_error", "unsuccessful"],
+    ids=["http_error", "unsuccessful", "malformed_json", "data_null", "null", "array"],
 )
 async def test_iter_account_tokens_falls_back_when_listing_fails(accounts_response: MockResponse | Exception) -> None:
     """When the accounts cannot be listed, the login token keeps serving the default account, and the failure is reported."""
@@ -181,6 +189,18 @@ async def test_iter_account_tokens_falls_back_when_listing_fails(accounts_respon
 
     assert await _tokens(utility, session) == [None]
     assert session.opower_token_requests() == ["111"]
+
+
+@pytest.mark.asyncio
+async def test_iter_account_tokens_treats_a_null_access_token_as_missing() -> None:
+    """A null access_token is an empty token, not the string 'None'."""
+    accounts = [_account("111", default=True), _account("222"), _account("333")]
+    session = _ExelonSession({COMED_ACCOUNTS_URL: MockResponse(payload={"success": True, "data": accounts})})
+    utility = ComEd()
+    await utility.async_login(session, "user", "pass", _login_data(accounts[0]))  # type: ignore[arg-type]
+    session.token_payloads["222"] = {"access_token": None}
+
+    assert await _tokens(utility, session) == ["opower-111", None, "opower-333"]
 
 
 @pytest.mark.asyncio
@@ -198,6 +218,54 @@ async def test_iter_account_tokens_skips_accounts_on_another_subdomain() -> None
 
     assert utility.subdomain() == "pep"
     assert await _tokens(utility, session) == ["opower-111", "opower-333"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "broken",
+    [
+        {"isResidential": True, "PremiseInfo": None},
+        {"isResidential": True, "PremiseInfo": [{"mainAddress": None}]},
+    ],
+    ids=["premise_info_null", "main_address_null"],
+)
+async def test_pepco_login_uses_secondary_subdomain_when_premise_fields_are_missing(
+    broken: dict[str, Any],
+) -> None:
+    """Missing PremiseInfo or mainAddress is treated as no state, so Pepco uses pepd."""
+    account = _account("111", **broken)
+    session = _ExelonSession({PEPCO_ACCOUNTS_URL: MockResponse(payload={"success": True, "data": [account]})})
+    utility = Pepco()
+
+    await utility.async_login(session, "user", "pass", _login_data(account))  # type: ignore[arg-type]
+
+    assert utility.subdomain() == "pepd"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "broken",
+    [
+        {"isResidential": True, "PremiseInfo": None},
+        {"isResidential": True, "PremiseInfo": [{"mainAddress": None}]},
+    ],
+    ids=["premise_info_null", "main_address_null"],
+)
+async def test_iter_account_tokens_skips_pepco_account_with_missing_premise_fields(
+    broken: dict[str, Any],
+) -> None:
+    """A Pepco account with no usable state lands on pepd and is skipped from a pep login."""
+    accounts = [
+        _account("111", default=True, **_md_residential()),
+        _account("222", **broken),
+    ]
+    session = _ExelonSession({PEPCO_ACCOUNTS_URL: MockResponse(payload={"success": True, "data": accounts})})
+    utility = Pepco()
+
+    await utility.async_login(session, "user", "pass", _login_data(accounts[0]))  # type: ignore[arg-type]
+
+    assert utility.subdomain() == "pep"
+    assert await _tokens(utility, session) == ["opower-111"]
 
 
 @pytest.mark.asyncio
@@ -341,4 +409,23 @@ async def test_get_first_account_requires_an_active_account() -> None:
     session = _ExelonSession({COMED_ACCOUNTS_URL: MockResponse(payload={"success": True, "data": accounts})})
 
     with pytest.raises(InvalidAuth, match="No active accounts found"):
+        await _handler(session).get_first_account(BEARER_TOKEN)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "accounts_response",
+    [
+        MockResponse(raw_json="null"),
+        MockResponse(payload=[]),
+    ],
+    ids=["null", "array"],
+)
+async def test_get_first_account_raises_cannot_connect_for_a_non_object_reply(
+    accounts_response: MockResponse,
+) -> None:
+    """A null or array accounts body is a connection failure, not an AttributeError."""
+    session = _ExelonSession({COMED_ACCOUNTS_URL: accounts_response})
+
+    with pytest.raises(CannotConnect, match="account information"):
         await _handler(session).get_first_account(BEARER_TOKEN)
