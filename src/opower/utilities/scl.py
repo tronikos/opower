@@ -7,9 +7,11 @@ from typing import Any
 import aiohttp
 
 from ..const import USER_AGENT
-from ..exceptions import InvalidAuth
+from ..exceptions import CannotConnect, InvalidAuth
 from .base import UtilityBase
 from .helpers import get_form_action_url_and_hidden_inputs
+
+REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
 
 
 def _get_session_storage_values(html: str) -> dict[str, str]:
@@ -53,7 +55,7 @@ class SCL(UtilityBase):
     ) -> tuple[str, dict[str, str]]:
         """Perform SSO login flow and return SAML response action URL and hidden inputs."""
         if set(hidden_inputs.keys()) != {"signature", "state", "loginCtx"}:
-            raise InvalidAuth("Unexpected SSO login form fields")
+            raise CannotConnect("Unexpected SSO login form fields")
 
         # POST to https://login.seattle.gov/#/login?appName=EPORTAL_PROD with signature, state, loginCtx
         # need to parse signinAT, initialState from html sessionStorage.setItem
@@ -62,11 +64,12 @@ class SCL(UtilityBase):
             data=hidden_inputs,
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
+            timeout=REQUEST_TIMEOUT,
         ) as resp:
             login_result = await resp.text()
             session_items = _get_session_storage_values(login_result)
         if not {"initialState", "signinAT"}.issubset(set(session_items.keys())):
-            raise InvalidAuth("Missing session storage values from login page")
+            raise CannotConnect("Missing session storage values from login page")
 
         # POST to https://login.seattle.gov/authenticate with credentials, initialState, signinAT
         # response has authnToken in JSON response if initialState and signinAT present.
@@ -85,6 +88,7 @@ class SCL(UtilityBase):
                 "Referer": "https://login.seattle.gov/",
             },
             raise_for_status=False,
+            timeout=REQUEST_TIMEOUT,
         ) as resp:
             if resp.status == 400:
                 raise InvalidAuth("Username and password failed")
@@ -102,13 +106,14 @@ class SCL(UtilityBase):
             data={"authnToken": authnToken},
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
+            timeout=REQUEST_TIMEOUT,
         ) as resp:
             session_result = await resp.text()
         action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(session_result)
         if action_url != "https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/fed/v1/user/response/login":
-            raise InvalidAuth("Unexpected Oracle IDCS session URL")
+            raise CannotConnect("Unexpected Oracle IDCS session URL")
         if set(hidden_inputs.keys()) != {"OCIS_REQ"}:
-            raise InvalidAuth("Unexpected Oracle IDCS session form fields")
+            raise CannotConnect("Unexpected Oracle IDCS session form fields")
 
         # POST to https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/fed/v1/user/response/login
         # with OCIS_REQ (form data)
@@ -118,6 +123,7 @@ class SCL(UtilityBase):
             data=hidden_inputs,
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
+            timeout=REQUEST_TIMEOUT,
         ) as resp:
             idcs_login_result = await resp.text()
         return get_form_action_url_and_hidden_inputs(idcs_login_result)
@@ -132,7 +138,7 @@ class SCL(UtilityBase):
         """Login to the utility website."""
         # GET https://myutilities.seattle.gov/rest/auth/ssologin
         # response has next URL, signature, state, loginCtx in HTML form
-        async with session.get("https://myutilities.seattle.gov/rest/auth/ssologin") as resp:
+        async with session.get("https://myutilities.seattle.gov/rest/auth/ssologin", timeout=REQUEST_TIMEOUT) as resp:
             ssologin_result = await resp.text()
         action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(ssologin_result)
         if action_url == "https://login.seattle.gov/#/login?appName=EPORTAL_PROD":
@@ -140,9 +146,9 @@ class SCL(UtilityBase):
             action_url, hidden_inputs = await self._async_sso_login(session, username, password, hidden_inputs)
 
         if action_url != "https://myutilities.seattle.gov/rest/auth/samlresp":
-            raise InvalidAuth("Unexpected SAML response URL")
+            raise CannotConnect("Unexpected SAML response URL")
         if set(hidden_inputs.keys()) != {"RelayState", "SAMLResponse"}:
-            raise InvalidAuth("Unexpected SAML response form fields")
+            raise CannotConnect("Unexpected SAML response form fields")
 
         # POST to https://myutilities.seattle.gov/rest/auth/samlresp w/ RelayState https://myutilities.seattle.gov/eportal
         # and SAMLResponse
@@ -153,6 +159,7 @@ class SCL(UtilityBase):
             data=hidden_inputs,
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
+            timeout=REQUEST_TIMEOUT,
         ) as resp:
             url = resp.real_url.human_repr()
             user_token = _get_user_token_from_url(url)
@@ -169,6 +176,7 @@ class SCL(UtilityBase):
             },
             headers={"User-Agent": USER_AGENT},
             raise_for_status=True,
+            timeout=REQUEST_TIMEOUT,
         ) as resp:
             auth_token_result = await resp.json()
         access_token = auth_token_result.get("access_token")
@@ -192,6 +200,7 @@ class SCL(UtilityBase):
                 "Authorization": f"Bearer {access_token}",
             },
             raise_for_status=True,
+            timeout=REQUEST_TIMEOUT,
         ) as resp:
             list_result = await resp.json()
         accounts = list_result["account"]
@@ -219,6 +228,7 @@ class SCL(UtilityBase):
                 "Authorization": f"Bearer {access_token}",
             },
             raise_for_status=True,
+            timeout=REQUEST_TIMEOUT,
         ) as resp:
             result = await resp.json()
         token = result.get("token")

@@ -7,8 +7,9 @@ import aiohttp
 import pytest
 from dotenv import load_dotenv
 
+from opower.exceptions import CannotConnect, InvalidAuth
 from opower.utilities.helpers import get_form_action_url_and_hidden_inputs
-from opower.utilities.scl import SCL, _get_session_storage_values, _get_user_token_from_url
+from opower.utilities.scl import REQUEST_TIMEOUT, SCL, _get_session_storage_values, _get_user_token_from_url
 from tests.mock_http import MockResponse, MockSession
 
 SSOLOGIN_HTML_FILENAME = os.path.join(os.path.dirname(__file__), "scl/ssologin_response.html")
@@ -65,44 +66,48 @@ def _read_fixture(filename: str) -> str:
         return f.read()
 
 
+def _login_responses() -> dict[str, MockResponse]:
+    return {
+        "https://myutilities.seattle.gov/rest/auth/ssologin": MockResponse(text=_read_fixture("ssologin_response.html")),
+        "https://login.seattle.gov/#/login?appName=EPORTAL_PROD": MockResponse(text=_read_fixture("login_page.html")),
+        # Bot defense serves the JSON body as text/html.
+        "https://login.seattle.gov/authenticate": MockResponse(
+            payload={"authnToken": "test_authn_token"}, content_type="text/html"
+        ),
+        "https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/sso/v1/sdk/session": MockResponse(
+            text=_read_fixture("idcs_session_response.html")
+        ),
+        "https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/fed/v1/user/response/login": MockResponse(
+            text=_read_fixture("saml_response.html")
+        ),
+        "https://myutilities.seattle.gov/rest/auth/samlresp": MockResponse(
+            real_url="https://myutilities.seattle.gov/eportal/#/ssohome/test_user_token"
+        ),
+        "https://myutilities.seattle.gov/rest/auth/token": MockResponse(
+            payload={"access_token": "test_access_token", "user": {"customerId": "test_customer"}}
+        ),
+        "https://myutilities.seattle.gov/rest/account/list/some": MockResponse(
+            payload={
+                "account": [
+                    {
+                        "accountNumber": "1",
+                        "personId": "2",
+                        "companyCd": "SCL",
+                        "serviceAddress": "addr",
+                    }
+                ]
+            }
+        ),
+        "https://myutilities.seattle.gov/rest/usage/token": MockResponse(payload={"token": "opower_token"}),
+    }
+
+
 class TestSCLLoginFlow(unittest.IsolatedAsyncioTestCase):
     """Test the full SSO login flow with mocked HTTP responses."""
 
     async def test_login_sends_bot_defense_headers_and_parses_html_json(self) -> None:
         """Authenticate must send Origin/Referer and parse its text/html JSON body."""
-        responses = {
-            "https://myutilities.seattle.gov/rest/auth/ssologin": MockResponse(text=_read_fixture("ssologin_response.html")),
-            "https://login.seattle.gov/#/login?appName=EPORTAL_PROD": MockResponse(text=_read_fixture("login_page.html")),
-            # Bot defense serves the JSON body as text/html.
-            "https://login.seattle.gov/authenticate": MockResponse(
-                payload={"authnToken": "test_authn_token"}, content_type="text/html"
-            ),
-            "https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/sso/v1/sdk/session": MockResponse(
-                text=_read_fixture("idcs_session_response.html")
-            ),
-            "https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/fed/v1/user/response/login": MockResponse(
-                text=_read_fixture("saml_response.html")
-            ),
-            "https://myutilities.seattle.gov/rest/auth/samlresp": MockResponse(
-                real_url="https://myutilities.seattle.gov/eportal/#/ssohome/test_user_token"
-            ),
-            "https://myutilities.seattle.gov/rest/auth/token": MockResponse(
-                payload={"access_token": "test_access_token", "user": {"customerId": "test_customer"}}
-            ),
-            "https://myutilities.seattle.gov/rest/account/list/some": MockResponse(
-                payload={
-                    "account": [
-                        {
-                            "accountNumber": "1",
-                            "personId": "2",
-                            "companyCd": "SCL",
-                            "serviceAddress": "addr",
-                        }
-                    ]
-                }
-            ),
-            "https://myutilities.seattle.gov/rest/usage/token": MockResponse(payload={"token": "opower_token"}),
-        }
+        responses = _login_responses()
         session = MockSession(responses)
 
         token = await SCL().async_login(session, "user", "pass", {})  # type: ignore[arg-type]
@@ -112,6 +117,59 @@ class TestSCLLoginFlow(unittest.IsolatedAsyncioTestCase):
         headers = authenticate["headers"]
         self.assertEqual(headers["Origin"], "https://login.seattle.gov")
         self.assertEqual(headers["Referer"], "https://login.seattle.gov/")
+
+    async def test_login_passes_timeout_to_every_request(self) -> None:  # noqa: D102
+        session = MockSession(_login_responses())
+
+        await SCL().async_login(session, "user", "pass", {})  # type: ignore[arg-type]
+
+        self.assertEqual(len(session.requests), 9)
+        for request in session.requests:
+            self.assertEqual(request.get("timeout"), REQUEST_TIMEOUT, request["url"])
+
+    async def test_unexpected_ssologin_page_raises_cannot_connect(self) -> None:  # noqa: D102
+        responses = _login_responses()
+        responses["https://myutilities.seattle.gov/rest/auth/ssologin"] = MockResponse(text="<html>challenge</html>")
+        session = MockSession(responses)
+
+        with self.assertRaises(CannotConnect):
+            await SCL().async_login(session, "user", "pass", {})  # type: ignore[arg-type]
+
+    async def test_login_page_without_session_storage_raises_cannot_connect(self) -> None:  # noqa: D102
+        responses = _login_responses()
+        responses["https://login.seattle.gov/#/login?appName=EPORTAL_PROD"] = MockResponse(text="<html>challenge</html>")
+        session = MockSession(responses)
+
+        with self.assertRaises(CannotConnect):
+            await SCL().async_login(session, "user", "pass", {})  # type: ignore[arg-type]
+
+    async def test_unexpected_idcs_session_page_raises_cannot_connect(self) -> None:  # noqa: D102
+        responses = _login_responses()
+        responses["https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/sso/v1/sdk/session"] = MockResponse(
+            text="<html>challenge</html>"
+        )
+        session = MockSession(responses)
+
+        with self.assertRaises(CannotConnect):
+            await SCL().async_login(session, "user", "pass", {})  # type: ignore[arg-type]
+
+    async def test_rejected_credentials_raise_invalid_auth(self) -> None:  # noqa: D102
+        responses = _login_responses()
+        responses["https://login.seattle.gov/authenticate"] = MockResponse(status=400)
+        session = MockSession(responses)
+
+        with self.assertRaises(InvalidAuth):
+            await SCL().async_login(session, "user", "pass", {})  # type: ignore[arg-type]
+
+    async def test_authenticate_error_description_raises_invalid_auth(self) -> None:  # noqa: D102
+        responses = _login_responses()
+        responses["https://login.seattle.gov/authenticate"] = MockResponse(
+            payload={"error_description": "Invalid username or password"}, content_type="text/html"
+        )
+        session = MockSession(responses)
+
+        with self.assertRaises(InvalidAuth):
+            await SCL().async_login(session, "user", "pass", {})  # type: ignore[arg-type]
 
 
 class TestSCLSessionStorageParser(unittest.TestCase):
