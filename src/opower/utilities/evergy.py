@@ -14,6 +14,19 @@ from .base import UtilityBase
 _LOGGER = logging.getLogger(__name__)
 
 
+MFA_ENROLLMENT_FIELD = "secure-account-option"
+
+
+def _is_mfa_enrollment_prompt(data: dict[str, Any]) -> bool:
+    """Return True if a davinci reply is the "set up multifactor authentication?" screen."""
+    properties = (data.get("screen") or {}).get("properties") or {}
+    fields = (properties.get("formFieldsList") or {}).get("value") or []
+    if any(isinstance(f, dict) and f.get("propertyName") == MFA_ENROLLMENT_FIELD for f in fields):
+        return True
+    html = (properties.get("customHTML") or {}).get("value") or ""
+    return isinstance(html, str) and f'name="{MFA_ENROLLMENT_FIELD}"' in html
+
+
 class EvergyDavinciWidgetParser(HTMLParser):
     """HTML parser to extract Davinci api and flow data for PingOne Authentication."""
 
@@ -224,11 +237,62 @@ class EvergyLoginHandler:
             data = await resp.json()
             self.id = data["id"]
             self.connectionId = data["connectionId"]
+            if _is_mfa_enrollment_prompt(data):
+                data = await self.decline_mfa_enrollment()
             if token := data.get("access_token"):
                 _LOGGER.debug("Got access_token from customHTMLTemplate, skipping setCookieWithoutUser")
                 self.access_token = token
                 return True
             return False
+
+    async def decline_mfa_enrollment(self) -> dict[str, Any]:
+        """Answer "No" to the prompt offering to set up multifactor authentication.
+
+        Since late May 2026 Evergy asks accounts without MFA, right after the password,
+        "Do you want to secure your account by setting up multifactor authentication?".
+        The flow cannot go on until it is answered, and setCookieWithoutUser returns 400.
+        Answering "No" is what a user does in the browser; Evergy remembers it, so later
+        logins usually skip the prompt.
+        """
+        login_template_url = (
+            self.auth_data["api_root"]
+            + "/"
+            + self.auth_data["company_id"]
+            + "/davinci/connections/"
+            + self.connectionId
+            + "/capabilities/customHTMLTemplate"
+        )
+
+        _LOGGER.debug("Declining the MFA enrollment prompt: %s", login_template_url)
+
+        async with self.session.post(
+            login_template_url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Content-Type": "application/json",
+                "Origin": "https://www.evergy.com",
+            },
+            data=json.dumps(
+                {
+                    "id": self.id,
+                    "eventName": "continue",
+                    "parameters": {
+                        "buttonType": "form-submit",
+                        "buttonValue": "Next",
+                        MFA_ENROLLMENT_FIELD: "No",
+                    },
+                }
+            ),
+            raise_for_status=True,
+        ) as resp:
+            data: dict[str, Any] = await resp.json()
+            if _is_mfa_enrollment_prompt(data):
+                raise CannotConnect("Evergy kept asking to set up multifactor authentication.")
+            if "id" in data:
+                self.id = data["id"]
+            if "connectionId" in data:
+                self.connectionId = data["connectionId"]
+            return data
 
     async def get_new_connection_cookie(self) -> None:
         """Set complete to generate cookie."""
