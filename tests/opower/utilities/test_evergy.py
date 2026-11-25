@@ -12,7 +12,7 @@ CUSTOM_HTML_TEMPLATE = "customHTMLTemplate"
 SET_COOKIE = "setCookieWithoutUser"
 
 # Trimmed from the screen Evergy shows after the password when MFA is not set up.
-MFA_PROMPT = {
+MFA_PROMPT: dict[str, Any] = {
     "id": "id-2",
     "connectionId": "connection-2",
     "capabilityName": "customHTMLTemplate",
@@ -35,7 +35,7 @@ MFA_PROMPT = {
 
 
 # The same prompt with only the customHTML radio buttons, no formFieldsList entry.
-MFA_PROMPT_HTML_ONLY = {
+MFA_PROMPT_HTML_ONLY: dict[str, Any] = {
     **MFA_PROMPT,
     "screen": {
         "name": "HTTP",
