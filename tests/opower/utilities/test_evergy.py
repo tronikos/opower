@@ -34,6 +34,16 @@ MFA_PROMPT = {
 }
 
 
+# The same prompt with only the customHTML radio buttons, no formFieldsList entry.
+MFA_PROMPT_HTML_ONLY = {
+    **MFA_PROMPT,
+    "screen": {
+        "name": "HTTP",
+        "properties": {"customHTML": MFA_PROMPT["screen"]["properties"]["customHTML"]},
+    },
+}
+
+
 class _MockResponse:
     """Minimal stand-in for aiohttp.ClientResponse."""
 
@@ -57,11 +67,13 @@ class _MockSession:
         payloads = template_payload if isinstance(template_payload, list) else [template_payload]
         self._template_payloads = list(payloads)
         self.capabilities: list[str] = []
+        self.urls: list[str] = []
         self.bodies: list[dict[str, Any]] = []
 
     def post(self, url: str, **kwargs: Any) -> _MockResponse:
         capability = url.rsplit("/", 1)[1]
         self.capabilities.append(capability)
+        self.urls.append(url)
         self.bodies.append(json.loads(kwargs.get("data") or "{}"))
         if capability == CUSTOM_HTML_TEMPLATE:
             payload = self._template_payloads[0]
@@ -134,6 +146,23 @@ class TestEvergyLoginHandler(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.capabilities, [CUSTOM_HTML_TEMPLATE, CUSTOM_HTML_TEMPLATE])
         self.assertEqual(session.bodies[1]["parameters"]["secure-account-option"], "No")
         self.assertEqual(session.bodies[1]["id"], "id-2")
+        self.assertIn("/connections/connection-2/", session.urls[1])
+
+    async def test_mfa_enrollment_prompt_detected_from_custom_html_only(self) -> None:
+        """The prompt is recognised from its radio buttons when formFieldsList is absent."""
+        handler, session = await self._login(
+            [MFA_PROMPT_HTML_ONLY, {"id": "id-3", "connectionId": "connection-3", "access_token": "token-after-no"}]
+        )
+        self.assertEqual(handler.access_token, "token-after-no")
+        self.assertEqual(session.capabilities, [CUSTOM_HTML_TEMPLATE, CUSTOM_HTML_TEMPLATE])
+        self.assertEqual(session.bodies[1]["parameters"]["secure-account-option"], "No")
+
+    async def test_null_ids_after_decline_keep_previous_ids(self) -> None:
+        """Null id/connectionId in the reply do not overwrite the ones already held."""
+        handler, session = await self._login([MFA_PROMPT, {"id": None, "connectionId": None}])
+        self.assertEqual(handler.access_token, "token-from-set-cookie")
+        self.assertEqual(session.capabilities, [CUSTOM_HTML_TEMPLATE, CUSTOM_HTML_TEMPLATE, SET_COOKIE, SET_COOKIE])
+        self.assertIn("/connections/connection-2/", session.urls[2])
 
     async def test_mfa_enrollment_prompt_then_older_flow(self) -> None:
         """If declining returns no token, the setCookieWithoutUser steps still run."""

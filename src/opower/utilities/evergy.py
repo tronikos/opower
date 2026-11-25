@@ -19,11 +19,16 @@ MFA_ENROLLMENT_FIELD = "secure-account-option"
 
 def _is_mfa_enrollment_prompt(data: dict[str, Any]) -> bool:
     """Return True if a davinci reply is the "set up multifactor authentication?" screen."""
-    properties = (data.get("screen") or {}).get("properties") or {}
-    fields = (properties.get("formFieldsList") or {}).get("value") or []
-    if any(isinstance(f, dict) and f.get("propertyName") == MFA_ENROLLMENT_FIELD for f in fields):
+    screen = data.get("screen")
+    properties = screen.get("properties") if isinstance(screen, dict) else None
+    if not isinstance(properties, dict):
+        return False
+    form_fields = properties.get("formFieldsList")
+    fields = form_fields.get("value") if isinstance(form_fields, dict) else None
+    if isinstance(fields, list) and any(isinstance(f, dict) and f.get("propertyName") == MFA_ENROLLMENT_FIELD for f in fields):
         return True
-    html = (properties.get("customHTML") or {}).get("value") or ""
+    custom_html = properties.get("customHTML")
+    html = custom_html.get("value") if isinstance(custom_html, dict) else None
     return isinstance(html, str) and f'name="{MFA_ENROLLMENT_FIELD}"' in html
 
 
@@ -288,10 +293,10 @@ class EvergyLoginHandler:
             data: dict[str, Any] = await resp.json()
             if _is_mfa_enrollment_prompt(data):
                 raise CannotConnect("Evergy kept asking to set up multifactor authentication.")
-            if "id" in data:
-                self.id = data["id"]
-            if "connectionId" in data:
-                self.connectionId = data["connectionId"]
+            if new_id := data.get("id"):
+                self.id = new_id
+            if new_connection_id := data.get("connectionId"):
+                self.connectionId = new_connection_id
             return data
 
     async def get_new_connection_cookie(self) -> None:
