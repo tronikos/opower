@@ -25,7 +25,9 @@ class _Response:
         pass
 
     def raise_for_status(self) -> None:
-        pass
+        if self.status >= 400:
+            request_info: Any = None
+            raise aiohttp.ClientResponseError(request_info, (), status=self.status)
 
 
 class _Session:
@@ -51,12 +53,19 @@ class TestWashingtonGas(unittest.IsolatedAsyncioTestCase):
     async def test_login_status(self) -> None:
         """Test how sign-in statuses are handled."""
         session: Any = _Session(204)
-        await WashingtonGas().async_login(session, "a", "b", {})
+        wgl: Any = WashingtonGas()
+        self.assertIsNone(await wgl.async_login(session, "a", "b", {}))
         self.assertFalse(session.kwargs["allow_redirects"])
-        for status in (400, 401, 403):
+        self.assertFalse(session.kwargs["raise_for_status"])
+        for status in (401, 403):
             session = _Session(status)
             with self.assertRaises(InvalidAuth):
                 await WashingtonGas().async_login(session, "a", "b", {})
+        for status in (400, 429, 500, 503):
+            session = _Session(status)
+            with self.assertRaises(aiohttp.ClientResponseError) as ctx:
+                await WashingtonGas().async_login(session, "a", "b", {})
+            self.assertEqual(status, ctx.exception.status)
         session = _Session(307)
         with self.assertRaises(CannotConnect):
             await WashingtonGas().async_login(session, "a", "b", {})

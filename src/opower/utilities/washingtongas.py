@@ -43,8 +43,9 @@ class WashingtonGas(UtilityBase):
             json={"username": username, "password": password},
             headers={"User-Agent": USER_AGENT},
             allow_redirects=False,  # never forward the password elsewhere
+            raise_for_status=False,
         ) as resp:
-            if resp.status in (400, 401, 403):
+            if resp.status in (401, 403):
                 raise InvalidAuth("Username/Password are invalid")
             resp.raise_for_status()
             if resp.status >= 300:
