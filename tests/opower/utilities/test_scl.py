@@ -7,6 +7,7 @@ import aiohttp
 import pytest
 from dotenv import load_dotenv
 
+from opower.const import USER_AGENT
 from opower.exceptions import CannotConnect, InvalidAuth
 from opower.utilities.helpers import get_form_action_url_and_hidden_inputs
 from opower.utilities.scl import REQUEST_TIMEOUT, SCL, _get_session_storage_values, _get_user_token_from_url
@@ -170,6 +171,116 @@ class TestSCLLoginFlow(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(InvalidAuth):
             await SCL().async_login(session, "user", "pass", {})  # type: ignore[arg-type]
+
+    async def test_ssologin_get_sends_user_agent_and_raises_for_status(self) -> None:  # noqa: D102
+        session = MockSession(_login_responses())
+
+        await SCL().async_login(session, "user", "pass", {})  # type: ignore[arg-type]
+
+        ssologin = session.requests[0]
+        self.assertEqual(ssologin["url"], "https://myutilities.seattle.gov/rest/auth/ssologin")
+        self.assertEqual(ssologin["headers"]["User-Agent"], USER_AGENT)
+        self.assertTrue(ssologin["raise_for_status"])
+
+    async def test_ssologin_form_missing_fields_raises_cannot_connect(self) -> None:  # noqa: D102
+        responses = _login_responses()
+        responses["https://myutilities.seattle.gov/rest/auth/ssologin"] = MockResponse(
+            text='<html><body><form action="https://login.seattle.gov/#/login?appName=EPORTAL_PROD">'
+            '<input type="hidden" name="signature" value="sig"></form></body></html>'
+        )
+        session = MockSession(responses)
+
+        with self.assertRaisesRegex(CannotConnect, "Unexpected SSO login form fields"):
+            await SCL().async_login(session, "user", "pass", {})  # type: ignore[arg-type]
+
+    async def test_unexpected_saml_url_after_ssologin_names_step(self) -> None:  # noqa: D102
+        responses = _login_responses()
+        responses["https://myutilities.seattle.gov/rest/auth/ssologin"] = MockResponse(text="<html>challenge</html>")
+        session = MockSession(responses)
+
+        with self.assertRaisesRegex(CannotConnect, "after initial ssologin GET: no form"):
+            await SCL().async_login(session, "user", "pass", {})  # type: ignore[arg-type]
+
+    async def test_unexpected_saml_url_after_sso_login_is_sanitized(self) -> None:  # noqa: D102
+        responses = _login_responses()
+        responses["https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/fed/v1/user/response/login"] = (
+            MockResponse(text='<html><form action="https://user:pw@login.seattle.gov/error?code=secret#frag"></form></html>')
+        )
+        session = MockSession(responses)
+
+        with self.assertRaises(CannotConnect) as ctx:
+            await SCL().async_login(session, "user", "pass", {})  # type: ignore[arg-type]
+
+        self.assertEqual(str(ctx.exception), "Unexpected SAML response URL after SSO login: https://login.seattle.gov/error")
+
+    async def test_authenticate_unexpected_status_raises_cannot_connect(self) -> None:  # noqa: D102
+        for status in (401, 403, 429, 502, 503, 504):
+            with self.subTest(status=status):
+                responses = _login_responses()
+                responses["https://login.seattle.gov/authenticate"] = MockResponse(
+                    status=status, payload={"message": "busy"}, content_type="text/html"
+                )
+                session = MockSession(responses)
+
+                with self.assertRaises(CannotConnect):
+                    await SCL().async_login(session, "user", "pass", {})  # type: ignore[arg-type]
+
+    async def test_authenticate_non_json_body_raises_cannot_connect(self) -> None:  # noqa: D102
+        responses = _login_responses()
+        responses["https://login.seattle.gov/authenticate"] = MockResponse(
+            raw_json="<html>challenge</html>", content_type="text/html"
+        )
+        session = MockSession(responses)
+
+        with self.assertRaises(CannotConnect):
+            await SCL().async_login(session, "user", "pass", {})  # type: ignore[arg-type]
+
+    async def test_authenticate_non_object_json_raises_cannot_connect(self) -> None:  # noqa: D102
+        responses = _login_responses()
+        responses["https://login.seattle.gov/authenticate"] = MockResponse(payload=["unexpected"], content_type="text/html")
+        session = MockSession(responses)
+
+        with self.assertRaises(CannotConnect):
+            await SCL().async_login(session, "user", "pass", {})  # type: ignore[arg-type]
+
+    async def test_invalid_initial_state_raises_cannot_connect(self) -> None:  # noqa: D102
+        responses = _login_responses()
+        responses["https://login.seattle.gov/#/login?appName=EPORTAL_PROD"] = MockResponse(
+            text="<script>sessionStorage.setItem(\"initialState\", '{not json');"
+            "sessionStorage.setItem(\"signinAT\", 'token');</script>"
+        )
+        session = MockSession(responses)
+
+        with self.assertRaises(CannotConnect):
+            await SCL().async_login(session, "user", "pass", {})  # type: ignore[arg-type]
+
+    async def test_post_sso_failures_raise_cannot_connect(self) -> None:  # noqa: D102
+        cases = {
+            "Failed to extract user token": (
+                "https://myutilities.seattle.gov/rest/auth/samlresp",
+                MockResponse(real_url="https://myutilities.seattle.gov/eportal/#/error"),
+            ),
+            "Failed to retrieve access token": (
+                "https://myutilities.seattle.gov/rest/auth/token",
+                MockResponse(payload={"user": {"customerId": "test_customer"}}),
+            ),
+            "No accounts found": (
+                "https://myutilities.seattle.gov/rest/account/list/some",
+                MockResponse(payload={"account": []}),
+            ),
+            "Failed to retrieve Opower token": (
+                "https://myutilities.seattle.gov/rest/usage/token",
+                MockResponse(payload={}),
+            ),
+        }
+        for message, (url, response) in cases.items():
+            with self.subTest(message=message):
+                responses = _login_responses()
+                responses[url] = response
+                session = MockSession(responses)
+
+                with self.assertRaisesRegex(CannotConnect, message):
+                    await SCL().async_login(session, "user", "pass", {})  # type: ignore[arg-type]
 
 
 class TestSCLSessionStorageParser(unittest.TestCase):

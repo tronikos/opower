@@ -3,6 +3,7 @@
 import json
 import re
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
 
@@ -20,6 +21,13 @@ def _get_session_storage_values(html: str) -> dict[str, str]:
     for match in re.finditer(r"sessionStorage\.setItem\(\"(.*?)\",\s*['\"](.*)['\"]\)", html):
         items[match.group(1)] = match.group(2)
     return items
+
+
+def _describe_action_url(action_url: str) -> str:
+    if not action_url:
+        return "no form"
+    parts = urlsplit(action_url)
+    return urlunsplit((parts.scheme, parts.hostname or "", parts.path, "", ""))
 
 
 def _get_user_token_from_url(url: str) -> str:
@@ -70,6 +78,10 @@ class SCL(UtilityBase):
             session_items = _get_session_storage_values(login_result)
         if not {"initialState", "signinAT"}.issubset(set(session_items.keys())):
             raise CannotConnect("Missing session storage values from login page")
+        try:
+            initial_state = json.loads(session_items.get("initialState", "{}"))
+        except ValueError as err:
+            raise CannotConnect("Unexpected initialState on login page") from err
 
         # POST to https://login.seattle.gov/authenticate with credentials, initialState, signinAT
         # response has authnToken in JSON response if initialState and signinAT present.
@@ -79,7 +91,7 @@ class SCL(UtilityBase):
             "https://login.seattle.gov/authenticate",
             json={
                 "credentials": {"username": username, "password": password},
-                "initialState": json.loads(session_items.get("initialState", "{}")),
+                "initialState": initial_state,
                 "signinAT": session_items.get("signinAT"),
             },
             headers={
@@ -92,7 +104,14 @@ class SCL(UtilityBase):
         ) as resp:
             if resp.status == 400:
                 raise InvalidAuth("Username and password failed")
-            authenticate_result = await resp.json(content_type=None)
+            if not 200 <= resp.status < 300:
+                raise CannotConnect(f"Unexpected status {resp.status} from authenticate")
+            try:
+                authenticate_result = await resp.json(content_type=None)
+            except ValueError as err:
+                raise CannotConnect("Unexpected non-JSON response from authenticate") from err
+        if not isinstance(authenticate_result, dict):
+            raise CannotConnect("Unexpected response from authenticate")
         if "error_description" in authenticate_result:
             raise InvalidAuth(authenticate_result["error_description"])
         authnToken = authenticate_result.get("authnToken")
@@ -111,7 +130,7 @@ class SCL(UtilityBase):
             session_result = await resp.text()
         action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(session_result)
         if action_url != "https://idcs-3359adb31e35415e8c1729c5c8098c6d.identity.oraclecloud.com/fed/v1/user/response/login":
-            raise CannotConnect("Unexpected Oracle IDCS session URL")
+            raise CannotConnect(f"Unexpected Oracle IDCS session URL: {_describe_action_url(action_url)}")
         if set(hidden_inputs.keys()) != {"OCIS_REQ"}:
             raise CannotConnect("Unexpected Oracle IDCS session form fields")
 
@@ -138,17 +157,24 @@ class SCL(UtilityBase):
         """Login to the utility website."""
         # GET https://myutilities.seattle.gov/rest/auth/ssologin
         # response has next URL, signature, state, loginCtx in HTML form
-        async with session.get("https://myutilities.seattle.gov/rest/auth/ssologin", timeout=REQUEST_TIMEOUT) as resp:
+        async with session.get(
+            "https://myutilities.seattle.gov/rest/auth/ssologin",
+            headers={"User-Agent": USER_AGENT},
+            raise_for_status=True,
+            timeout=REQUEST_TIMEOUT,
+        ) as resp:
             ssologin_result = await resp.text()
         action_url, hidden_inputs = get_form_action_url_and_hidden_inputs(ssologin_result)
+        step = "initial ssologin GET"
         if action_url == "https://login.seattle.gov/#/login?appName=EPORTAL_PROD":
+            step = "SSO login"
             # Not logged in to seattle.gov, go through SSO flow
             action_url, hidden_inputs = await self._async_sso_login(session, username, password, hidden_inputs)
 
         if action_url != "https://myutilities.seattle.gov/rest/auth/samlresp":
-            raise CannotConnect("Unexpected SAML response URL")
+            raise CannotConnect(f"Unexpected SAML response URL after {step}: {_describe_action_url(action_url)}")
         if set(hidden_inputs.keys()) != {"RelayState", "SAMLResponse"}:
-            raise CannotConnect("Unexpected SAML response form fields")
+            raise CannotConnect(f"Unexpected SAML response form fields after {step}")
 
         # POST to https://myutilities.seattle.gov/rest/auth/samlresp w/ RelayState https://myutilities.seattle.gov/eportal
         # and SAMLResponse
@@ -164,7 +190,7 @@ class SCL(UtilityBase):
             url = resp.real_url.human_repr()
             user_token = _get_user_token_from_url(url)
             if not user_token:
-                raise InvalidAuth("Failed to extract user token from redirect URL")
+                raise CannotConnect("Failed to extract user token from redirect URL")
 
         # getSSOToken (/auth/token)
         async with session.post(
@@ -181,7 +207,7 @@ class SCL(UtilityBase):
             auth_token_result = await resp.json()
         access_token = auth_token_result.get("access_token")
         if not access_token:
-            raise InvalidAuth("Failed to retrieve access token")
+            raise CannotConnect("Failed to retrieve access token")
         customer_id = auth_token_result["user"]["customerId"]
 
         # List SCL accounts, required to fetch opower token
@@ -206,7 +232,7 @@ class SCL(UtilityBase):
         accounts = list_result["account"]
 
         if len(accounts) == 0:
-            raise InvalidAuth("No accounts found")
+            raise CannotConnect("No accounts found")
 
         # This request lists current accounts by descending due date. Defaults
         # to taking to the most recent account if there are multiple.
@@ -233,6 +259,6 @@ class SCL(UtilityBase):
             result = await resp.json()
         token = result.get("token")
         if not token:
-            raise InvalidAuth("Failed to retrieve Opower token")
+            raise CannotConnect("Failed to retrieve Opower token")
 
         return str(token)
