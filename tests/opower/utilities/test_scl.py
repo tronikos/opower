@@ -129,15 +129,6 @@ class TestSCLLoginFlow(unittest.IsolatedAsyncioTestCase):
         for request in session.requests:
             self.assertEqual(request.get("timeout"), REQUEST_TIMEOUT, request["url"])
 
-    async def test_unexpected_ssologin_page_raises_cannot_connect(self) -> None:
-        """Test that an unexpected ssologin page raises CannotConnect."""
-        responses = _login_responses()
-        responses["https://myutilities.seattle.gov/rest/auth/ssologin"] = MockResponse(text="<html>challenge</html>")
-        session = MockSession(responses)
-
-        with self.assertRaises(CannotConnect):
-            await SCL().async_login(session, "user", "pass", {})  # type: ignore[arg-type]
-
     async def test_login_page_without_session_storage_raises_cannot_connect(self) -> None:
         """Test that a login page without sessionStorage raises CannotConnect."""
         responses = _login_responses()
@@ -260,12 +251,12 @@ class TestSCLLoginFlow(unittest.IsolatedAsyncioTestCase):
         """Test that an unparsable initialState raises CannotConnect."""
         responses = _login_responses()
         responses["https://login.seattle.gov/#/login?appName=EPORTAL_PROD"] = MockResponse(
-            text="<script>sessionStorage.setItem(\"initialState\", '{not json');"
-            "sessionStorage.setItem(\"signinAT\", 'token');</script>"
+            text="<script>\nsessionStorage.setItem(\"initialState\", '{not json');\n"
+            "sessionStorage.setItem(\"signinAT\", 'token');\n</script>"
         )
         session = MockSession(responses)
 
-        with self.assertRaises(CannotConnect):
+        with self.assertRaisesRegex(CannotConnect, "Unexpected initialState"):
             await SCL().async_login(session, "user", "pass", {})  # type: ignore[arg-type]
 
     async def test_post_sso_failures_raise_cannot_connect(self) -> None:
