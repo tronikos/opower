@@ -3,7 +3,7 @@
 import logging
 from asyncio import sleep
 from time import time
-from typing import Any
+from typing import Any, ClassVar
 
 import aiohttp
 from pyotp import TOTP
@@ -17,6 +17,17 @@ _LOGGER = logging.getLogger(__name__)
 
 RETURN_URL = "/en/accounts-billing/my-account/energy-use"
 DEVICE_COOKIE = "CE_DEVICE_ID"
+
+
+class _ConEdTOTP(TOTP):
+    """TOTP that accepts the 16-character (80-bit) Base32 secrets ConEd/Okta issues.
+
+    pyotp 2.12+ defaults ``min_secret_length_bits`` to 112 (NIST SP 800-63B-4),
+    which rejects ConEd's 80-bit secrets. Overriding the class attribute is
+    pyotp's documented opt-out and is a no-op on older pyotp versions.
+    """
+
+    min_secret_length_bits: ClassVar[int] = 80
 
 
 class ConEd(UtilityBase):
@@ -138,7 +149,12 @@ class ConEd(UtilityBase):
                 if not self._totp_secret:
                     raise InvalidAuth("TOTP secret is required for MFA accounts")
 
-                totp = TOTP(self._totp_secret)
+                try:
+                    totp = _ConEdTOTP(self._totp_secret)
+                    counter = int(time()) // totp.interval
+                    first_code = totp.generate_otp(counter)
+                except ValueError as err:
+                    raise InvalidAuth("Invalid TOTP secret") from err
 
                 async def verify_factor(code: str) -> Any:
                     async with session.post(
@@ -154,8 +170,7 @@ class ConEd(UtilityBase):
                     ) as resp:
                         return await resp.json()
 
-                counter = int(time()) // totp.interval
-                mfaResult = await verify_factor(totp.generate_otp(counter))
+                mfaResult = await verify_factor(first_code)
                 if not mfaResult["code"]:
                     # ConEd rejects a TOTP code it already accepted, e.g. in a login moments earlier.
                     _LOGGER.debug("ConEd rejected the TOTP code; retrying with the next one")

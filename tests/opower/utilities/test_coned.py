@@ -10,12 +10,11 @@ import aiohttp
 from aiohttp import web
 from aiohttp.abc import AbstractResolver, ResolveResult
 from aiohttp.test_utils import TestServer
-from pyotp import TOTP
 from yarl import URL
 
 from opower.exceptions import CannotConnect, InvalidAuth
 from opower.utilities import coned
-from opower.utilities.coned import ConEd
+from opower.utilities.coned import ConEd, _ConEdTOTP
 from opower.utilities.oru import Oru
 
 LOGIN_API = "/sitecore/api/ssc/ConEdWeb-Foundation-Login-Areas-LoginAPI/User/0"
@@ -341,7 +340,7 @@ class TestConEdLogin(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake.requests.count("VerifyFactor"), 2)
         first, second = self._codes(fake)
         self.assertNotEqual(first, second)
-        self.assertEqual(second, TOTP(TOTP_SECRET).generate_otp(1_000_001))
+        self.assertEqual(second, _ConEdTOTP(TOTP_SECRET).generate_otp(1_000_001))
         self.assertEqual(sum(sleeps), 26)
         self.assertEqual(fake.requests[fake.requests.index("VerifyFactor") + 2], "authorize:no_redirect")
         self.assertEqual(fake.verify_nonces, ["login1", "login1"])
@@ -352,7 +351,7 @@ class TestConEdLogin(unittest.IsolatedAsyncioTestCase):
         fake = _FakeConEd(reject_codes=1)
         token, _ = await self._login(fake)
         self.assertEqual(token, "opower-token")
-        self.assertEqual(self._codes(fake), [TOTP(TOTP_SECRET).generate_otp(n) for n in (1_000_000, 1_000_001)])
+        self.assertEqual(self._codes(fake), [_ConEdTOTP(TOTP_SECRET).generate_otp(n) for n in (1_000_000, 1_000_001)])
 
     async def test_second_rejection_raises(self) -> None:
         """Only one retry is made; a second rejection is an invalid secret."""
@@ -406,6 +405,11 @@ class TestConEdLogin(unittest.IsolatedAsyncioTestCase):
         """An MFA account without a TOTP secret fails clearly."""
         with self.assertRaises(InvalidAuth):
             await self._login(_FakeConEd(), totp_secret=None)
+
+    async def test_invalid_totp_secret_raises(self) -> None:
+        """A malformed TOTP secret raises InvalidAuth instead of ValueError."""
+        with self.assertRaisesRegex(InvalidAuth, "Invalid TOTP secret"):
+            await self._login(_FakeConEd(), totp_secret="not-base32!")  # noqa: S106
 
     async def test_bad_password_raises(self) -> None:
         """Rejected credentials raise InvalidAuth."""
