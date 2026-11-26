@@ -68,6 +68,7 @@ series is available.
 - Seattle City Light (SCL)
 - Southern Maryland Electric Cooperative (SMECO)
 - Southwest Gas
+- Washington Gas
 
 ## Contributing
 
