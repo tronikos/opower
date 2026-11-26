@@ -502,7 +502,9 @@ class CostRead:
     start_time: datetime
     end_time: datetime
     consumption: float  # taken from value field, in KWH or THERM/CCF
-    provided_cost: float  # in $
+    # In $. None when the utility has not priced the read (yet): usage-only reads, and
+    # cost reads that carry no cost. An explicit 0 from the utility stays 0.0.
+    provided_cost: float | None
     read_components: list[ReadComponent] = dataclasses.field(default_factory=list)
     # Gross energy taken from and delivered to the grid during the interval, for
     # meters that expose a separate register per direction. `consumption` is the
@@ -560,7 +562,7 @@ def _to_cost_read(read: dict[str, Any], tz: ZoneInfo) -> CostRead:
         start_time=_parse_read_time(read["startTime"], tz),
         end_time=_parse_read_time(read["endTime"], tz),
         consumption=(read["value"] if "value" in read else read["consumption"]["value"]),
-        provided_cost=read.get("providedCost", 0) or 0,
+        provided_cost=None if read.get("providedCost") is None else float(read["providedCost"]),
         read_components=[
             ReadComponent(
                 tier_type=component.get("tierType"),
@@ -577,9 +579,17 @@ def _to_cost_read(read: dict[str, Any], tz: ZoneInfo) -> CostRead:
     )
 
 
+def _is_empty_read(read: CostRead) -> bool:
+    """Whether a read carries no data at all: no cost, no net consumption and no import/export.
+
+    A zero-net solar interval (import == export) has consumption 0 but is not empty.
+    """
+    return not (read.provided_cost or read.consumption or read.imported or read.exported)
+
+
 def _trim_trailing_zero_reads(reads: list[CostRead]) -> list[CostRead]:
-    """Remove trailing reads with neither cost nor consumption: they are usually not published yet."""
-    while reads and reads[-1].provided_cost == 0 and reads[-1].consumption == 0:
+    """Remove trailing reads that carry no data: they are usually not published yet."""
+    while reads and _is_empty_read(reads[-1]):
         reads.pop()
     return reads
 
@@ -1200,9 +1210,9 @@ class Opower:
         # usage exists, so fill the rest of the window from the usage endpoint.
         # Those reads carry no cost; callers that re-read a trailing window
         # (e.g. Home Assistant re-reads the last 30 days) pick the cost up later.
+        await self._async_add_import_export(account, aggregate_type, result)
         if aggregate_type != AggregateType.BILL and result and not usage_only and end_date is not None:
             result += await self._async_get_usage_after(account, aggregate_type, result[-1], end_date, tz)
-        await self._async_add_import_export(account, aggregate_type, result)
         return result
 
     async def _async_get_usage_after(
@@ -1213,13 +1223,21 @@ class Opower:
         end_date: datetime,
         tz: ZoneInfo,
     ) -> list[CostRead]:
-        """Get usage-only reads that start after the last read the cost endpoint returned."""
-        if last_cost_read.end_time.date() > end_date.date():
+        """Get usage-only reads (provided_cost None) that start after the last read the cost endpoint returned."""
+        # GraphQL reads already carry every published interval (unpriced ones without cost), and the
+        # bill-trends fallback has no usage endpoint behind it, so there is nothing for /reads to add.
+        if self.utility.uses_graphql_reads() or self.utility.uses_bill_trends_for_reads():
+            return []
+        # Compare calendar days in the utility's timezone, so an account whose cost has caught up
+        # doesn't make an extra request.
+        last_end_local = last_cost_read.end_time.astimezone(tz)
+        end_local = end_date.astimezone(tz) if end_date.tzinfo else end_date.replace(tzinfo=tz)
+        if last_end_local.date() >= end_local.date():
             return []
         try:
-            reads = await self._async_get_dated_data(
-                account, aggregate_type, last_cost_read.start_time, end_date, usage_only=True
-            )
+            # From the end of the last costed read: the day it falls on is requested whole, which still
+            # covers a cost cutoff in the middle of a day for hourly reads.
+            reads = await self._async_get_dated_data(account, aggregate_type, last_end_local, end_date, usage_only=True)
         except ApiException as err:
             _LOGGER.debug("Could not get usage reads after the last cost read: %s", err)
             return []
@@ -1230,6 +1248,8 @@ class Opower:
         ]
         if newer:
             _LOGGER.debug("Got %s usage reads without cost after %s", len(newer), last_cost_read.end_time)
+        # Import/export first: a zero-net solar interval has consumption 0 and must not be trimmed as empty.
+        await self._async_add_import_export(account, aggregate_type, newer)
         return _trim_trailing_zero_reads(newer)
 
     async def async_get_usage_reads(
@@ -2154,7 +2174,7 @@ class Opower:
 
         Like the REST endpoints, the window includes the whole of end_date's day.
         Reads carry their cost in the read stream's monetaryAmount; an interval
-        whose cost has not been calculated yet comes back at zero cost.
+        whose cost has not been calculated yet comes back without one (providedCost None).
         AggregateType.BILL serves the billed amounts.
         """
         tz = await aiozoneinfo.async_get_time_zone(self.utility.timezone())
@@ -2175,7 +2195,7 @@ class Opower:
         read_resolution, max_window = resolution
 
         step_tz = tz if aggregate_type == AggregateType.DAY else UTC
-        reads_by_interval: dict[tuple[float, float], tuple[float, float]] = {}
+        reads_by_interval: dict[tuple[float, float], tuple[float, float | None]] = {}
         window_start = start.datetime.astimezone(step_tz)
         end_dt = end.datetime.astimezone(step_tz)
         while window_start < end_dt:
@@ -2189,14 +2209,18 @@ class Opower:
                     "resolution": read_resolution,
                 },
             )
-            window_reads: dict[tuple[float, float], tuple[float, float]] = {}
+            window_reads: dict[tuple[float, float], tuple[float, float | None]] = {}
             for read_start, read_end, usage, cost in self._iter_graphql_net_usage(result, account, tz):
                 # Keyed by POSIX timestamps so the repeated hour of a DST fall-back
                 # day stays two reads. Several service points or registers behind
-                # one account add up.
+                # one account add up; if any of them is unrated, so is the total.
                 key = (read_start.timestamp(), read_end.timestamp())
-                prev_usage, prev_cost = window_reads.get(key, (0.0, 0.0))
-                window_reads[key] = (prev_usage + usage, prev_cost + cost)
+                if key in window_reads:
+                    prev_usage, prev_cost = window_reads[key]
+                    total = None if prev_cost is None or cost is None else prev_cost + cost
+                    window_reads[key] = (prev_usage + usage, total)
+                else:
+                    window_reads[key] = (usage, cost)
             for key, window_read in window_reads.items():
                 # A read straddling two windows can be served by both, like the
                 # REST endpoints serve one read past the requested window; the
@@ -2216,10 +2240,10 @@ class Opower:
 
     def _iter_graphql_net_usage(
         self, result: Any, account: Account, tz: ZoneInfo
-    ) -> Iterator[tuple[datetime, datetime, float, float]]:
+    ) -> Iterator[tuple[datetime, datetime, float, float | None]]:
         """Yield (start, end, usage, cost) for the account's measured netUsage reads.
 
-        The cost is the utility's rating of the read, 0 when it carries none.
+        The cost is the utility's rating of the read, None when it carries none (not rated yet).
         """
         billing_account = (result.get("data") or {}).get("billingAccountByAuthContext") or {}
         for agreement in (billing_account.get("serviceAgreementsConnection") or {}).get("edges") or []:
@@ -2239,8 +2263,7 @@ class Opower:
                         # An interval that has not been measured yet comes back null.
                         if read_start is None or read_end is None or value is None:
                             continue
-                        cost = _get_optional_value(read.get("monetaryAmount")) or 0
-                        yield read_start, read_end, value, cost
+                        yield read_start, read_end, value, _get_optional_value(read.get("monetaryAmount"))
 
     async def _async_fetch_graphql_bill_segments(
         self, account: Account, start: arrow.Arrow, end: arrow.Arrow, tz: ZoneInfo

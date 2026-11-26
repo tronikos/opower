@@ -171,7 +171,7 @@ async def test_cost_reads_falls_back_to_usage_on_api_error(
         assert call_log == [False, True]
         assert len(result) == 1
         assert result[0].consumption == 10.0
-        assert result[0].provided_cost == 0.0
+        assert result[0].provided_cost is None  # usage-only: not priced
 
 
 def _day_read(day: int, value: float, cost: float | None = None) -> dict[str, object]:
@@ -231,15 +231,15 @@ async def test_cost_reads_append_usage_published_after_the_last_cost_read(
             _gas_day_account(), AggregateType.DAY, datetime(2026, 10, 1), datetime(2026, 10, 20)
         )
 
-        # Usage is only requested from the day of the last costed read.
-        assert calls == [(False, datetime(2026, 10, 1)), (True, result[2].start_time)]
+        # Usage is only requested from the end of the last costed read.
+        assert calls == [(False, datetime(2026, 10, 1)), (True, result[2].end_time)]
         assert [(r.start_time.day, r.consumption, r.provided_cost) for r in result] == [
             (1, 1.0, 2.5),
-            (2, 0, 0),
+            (2, 0, 0.0),  # an explicit zero cost stays 0.0
             (4, 1.0, 2.6),
-            (5, 0, 0),  # usage-only read: newer than the last costed read
-            (10, 1.04, 0),
-            (12, 3.1, 0),  # trailing zero usage reads are trimmed like cost reads
+            (5, 0, None),  # usage-only reads, newer than the last costed read: not priced
+            (10, 1.04, None),
+            (12, 3.1, None),  # trailing empty usage reads are trimmed like cost reads
         ]
 
 
@@ -292,6 +292,137 @@ async def test_cost_reads_keep_cost_reads_when_usage_request_fails(
         )
 
         assert [(r.start_time.day, r.provided_cost) for r in result] == [(1, 2.5)]
+
+
+def test_cost_read_provided_cost_is_none_only_when_the_utility_gave_none() -> None:
+    """A missing or null providedCost is not priced (None); an explicit zero stays a zero cost."""
+    from opower.opower import _to_cost_read  # noqa: PLC0415
+
+    tz = ZoneInfo("America/Los_Angeles")
+    base = {"startTime": "2026-10-01T00:00:00.000-07:00", "endTime": "2026-10-02T00:00:00.000-07:00", "value": 1.0}
+    assert _to_cost_read(base, tz).provided_cost is None
+    assert _to_cost_read({**base, "providedCost": None}, tz).provided_cost is None
+    assert _to_cost_read({**base, "providedCost": 0}, tz).provided_cost == 0.0
+    assert _to_cost_read({**base, "providedCost": 2.5}, tz).provided_cost == 2.5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "utility_method",
+    [pytest.param("uses_graphql_reads", id="graphql"), pytest.param("uses_bill_trends_for_reads", id="bill_trends")],
+)
+async def test_cost_reads_skip_usage_request_for_graphql_and_bill_trends(
+    monkeypatch: pytest.MonkeyPatch, utility_method: str
+) -> None:
+    """GraphQL reads already carry unpriced intervals and bill trends have no usage endpoint: no /reads tail."""
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(session, "Pacific Gas and Electric Company (PG&E)", username="test", password="test")  # noqa: S106
+        calls: list[bool] = []
+
+        async def fake_get_dated_data(
+            acc: object, agg: AggregateType, start: object, end: object, usage_only: bool = False
+        ) -> list[dict[str, object]]:
+            calls.append(usage_only)
+            return [_day_read(1, 1.0, 2.5)]
+
+        monkeypatch.setattr(opower, "_async_get_dated_data", fake_get_dated_data)
+        monkeypatch.setattr(opower, "_async_get_register_streams", _no_register_streams)
+        monkeypatch.setattr(opower.utility, utility_method, staticmethod(lambda: True))
+
+        result = await opower.async_get_cost_reads(
+            _gas_day_account(), AggregateType.DAY, datetime(2026, 10, 1), datetime(2026, 10, 20)
+        )
+
+        assert calls == [False]
+        assert [(r.start_time.day, r.provided_cost) for r in result] == [(1, 2.5)]
+
+
+@pytest.mark.asyncio
+async def test_cost_reads_compare_days_in_the_utility_timezone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caught-up account makes no /reads request, even when end_date is given in another timezone.
+
+    The last costed read ends at 2026-10-04 00:00 Pacific; end_date is 2026-10-05 02:00 UTC, which is still
+    2026-10-04 in Pacific time, so there is no later day to fill (a naive date comparison would see the 5th).
+    """
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(session, "Pacific Gas and Electric Company (PG&E)", username="test", password="test")  # noqa: S106
+        calls: list[bool] = []
+
+        async def fake_get_dated_data(
+            acc: object, agg: AggregateType, start: object, end: object, usage_only: bool = False
+        ) -> list[dict[str, object]]:
+            calls.append(usage_only)
+            return [_day_read(2, 1.0, 2.5), _day_read(3, 1.0, 2.5)]
+
+        monkeypatch.setattr(opower, "_async_get_dated_data", fake_get_dated_data)
+        monkeypatch.setattr(opower, "_async_get_register_streams", _no_register_streams)
+
+        await opower.async_get_cost_reads(
+            _gas_day_account(),
+            AggregateType.DAY,
+            datetime(2026, 10, 1, tzinfo=ZoneInfo("UTC")),
+            datetime(2026, 10, 5, 2, tzinfo=ZoneInfo("UTC")),
+        )
+
+        assert calls == [False]
+
+
+@pytest.mark.asyncio
+async def test_cost_reads_keep_zero_net_solar_reads_in_the_usage_tail(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A trailing usage read whose net is zero but which imported and exported energy is kept, not trimmed."""
+    async with aiohttp.ClientSession(cookie_jar=create_cookie_jar()) as session:
+        opower = Opower(session, "Pacific Gas and Electric Company (PG&E)", username="test", password="test")  # noqa: S106
+
+        async def fake_get_dated_data(
+            acc: object, agg: AggregateType, start: object, end: object, usage_only: bool = False
+        ) -> list[dict[str, object]]:
+            if not usage_only:
+                return [_day_read(1, 1.0, 2.5)]
+            return [_day_read(2, 1.5), _day_read(3, 0), _day_read(4, 0)]
+
+        tz = ZoneInfo("America/Los_Angeles")
+
+        async def fake_register_reads(
+            acc: object, agg: AggregateType, start: datetime, end: datetime
+        ) -> dict[tuple[float, float], tuple[float, float]]:
+            # Day 3: as much exported as imported, so the net is zero; day 4: nothing at all.
+            day3 = (datetime(2026, 10, 3, tzinfo=tz).timestamp(), datetime(2026, 10, 4, tzinfo=tz).timestamp())
+            return {day3: (4.0, 4.0)}
+
+        monkeypatch.setattr(opower, "_async_get_dated_data", fake_get_dated_data)
+        monkeypatch.setattr(opower, "async_get_interval_register_reads", fake_register_reads)
+
+        result = await opower.async_get_cost_reads(
+            _gas_day_account(), AggregateType.DAY, datetime(2026, 10, 1), datetime(2026, 10, 20)
+        )
+
+        assert [(r.start_time.day, r.consumption, r.provided_cost, r.imported, r.exported) for r in result] == [
+            (1, 1.0, 2.5, None, None),
+            (2, 1.5, None, None, None),
+            (3, 0, None, 4.0, 4.0),  # zero net, but not empty
+        ]
+
+
+@pytest.mark.asyncio
+async def test_graphql_reads_without_a_rating_have_no_cost() -> None:
+    """GraphQL netUsage reads whose monetaryAmount is null carry no cost; rated ones keep theirs, zero included."""
+    router = _ReadsRouter(
+        lambda variables: _net_usage_response(
+            [
+                ("2026-06-01T00:00:00-04:00/2026-06-01T01:00:00-04:00", 1.0, 0.25),
+                ("2026-06-01T01:00:00-04:00/2026-06-01T02:00:00-04:00", 1.0, 0.0),
+                ("2026-06-01T02:00:00-04:00/2026-06-01T03:00:00-04:00", 1.0),
+            ]
+        )
+    )
+    opower = _aep(_FakeSession({"dsm-graphql-v1": router}))
+    opower.utility._subdomain = "aepo"  # type: ignore[attr-defined]
+
+    reads = await opower._async_fetch_graphql_reads(
+        _elec_account(), AggregateType.HOUR, datetime(2026, 6, 1), datetime(2026, 6, 1)
+    )
+
+    assert [read["providedCost"] for read in reads] == [0.25, 0.0, None]
 
 
 @pytest.mark.asyncio
@@ -2264,7 +2395,7 @@ async def test_cost_reads_fall_back_to_usage_when_cost_response_is_empty() -> No
 
     assert [read.consumption for read in result] == [15.0677, 11.4372]
     # No cost is available on this path.
-    assert {read.provided_cost for read in result} == {0.0}
+    assert {read.provided_cost for read in result} == {None}
 
     assert [r["url"].rsplit("/ei/edge/apis/", maxsplit=1)[1] for r in session.requests] == [
         f"DataBrowser-v1/cws/cost/utilityAccount/{_ELEC_ACCOUNT_UUID}",
@@ -4250,8 +4381,8 @@ async def test_graphql_reads_split_windows_larger_than_the_server_allows() -> No
         "2026-07-01T00:00:00-04:00/2026-07-16T00:00:00-04:00",
     ]
     assert len(reads) == 2
-    # Reads the utility did not rate come back at zero cost rather than missing.
-    assert [read["providedCost"] for read in reads] == [0, 0]
+    # Reads the utility did not rate come back without a cost rather than at zero.
+    assert [read["providedCost"] for read in reads] == [None, None]
 
 
 @pytest.mark.asyncio
