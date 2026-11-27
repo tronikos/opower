@@ -562,7 +562,7 @@ def _to_cost_read(read: dict[str, Any], tz: ZoneInfo) -> CostRead:
         start_time=_parse_read_time(read["startTime"], tz),
         end_time=_parse_read_time(read["endTime"], tz),
         consumption=(read["value"] if "value" in read else read["consumption"]["value"]),
-        provided_cost=None if read.get("providedCost") is None else float(read["providedCost"]),
+        provided_cost=_get_optional_value(read, "providedCost"),
         read_components=[
             ReadComponent(
                 tier_type=component.get("tierType"),
@@ -1199,10 +1199,15 @@ class Opower:
                 return await self.async_get_cost_reads(account, aggregate_type, start_date, end_date, usage_only=True)
             raise
         tz = await aiozoneinfo.async_get_time_zone(self.utility.timezone())
-        result = _trim_trailing_zero_reads([_to_cost_read(read, tz) for read in reads])
+        result = [_to_cost_read(read, tz) for read in reads]
+        # REST /cost can end with unpublished (0, 0.0) placeholder rows. Trim them before import/export is
+        # added, or GraphQL registers would make them look non-empty with bogus consumption and cost of 0.
+        if not usage_only and not self.utility.uses_graphql_reads():
+            result = _trim_trailing_zero_reads(result)
         # Some utilities provide usage at hourly/daily resolution but only provide cost at bill resolution.
         # They don't return any data when hitting the cost endpoint so try again with the usage only endpoint.
-        if aggregate_type != AggregateType.BILL and not result and not usage_only:
+        # GraphQL reads come from one query for both, so a retry would return the same empty window.
+        if aggregate_type != AggregateType.BILL and not result and not usage_only and not self.utility.uses_graphql_reads():
             _LOGGER.debug("Got no usage/cost data. Falling back to just usage data.")
             return await self.async_get_cost_reads(account, aggregate_type, start_date, end_date, usage_only=True)
         # Some utilities (e.g. PG&E gas) publish cost days or weeks after usage.
@@ -1210,10 +1215,12 @@ class Opower:
         # usage exists, so fill the rest of the window from the usage endpoint.
         # Those reads carry no cost; callers that re-read a trailing window
         # (e.g. Home Assistant re-reads the last 30 days) pick the cost up later.
-        await self._async_add_import_export(account, aggregate_type, result)
         if aggregate_type != AggregateType.BILL and result and not usage_only and end_date is not None:
             result += await self._async_get_usage_after(account, aggregate_type, result[-1], end_date, tz)
-        return result
+        # Import/export once for the whole window, then trim: a zero-net solar interval has consumption 0
+        # and must not be trimmed as empty.
+        await self._async_add_import_export(account, aggregate_type, result)
+        return _trim_trailing_zero_reads(result)
 
     async def _async_get_usage_after(
         self,
@@ -1223,7 +1230,10 @@ class Opower:
         end_date: datetime,
         tz: ZoneInfo,
     ) -> list[CostRead]:
-        """Get usage-only reads (provided_cost None) that start after the last read the cost endpoint returned."""
+        """Get usage-only reads (provided_cost None) that start after the last read the cost endpoint returned.
+
+        Returned untrimmed and without import/export; async_get_cost_reads adds both for the whole window.
+        """
         # GraphQL reads already carry every published interval (unpriced ones without cost), and the
         # bill-trends fallback has no usage endpoint behind it, so there is nothing for /reads to add.
         if self.utility.uses_graphql_reads() or self.utility.uses_bill_trends_for_reads():
@@ -1237,7 +1247,7 @@ class Opower:
         try:
             # From the end of the last costed read: the day it falls on is requested whole, which still
             # covers a cost cutoff in the middle of a day for hourly reads.
-            reads = await self._async_get_dated_data(account, aggregate_type, last_end_local, end_date, usage_only=True)
+            reads = await self._async_get_dated_data(account, aggregate_type, last_end_local, end_local, usage_only=True)
         except ApiException as err:
             _LOGGER.debug("Could not get usage reads after the last cost read: %s", err)
             return []
@@ -1248,9 +1258,7 @@ class Opower:
         ]
         if newer:
             _LOGGER.debug("Got %s usage reads without cost after %s", len(newer), last_cost_read.end_time)
-        # Import/export first: a zero-net solar interval has consumption 0 and must not be trimmed as empty.
-        await self._async_add_import_export(account, aggregate_type, newer)
-        return _trim_trailing_zero_reads(newer)
+        return newer
 
     async def async_get_usage_reads(
         self,
@@ -2267,10 +2275,11 @@ class Opower:
 
     async def _async_fetch_graphql_bill_segments(
         self, account: Account, start: arrow.Arrow, end: arrow.Arrow, tz: ZoneInfo
-    ) -> list[tuple[datetime, datetime, float, float]]:
+    ) -> list[tuple[datetime, datetime, float, float | None]]:
         """Fetch the account's bill segments from dsm-graphql-v1.
 
-        Returns (start, end, usage, cost) per segment in UTC, sorted by start.
+        Returns (start, end, usage, cost) per segment in UTC, sorted by start. Cost is None when the
+        segment has neither an amount billed nor usage charges.
         """
         result = await self._async_post_graphql(
             _BILL_READS_QUERY,
@@ -2282,7 +2291,7 @@ class Opower:
             },
         )
         billing_account = (result.get("data") or {}).get("billingAccountByAuthContext") or {}
-        segments: list[tuple[datetime, datetime, float, float]] = []
+        segments: list[tuple[datetime, datetime, float, float | None]] = []
         for bill in _as_dict_list(billing_account.get("bills")):
             for segment in _as_dict_list(bill.get("segments")):
                 if not self._graphql_agreement_matches(segment.get("serviceAgreement"), account):
@@ -2296,7 +2305,7 @@ class Opower:
                 # The amount billed for the segment; without it, the usage charges.
                 cost = _graphql_amount(segment.get("currentAmount"))
                 if cost is None:
-                    cost = _graphql_amount(segment.get("usageCharges")) or 0
+                    cost = _graphql_amount(segment.get("usageCharges"))
                 segments.append((seg_start, seg_end, usage, cost))
         segments.sort(key=lambda segment: segment[0])
         return segments

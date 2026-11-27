@@ -29,7 +29,7 @@ from opower import (
     select_utility,
 )
 from opower.exceptions import ApiException, InvalidAuth
-from opower.opower import Customer
+from opower.opower import Customer, _to_cost_read
 from opower.utilities.pge import PGE, _aura_community_action_execute
 
 if TYPE_CHECKING:
@@ -381,10 +381,12 @@ async def test_cost_reads_keep_zero_net_solar_reads_in_the_usage_tail(monkeypatc
             return [_day_read(2, 1.5), _day_read(3, 0), _day_read(4, 0)]
 
         tz = ZoneInfo("America/Los_Angeles")
+        register_calls: list[tuple[datetime, datetime]] = []
 
         async def fake_register_reads(
             acc: object, agg: AggregateType, start: datetime, end: datetime
         ) -> dict[tuple[float, float], tuple[float, float]]:
+            register_calls.append((start, end))
             # Day 3: as much exported as imported, so the net is zero; day 4: nothing at all.
             day3 = (datetime(2026, 10, 3, tzinfo=tz).timestamp(), datetime(2026, 10, 4, tzinfo=tz).timestamp())
             return {day3: (4.0, 4.0)}
@@ -401,6 +403,32 @@ async def test_cost_reads_keep_zero_net_solar_reads_in_the_usage_tail(monkeypatc
             (2, 1.5, None, None, None),
             (3, 0, None, 4.0, 4.0),  # zero net, but not empty
         ]
+        # One register lookup for the costed reads and the usage tail together.
+        assert len(register_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_graphql_cost_reads_do_not_retry_an_empty_window_as_usage_only() -> None:
+    """GraphQL serves cost and usage from one query, so an empty window is not asked for again."""
+    router = _ReadsRouter(_net_usage_response([]))
+    opower = _aep(_FakeSession({"dsm-graphql-v1": router}))
+    opower.utility._subdomain = "aepo"  # type: ignore[attr-defined]
+
+    result = await opower.async_get_cost_reads(
+        _elec_account(), AggregateType.DAY, datetime(2026, 10, 9), datetime(2026, 10, 11)
+    )
+
+    assert result == []
+    assert len(router.read_variables) == 1
+
+
+def test_non_numeric_provided_cost_is_no_cost() -> None:
+    """A providedCost that is not a finite number is treated as missing rather than failing the read."""
+    tz = ZoneInfo("America/Los_Angeles")
+    for bad in ("n/a", "NaN", float("inf")):
+        read = _day_read(1, 1.0, 0.0)
+        read["providedCost"] = bad
+        assert _to_cost_read(read, tz).provided_cost is None
 
 
 @pytest.mark.asyncio
@@ -4345,6 +4373,10 @@ async def test_graphql_bill_reads_match_the_account_and_carry_cost() -> None:
                 # A list of charge line items is summed when there is no billed amount.
                 segment("2026-09-26T04:00:00Z/2026-10-27T04:00:00Z", _ELEC_ACCOUNT_UUID, 900.0, [1.5, 2.5], None),
             ],
+            [
+                # Neither a billed amount nor usage charges: no cost, not a cost of 0.
+                segment("2026-10-27T04:00:00Z/2026-11-25T05:00:00Z", _ELEC_ACCOUNT_UUID, 50.0, None, None),
+            ],
         ]
     )
     router = _ReadsRouter(bills=bills)
@@ -4359,6 +4391,7 @@ async def test_graphql_bill_reads_match_the_account_and_carry_cost() -> None:
         # The billed amount wins when a segment carries both.
         ("2026-08-27T00:00:00-04:00", "2026-09-26T00:00:00-04:00", 1501.0, 305.44),
         ("2026-09-26T00:00:00-04:00", "2026-10-27T00:00:00-04:00", 900.0, 4.0),
+        ("2026-10-27T00:00:00-04:00", "2026-11-25T00:00:00-05:00", 50.0, None),
     ]
     assert len(router.bill_variables) == 1
 
