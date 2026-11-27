@@ -497,7 +497,7 @@ class ReadComponent:
 
 @dataclasses.dataclass
 class CostRead:
-    """A read from the meter that has both consumption and cost data."""
+    """A read from the meter with its consumption and, once the utility has priced it, its cost."""
 
     start_time: datetime
     end_time: datetime
@@ -1238,8 +1238,9 @@ class Opower:
         # bill-trends fallback has no usage endpoint behind it, so there is nothing for /reads to add.
         if self.utility.uses_graphql_reads() or self.utility.uses_bill_trends_for_reads():
             return []
-        # Compare calendar days in the utility's timezone, so an account whose cost has caught up
-        # doesn't make an extra request.
+        # Compare calendar days in the utility's timezone: an account whose cost reaches the day of
+        # end_date makes no extra request. One whose cost ends earlier does, even when usage ends there
+        # too (the request then returns nothing new): only /reads can tell whether there is more usage.
         last_end_local = last_cost_read.end_time.astimezone(tz)
         end_local = end_date.astimezone(tz) if end_date.tzinfo else end_date.replace(tzinfo=tz)
         if last_end_local.date() >= end_local.date():
@@ -1248,14 +1249,17 @@ class Opower:
             # From the end of the last costed read: the day it falls on is requested whole, which still
             # covers a cost cutoff in the middle of a day for hourly reads.
             reads = await self._async_get_dated_data(account, aggregate_type, last_end_local, end_local, usage_only=True)
-        except ApiException as err:
+            newer = [
+                cost_read
+                for cost_read in (_to_cost_read(read, tz) for read in reads)
+                if cost_read.start_time >= last_cost_read.end_time
+            ]
+        except Exception as err:
+            # Deliberately everything, not just ApiException, as in _async_add_import_export: these reads
+            # are an optional addition to cost reads already fetched, so no failure here (including a
+            # response shaped unexpectedly) may discard those.
             _LOGGER.debug("Could not get usage reads after the last cost read: %s", err)
             return []
-        newer = [
-            cost_read
-            for cost_read in (_to_cost_read(read, tz) for read in reads)
-            if cost_read.start_time >= last_cost_read.end_time
-        ]
         if newer:
             _LOGGER.debug("Got %s usage reads without cost after %s", len(newer), last_cost_read.end_time)
         return newer
